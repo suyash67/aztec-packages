@@ -92,7 +92,13 @@ pub mod get_membership_witness;
 pub mod keys;
 #[generate_oracle_tests]
 pub mod key_validation_request;
-// TODO: cover with oracle tests once the two sides agree on the param grouping (TS wraps them in a single struct).
+#[generate_oracle_tests_excluding(
+    @[
+        // TODO: cover once the two sides agree on the param grouping (TS wraps three of the params in a single
+        // struct, so the two synthesizers seed different canonical values).
+        quote { notify_created_contract_class_log_private_oracle },
+    ],
+)]
 pub mod logs;
 #[generate_oracle_tests_excluding(
     @[
@@ -100,9 +106,6 @@ pub mod logs;
         quote { validate_and_store_enqueued_notes_and_events_oracle },
         // TODO: cover once both sides agree on a canonical log-source value (plain Field vs validated enum).
         quote { get_logs_by_tag_oracle },
-        // TODO: cover once both sides agree on a canonical revert-code value (plain u8 vs 0/1-only RevertCode).
-        quote { get_tx_effect_oracle },
-        quote { get_tx_effects_oracle },
     ],
 )]
 pub mod message_processing;

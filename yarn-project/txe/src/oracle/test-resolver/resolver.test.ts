@@ -14,7 +14,13 @@ import {
   makeEntry,
 } from '@aztec/pxe/simulator';
 
-import { OracleTestResolver, type OracleTestScenario, SET_SCENARIO_ENTRY } from './resolver.js';
+import { ELEMENT_ROUNDTRIP_SEED } from './default_fixtures.js';
+import {
+  OracleTestResolver,
+  type OracleTestScenario,
+  ROUNDTRIP_ELEMENT_ENTRY,
+  SET_SCENARIO_ENTRY,
+} from './resolver.js';
 
 const TEST_REGISTRY: Record<string, OracleRegistryEntry> = {
   test_single: makeEntry({
@@ -143,28 +149,19 @@ describe('OracleTestResolver', () => {
     await expect(callOracle('test_ephemeral', [toHex(new Fr(777))])).rejects.toThrow('Input mismatch');
   });
 
-  it('roundtrips an ephemeral element through the last-resolved oracle entry', async () => {
-    await callOracle('test_ephemeral', [toHex(new Fr(10))]);
-
-    // Positions in DFS order: 0 = the param's element, 1 = the return's element (both FIELD here).
-    const returned = await roundtripElement(0, 5, [new Fr(5)]);
-    expect(returned.values).toEqual([[toHex(new Fr(5))]]);
+  it('roundtrips an ephemeral element by its label', async () => {
+    const returned = await roundtripElement('field', [new Fr(ELEMENT_ROUNDTRIP_SEED)]);
+    expect(returned.values).toEqual([[toHex(new Fr(ELEMENT_ROUNDTRIP_SEED))]]);
   });
 
   it('rejects a roundtripped element that does not match the canonical value', async () => {
-    await callOracle('test_ephemeral', [toHex(new Fr(10))]);
-
-    await expect(roundtripElement(0, 5, [new Fr(999)])).rejects.toThrow('Element mismatch');
+    await expect(roundtripElement('field', [new Fr(999)])).rejects.toThrow('Element mismatch');
   });
 
-  it('rejects an element roundtrip before any oracle call in the session', async () => {
-    await expect(roundtripElement(0, 5, [new Fr(5)], 70)).rejects.toThrow('before any oracle call');
-  });
-
-  it('rejects an element roundtrip with an out-of-range position', async () => {
-    await callOracle('test_ephemeral', [toHex(new Fr(10))]);
-
-    await expect(roundtripElement(2, 5, [new Fr(5)])).rejects.toThrow('out of range');
+  it('rejects an element roundtrip with an unknown label', async () => {
+    await expect(roundtripElement('bogus', [new Fr(ELEMENT_ROUNDTRIP_SEED)])).rejects.toThrow(
+      "Unknown ephemeral element label 'bogus'",
+    );
   });
 
   it('tracks uncalled fixtures', async () => {
@@ -196,10 +193,13 @@ describe('OracleTestResolver', () => {
     });
   }
 
-  function roundtripElement(elementIndex: number, seed: number, row: Fr[], sessionId = 1) {
+  // Encodes `label` as Noir's `BoundedVec<u8, N>` wire shape, via the same entry the resolver decodes it with.
+  function roundtripElement(label: string, row: Fr[], sessionId = 1) {
+    const bytes = BoundedVec.from({ data: Array.from(label, c => c.charCodeAt(0)), maxLength: 1024 });
+    const [data, length] = ROUNDTRIP_ELEMENT_ENTRY.params[0].type.serialization!.fn(bytes) as [Fr[], Fr];
     return callOracle(
       'aztec_oracle_test_roundtripElement',
-      [toHex(new Fr(elementIndex)), toHex(new Fr(seed)), row.map(toHex)],
+      [data.map(toHex), toHex(length), row.map(toHex)],
       sessionId,
     );
   }

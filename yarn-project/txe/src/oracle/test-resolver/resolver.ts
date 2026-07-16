@@ -1,7 +1,6 @@
 /* eslint-disable camelcase */
 import type { Logger } from '@aztec/foundation/log';
 import { createLogger } from '@aztec/foundation/log';
-import { withoutHexPrefix } from '@aztec/foundation/string';
 import {
   ARRAY,
   BOUNDED_VEC,
@@ -9,8 +8,8 @@ import {
   FIELD,
   Option,
   type OracleRegistryEntry,
+  type TypeMapping,
   U8,
-  U32,
   deserializeElement,
   makeEntry,
   serializeElement,
@@ -18,7 +17,12 @@ import {
 
 import type { ForeignCallArgs, ForeignCallResult } from '../../utils/encoding.js';
 import { outputSlotsToForeignCallResult, toInputSlots } from '../txe_oracle_registry.js';
-import { ephemeralElementMappings, synthesizeDefaultFixtures, testValueFor } from './default_fixtures.js';
+import {
+  ELEMENT_ROUNDTRIP_SEED,
+  ephemeralElementMappingsByLabel,
+  synthesizeDefaultFixtures,
+  testValueFor,
+} from './default_fixtures.js';
 
 /** Name of the meta-oracle that Noir tests call to announce the next call's scenario by name. */
 const SET_SCENARIO_ORACLE = 'aztec_oracle_test_set_scenario';
@@ -27,15 +31,15 @@ export const SET_SCENARIO_ENTRY = makeEntry({ params: [{ name: 'name', type: BOU
 /**
  * Name of the meta-oracle that roundtrips one ephemeral-array element row. An `EphemeralArray` puts only its slot on
  * the wire, so the elements' serialization is tested separately: after calling the oracle under test, its generated
- * test sends each ephemeral position's canonical element through this oracle, the resolver decodes it with the element
- * mapping the last-resolved oracle's entry declares (addressed by DFS ordinal, see `ephemeralElementMappings`),
- * verifies it, and serializes its own canonical element back.
+ * test sends each ephemeral position's canonical element through this oracle tagged with the element's type label,
+ * the resolver decodes it with the element mapping of that label (see `ephemeralElementMappingsByLabel`), verifies
+ * it, and serializes its own canonical element back. A label the two sides build differently fails loudly as
+ * unknown instead of pairing the row with the wrong mapping.
  */
 const ROUNDTRIP_ELEMENT_ORACLE = 'aztec_oracle_test_roundtripElement';
 export const ROUNDTRIP_ELEMENT_ENTRY = makeEntry({
   params: [
-    { name: 'elementIndex', type: U32 },
-    { name: 'seed', type: U32 },
+    { name: 'label', type: BOUNDED_VEC(U8) },
     { name: 'row', type: ARRAY(FIELD) },
   ],
   returnType: ARRAY(FIELD),
@@ -73,7 +77,7 @@ export interface OracleTestScenario {
 export class OracleTestResolver {
   private readonly calledOracles = new Set<string>();
   private readonly pendingScenario = new Map<number, string>();
-  private readonly lastResolvedOracle = new Map<number, string>();
+  private readonly elementMappingsByLabel: Map<string, TypeMapping<any>>;
   private readonly logger: Logger;
 
   constructor(
@@ -81,6 +85,7 @@ export class OracleTestResolver {
     private readonly fixtures: Record<string, OracleTestScenario[]>,
     logger?: Logger,
   ) {
+    this.elementMappingsByLabel = ephemeralElementMappingsByLabel(registry);
     this.logger = logger ?? createLogger('txe:test-resolver');
   }
 
@@ -118,7 +123,6 @@ export class OracleTestResolver {
     const match = this.#selectScenario(callData.session_id, oracleName, scenarios);
     this.#verifyInputs(callData.inputs, entry, match, oracleName);
     this.calledOracles.add(oracleName);
-    this.lastResolvedOracle.set(callData.session_id, oracleName);
 
     this.logger.debug('Verified scenario for oracle', { oracleName });
 
@@ -136,34 +140,28 @@ export class OracleTestResolver {
   }
 
   /**
-   * Roundtrips one ephemeral-array element row for the session's last-resolved oracle: decodes it with the element
-   * mapping the entry declares at the addressed position, verifies it against the canonical element, and serializes
-   * the canonical element back.
+   * Roundtrips one ephemeral-array element row: decodes it with the element mapping whose `label` the call carries,
+   * verifies it against the canonical element, and serializes the canonical element back.
    */
   #handleRoundtripElement(callData: OracleTestCallInput): ForeignCallResult {
-    const oracleName = this.lastResolvedOracle.get(callData.session_id);
-    if (oracleName === undefined) {
-      throw new Error('Element roundtrip received before any oracle call in the session');
-    }
-    const [{ value: elementIndex }, { value: seed }, { value: row }] = ROUNDTRIP_ELEMENT_ENTRY.deserializeParams(
+    const [{ value: labelBytes }, { value: row }] = ROUNDTRIP_ELEMENT_ENTRY.deserializeParams(
       toInputSlots(callData.inputs),
     );
+    const label = String.fromCharCode(...labelBytes.data);
 
-    const elements = ephemeralElementMappings(this.registry[oracleName]);
-    if (elementIndex >= elements.length) {
-      throw new Error(
-        `Element index ${elementIndex} out of range for oracle '${oracleName}' ` +
-          `(${elements.length} ephemeral element position(s))`,
-      );
+    const element = this.elementMappingsByLabel.get(label);
+    if (element === undefined) {
+      const known = [...this.elementMappingsByLabel.keys()].join(', ');
+      throw new Error(`Unknown ephemeral element label '${label}'. Known element labels: ${known}`);
     }
-    const element = elements[elementIndex];
 
     const actual = deserializeElement(element, row);
-    const expected = testValueFor(element, seed);
+    const expected = testValueFor(element, ELEMENT_ROUNDTRIP_SEED);
     if (!valuesEqual(actual, expected)) {
       throw new Error(
-        `Element mismatch for oracle '${oracleName}' at ephemeral element position ${elementIndex}: ` +
-          `expected ${String(expected)} but got ${String(actual)}. ${versionBumpHint(oracleName)}`,
+        `Element mismatch for ephemeral element '${label}': ` +
+          `expected ${String(expected)} but got ${String(actual)}. ` +
+          'If you changed the element type, consider bumping the oracle version after fixing the mismatch.',
       );
     }
 

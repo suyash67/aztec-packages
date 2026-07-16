@@ -567,7 +567,6 @@ export const ORIGIN_BLOCK: TypeMapping<OriginBlock> = STRUCT([
   { name: 'blockHash', type: FIELD },
 ]);
 
-/** Chain state of a retractable fact's origin block. */
 export const ORIGIN_BLOCK_STATE: TypeMapping<OriginBlockState> = SCALAR({
   kind: 'origin-block-state',
   serialization: { fn: v => [new Fr(v)] },

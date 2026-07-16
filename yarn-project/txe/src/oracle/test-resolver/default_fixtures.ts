@@ -132,6 +132,14 @@ export const SCALAR_MAPPINGS: TypeMapping<any>[] = SCALAR_IMPLS.map(impl => impl
  */
 const SEED_BASE = 10;
 
+/**
+ * The seed every element roundtrip's canonical value is built at. A roundtrip call is self-contained (the label is
+ * the element's identity and each call carries one value), so unlike parameter positions there is no ordering to
+ * disambiguate with distinct seeds, and both sides can fix one. Must match `ELEMENT_ROUNDTRIP_SEED` in the Noir
+ * `oracle_testing.nr`.
+ */
+export const ELEMENT_ROUNDTRIP_SEED = SEED_BASE;
+
 /** Elements per synthesized array and bounded vec. Must match `TEST_COLLECTION_LEN` in the Noir `oracle_testing.nr`. */
 const DEFAULT_ARRAY_LENGTH = 3;
 
@@ -227,16 +235,18 @@ export function testValueFor(type: TypeMapping<any>, seed: number): unknown {
 }
 
 /**
- * Every ephemeral-array element mapping reachable from the entry's signature, in deterministic DFS order: params
- * first then the return, and within a type its members in declaration order, recursing into each ephemeral element
- * after collecting it. The Noir macro walks the oracle's signature in the same order, so an index addresses the same
- * element mapping on both sides (see the element-roundtrip meta-oracle in the resolver).
+ * Every ephemeral-array element mapping reachable from any registry entry's signature, indexed by its
+ * [wire-structural label]{@link wireLabel}. The element-roundtrip meta-oracle addresses element mappings by that
+ * label, and mappings sharing a label are wire-equivalent (pinned by the oracle-kinds guard test), so any
+ * representative decodes a row of that label.
  */
-export function ephemeralElementMappings(entry: OracleRegistryEntry): TypeMapping<any>[] {
-  const collected: TypeMapping<any>[] = [];
+export function ephemeralElementMappingsByLabel(
+  registry: Record<string, OracleRegistryEntry>,
+): Map<string, TypeMapping<any>> {
+  const byLabel = new Map<string, TypeMapping<any>>();
   const visit = (type: TypeMapping<any>) => {
     if (isEphemeralArrayMapping(type)) {
-      collected.push(type.inner);
+      byLabel.set(wireLabel(type.inner), type.inner);
       visit(type.inner);
     } else if (isStructMapping(type)) {
       for (const field of type.fields) {
@@ -252,13 +262,51 @@ export function ephemeralElementMappings(entry: OracleRegistryEntry): TypeMappin
       visit(type.inner);
     }
   };
-  for (const param of entry.params) {
-    visit(param.type);
+  for (const entry of Object.values(registry)) {
+    for (const param of entry.params) {
+      visit(param.type);
+    }
+    if (entry.returnType !== undefined) {
+      visit(entry.returnType);
+    }
   }
-  if (entry.returnType !== undefined) {
-    visit(entry.returnType);
+  return byLabel;
+}
+
+/**
+ * The wire-structural label of a mapping, mirroring `label_of` in the Noir `oracle_testing.nr`: two types share a
+ * label exactly when they have the same wire layout and the same canonical-value function, which is the equivalence
+ * the roundtrip needs — anything the wire tolerates (field names, struct-in-struct nesting) the label tolerates too.
+ * Unlike a mapping's `label` (the interface-hash input, which keeps field names), a struct's is a nameless
+ * `{label,...}` with nested plain structs spliced into the parent; grouping is kept only under a combinator, where
+ * element boundaries drive the canonical seeding.
+ */
+function wireLabel(type: TypeMapping<any>): string {
+  if (isStructMapping(type)) {
+    return `{${structFieldLabels(type)}}`;
+  } else if (isEphemeralArrayMapping(type)) {
+    return `ephemeral-array(${wireLabel(type.inner)})`;
+  } else if (isOptionMapping(type)) {
+    return `option(${wireLabel(type.inner)})`;
+  } else if (isArrayMapping(type)) {
+    return `array(${wireLabel(type.inner)})`;
+  } else if (isFixedArrayMapping(type)) {
+    return `array(${wireLabel(type.inner)},${type.length})`;
+  } else if (isBoundedVecMapping(type)) {
+    return `bounded-vec(${wireLabel(type.inner)})`;
+  } else if (isFixedBoundedVecMapping(type)) {
+    return `bounded-vec(${wireLabel(type.inner)},${type.maxLength})`;
+  } else {
+    // A leaf's wire-structural label is its kind, which is also its `label`.
+    return type.label;
   }
-  return collected;
+}
+
+/** The comma-joined wire-structural labels of a struct's fields, with nested structs spliced into the parent. */
+function structFieldLabels(type: StructMapping): string {
+  return type.fields
+    .map(field => (isStructMapping(field.type) ? structFieldLabels(field.type) : wireLabel(field.type)))
+    .join(',');
 }
 
 class UnsynthesizableTypeError extends Error {
