@@ -14,7 +14,7 @@ use crate::bit_traits::{BitsQueryable, bits_needed_for};
 use crate::instructions::{AddressingModeBuilder, AvmInstruction, AvmOperand, AvmTypeTag};
 use crate::opcodes::AvmOpcode;
 use crate::procedures::{
-    Label as ProcedureLocalLabel, Procedure, SCRATCH_SPACE_START, compile_procedure,
+    Label as ProcedureLocalLabel, Procedure, compile_procedure, scratch_space_range,
 };
 use crate::utils::{
     UNRESOLVED_PC, UnresolvedPCLocation, dbg_print_avm_program, dbg_print_brillig_program,
@@ -1154,7 +1154,7 @@ fn generate_mov_instruction(
 }
 
 fn generate_mov_to_procedure(source: &MemoryAddress, index: usize) -> AvmInstruction {
-    let target_address = SCRATCH_SPACE_START + index;
+    let target_address = scratch_space_range().start + index;
     generate_mov_instruction(
         Some(
             AddressingModeBuilder::default()
@@ -1172,7 +1172,7 @@ fn generate_set_to_procedure(
     value: &FieldElement,
     index: usize,
 ) -> AvmInstruction {
-    let target_address = SCRATCH_SPACE_START + index;
+    let target_address = scratch_space_range().start + index;
     generate_set_instruction(tag, &MemoryAddress::direct(target_address as u32), value, false)
 }
 
