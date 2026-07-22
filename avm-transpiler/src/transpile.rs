@@ -731,11 +731,16 @@ fn handle_emit_public_log(
         );
     }
 
-    // The fields are a slice, and this is represented as a (length: Field, slice: HeapVector).
-    // The length field is redundant and we skipt it.
-    let (message_offset, message_size_offset) = match &inputs[1] {
-        ValueOrArray::HeapVector(vec) => (vec.pointer, vec.size),
-        _ => panic!("Unexpected inputs for ForeignCall::EMITPUBLICLOG: {:?}", inputs),
+    // The fields are a slice, passed as (semantic length, HeapVector). Use the semantic length
+    // (inputs[0]) as the size, not HeapVector.size, which can exceed it after an SSA vector merge
+    // and would emit stale trailing fields.
+    let message_size_offset = match inputs[0] {
+        ValueOrArray::MemoryAddress(address) => address,
+        _ => panic!("EMITPUBLICLOG's first input should be a memory address: {:?}", inputs),
+    };
+    let message_offset = match &inputs[1] {
+        ValueOrArray::HeapVector(vec) => vec.pointer,
+        _ => panic!("EMITPUBLICLOG's second input should be a HeapVector: {:?}", inputs),
     };
     avm_instrs.push(AvmInstruction {
         opcode: AvmOpcode::EMITPUBLICLOG,
@@ -1570,10 +1575,16 @@ fn handle_return(
     assert_eq!(inputs.len(), 2);
     assert!(destinations.is_empty());
 
-    // First arg is the size, which is ignored because it's redundant.
-    let (return_data_offset, return_data_size) = match inputs[1] {
-        ValueOrArray::HeapVector(HeapVector { pointer, size }) => (pointer, size),
-        _ => panic!("Revert instruction's args input should be a HeapVector"),
+    // The returndata slice is passed as (semantic length, HeapVector). Use the semantic length
+    // (inputs[0]) as the size, not HeapVector.size, which can exceed it after an SSA vector merge
+    // and would return stale trailing fields.
+    let return_data_size = match inputs[0] {
+        ValueOrArray::MemoryAddress(address) => address,
+        _ => panic!("Return instruction's first input should be a memory address"),
+    };
+    let return_data_offset = match inputs[1] {
+        ValueOrArray::HeapVector(HeapVector { pointer, .. }) => pointer,
+        _ => panic!("Return instruction's second input should be a HeapVector"),
     };
 
     generate_return_instruction(avm_instrs, &return_data_offset, &return_data_size);
@@ -1589,10 +1600,16 @@ fn handle_revert(
     assert_eq!(inputs.len(), 2);
     assert!(destinations.is_empty());
 
-    // First arg is the size, which is ignored because it's redundant.
-    let (revert_data_offset, revert_data_size_offset) = match inputs[1] {
-        ValueOrArray::HeapVector(HeapVector { pointer, size }) => (pointer, size),
-        _ => panic!("Revert instruction's args input should be a HeapVector"),
+    // The revertdata slice is passed as (semantic length, HeapVector). Use the semantic length
+    // (inputs[0]) as the size, not HeapVector.size, which can exceed it after an SSA vector merge
+    // and would return stale trailing fields.
+    let revert_data_size_offset = match inputs[0] {
+        ValueOrArray::MemoryAddress(address) => address,
+        _ => panic!("Revert instruction's first input should be a memory address"),
+    };
+    let revert_data_offset = match inputs[1] {
+        ValueOrArray::HeapVector(HeapVector { pointer, .. }) => pointer,
+        _ => panic!("Revert instruction's second input should be a HeapVector"),
     };
 
     generate_revert_instruction(avm_instrs, &revert_data_offset, &revert_data_size_offset);
