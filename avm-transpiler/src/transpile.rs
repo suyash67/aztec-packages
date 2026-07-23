@@ -1340,6 +1340,15 @@ fn handle_black_box_function(
                 "Output array size must be equal to 2"
             );
             assert_eq!(points.size.0 % 2, 0, "Points array size must be divisible by 2");
+            // The MSM procedure derives its iteration count from the points length and reads
+            // 2 scalar limbs per point, so a mismatch would let it read past the scalar array.
+            // Extra conservative: Noir-generated MSM always emits matching lengths, but this guards
+            // against hand-crafted Brillig or an upstream compiler bug. Also mirrors the native
+            // Brillig/ACVM checks that points and scalars are equal in length.
+            assert_eq!(
+                scalars.size, points.size,
+                "Scalars array size must equal points array size"
+            );
 
             avm_instrs.push(generate_mov_to_procedure(&points.pointer, 0));
             avm_instrs.push(generate_mov_to_procedure(&scalars.pointer, 1));
