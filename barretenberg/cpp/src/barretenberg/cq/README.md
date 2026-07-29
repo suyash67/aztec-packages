@@ -156,8 +156,59 @@ seconds to prove on the same machine, on every proof.
   explicit check (C2) because its bound $n-2$ is stricter than the SRS bound.
 - $B(0)$ is derived, never sent, so the sum linkage cannot be misstated; the verifier rejects if $\gamma \in V$.
 - Extraction is in the algebraic group model, as for cq [1] and KZG generally.
-- This is the non-zero-knowledge variant; cq's zk variant (blinding $m$, $A$, $B$ and the quotients) is future
-  work, as is batching the three pairing products into one.
+- This is the non-zero-knowledge variant; a blinding design that preserves table-size independence is specified
+  in *Toward zero knowledge* below. Batching the three pairing products into one remains future work.
+
+## Toward zero knowledge
+
+Every element of the base proof is a deterministic function of the witness, so an adversary who guesses the
+lookup multiset can confirm the guess by recomputing the proof; the evaluations $f(\gamma)$, $B_0(\gamma)$ and
+$a_0$ additionally leak directly. Semacaulk [11] shows the blinding playbook for the membership-shaped special
+case, and combining it with one technique from the zk-PIOP literature extends to the general protocol. Two
+tracks:
+
+**Membership track ($n$ = 1, Semacaulk-direct).** For a single hidden membership claim the witness side of cq
+degenerates and the statement is "T opens at *some* $\omega^i$ to a hidden value": exactly Caulk/Semacaulk's
+blinded precomputed opening. The FK caches here are already the required per-position opening proofs
+(`fk_all_kzg_opening_proofs`, before the $\omega^i/N$ scaling), so the import is: rerandomize the cached
+quotient per use ($[W] = r^{-1}[U_i]$ plus compensating terms), commit the vanishing factor $z(X) = r(X -
+\omega^i)$ in G2, prove $z$ encodes a root of unity (Caulk's unity argument), and link the hidden opened value to
+a Pedersen commitment with a Schnorr-style proof so a companion circuit (e.g. a nullifier) can consume it. Fresh
+$r$ and blinders per proof make repeated proofs of the same membership unlinkable.
+
+**General track (zk-cq).** Blind every committed polynomial by a random multiple of the domain's vanishing
+polynomial — $\hat{m} = m + \rho_m Z_H$, $\hat{A} = A + \rho_A Z_H$, $\hat{f} = f + \rho_f(X) Z_V$, $\hat{B} = B
++ \rho_B(X) Z_V$ — which hides commitments and masks evaluations while leaving all values on $H$ and $V$
+unchanged. Four consequences make this workable:
+
+1. *Quotients compensate homomorphically, with no new preprocessing.* From
+   $\hat{A}(T + \beta) - \hat{m} = Z_H \cdot (Q_A + \rho_A T + \rho_A \beta - \rho_m)$,
+   the blinded quotient commitment is $[\hat{Q}_A] = [Q_A] + \rho_A [T]_1 + (\rho_A \beta - \rho_m)[1]_1$, all
+   from cached points; (C1) is checked unchanged. Similarly $(Z_H(X) - Z_H(0))/X = X^{N-1}$ gives
+   $\hat{\pi}_0 = \pi_0 + \rho_A[\tau^{N-1}]_1$.
+2. *Vanishing-multiple blinders do not disturb domain sums.* $Z \cdot \rho$ contributes every coefficient of
+   $\rho$ once at index $j$ and once, negated, at $j + \mathrm{ord}(Z)$, so the aliased coefficient sums that
+   encode $\sum_H$ and $\sum_V$ are blinder-invariant. The sum linkage survives blinding; only its transport
+   changes.
+3. *The $a_0$ bridge becomes a committed scalar.* The opening $\hat{A}(0) = a_0 - \rho_A$ is masked, so the
+   verifier derives $b_0 = (N/n)(\hat{A}(0) + \rho_A)$ using $\rho_A$ supplied as $[E_1] = \rho_A[1]_1$ and
+   $[E_2] = \rho_A[\tau^N]_1$, bound to each other by $e([E_1], [\tau^N]_2) = e([E_2], [1]_2)$ and bound to
+   $\hat{A}$'s top coefficient by the shift check $e([\hat{A}] - [E_2], [\tau]_2) = e([F], [1]_2)$ with
+   $[F] = \sum_{i \in S} A_i [\tau L_i]_1 - \rho_A[\tau]_1$. This costs one new preprocessed cache
+   $\{[\tau L_i]_1\}$ (a group IFFT of `srs[1..N]`) and replaces the SRS-truncation degree argument, since
+   blinders now require G1 powers up to $\tau^N$.
+4. *The witness-side sum decomposition needs a mask polynomial.* The degree-bounded component of the sum
+   decomposition ($g = (B - b_0)/X$) is deterministic and cannot itself be blinded without breaking its degree
+   bound — the leak Semacaulk never faces because it has no witness side. The zk univariate-sumcheck fix
+   (Marlin-style): commit a random mask $M$, reveal its aliased sum $\sigma_M$, draw a challenge $c$, and run the
+   structural decomposition on $M + c\hat{B} = (\sigma_M + c\, b_0) + X \tilde{g} + Z_V \tilde{\rho}$, with the
+   (C2) degree check applied to $\tilde{g}$. All $\gamma$-evaluations are then of masked or blinded polynomials.
+
+Estimated overhead relative to the base protocol: 5–6 extra G1 elements, 3 extra scalars, one extra challenge
+round, roughly 4 extra pairings (batchable into the existing products), $O(n)$ extra prover work, and one extra
+group IFFT at preprocessing. Table-size independence is preserved throughout. Open items: a formal simulator
+writeup, a cross-check against the zk variant sketched in the cq paper [1], and an implementation of the unity
+argument for the membership track.
 
 ## Trusted setup
 
