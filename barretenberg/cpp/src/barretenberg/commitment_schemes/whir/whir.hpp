@@ -126,8 +126,7 @@ template <typename Hasher> class WhirCommitmentKey {
             BB_ASSERT_EQ(column.size(), n);
             codewords.push_back(rs_encode(column, domain, domains.round_roots()));
         }
-        std::vector<std::span<const fr>> codeword_spans(codewords.begin(), codewords.end());
-        MerkleTree<Hasher> tree(codeword_spans, config.folding_factor_bits, /*salted=*/config.zk);
+        MerkleTree<Hasher> tree(std::move(codewords), config.folding_factor_bits, /*salted=*/config.zk);
         return { std::move(dense), std::move(tree) };
     }
 
@@ -331,7 +330,7 @@ template <typename Hasher> class WhirProver {
             // 2. Commit the folded polynomial on the halved domain.
             const auto& next_domain = ck.domains.get(size_t(1) << (round.log_domain_size - 1));
             std::vector<fr> codeword = rs_encode(current, next_domain, ck.domains.round_roots());
-            folded_trees.emplace_back(std::span<const fr>(codeword), k, /*salted=*/false);
+            folded_trees.emplace_back(std::move(codeword), k, /*salted=*/false);
             transcript->send_to_verifier(detail::whir_label("root_g", i + 1),
                                          Hasher::digest_to_fields(folded_trees.back().root()));
 

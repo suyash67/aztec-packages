@@ -138,28 +138,30 @@ template <typename Hasher> class MerkleTree {
         std::vector<Digest> path; // sibling digests, leaf level first
     };
 
-    MerkleTree(std::span<const fr> codeword, size_t log_arity, bool salted = false)
-        : MerkleTree(std::vector<std::span<const fr>>{ codeword }, log_arity, salted)
+    MerkleTree(std::vector<fr> codeword, size_t log_arity, bool salted = false)
+        : MerkleTree(single_column(std::move(codeword)), log_arity, salted)
     {}
 
     /**
      * @brief Tree over several same-length codewords ("columns") sharing leaves: leaf j holds every
      * column's coset-j values (column-major: values[c*arity + t]). One authentication path then
      * opens all columns of a commitment round at a query index.
+     * @details The tree takes ownership of the codewords and materializes leaf values on demand in
+     * `open` — leaves are strided views of the codewords, and storing them reorganized would double
+     * the tree's memory (5+ GiB for an Ultra trace at 2^20).
      */
-    MerkleTree(const std::vector<std::span<const fr>>& codewords, size_t log_arity, bool salted = false)
+    MerkleTree(std::vector<std::vector<fr>> codewords, size_t log_arity, bool salted = false)
         : log_arity_(log_arity)
         , num_leaves_(codewords.at(0).size() >> log_arity)
+        , codewords_(std::move(codewords))
     {
         const size_t arity = size_t(1) << log_arity;
-        const size_t num_columns = codewords.size();
-        for (const auto& codeword : codewords) {
+        for (const auto& codeword : codewords_) {
             BB_ASSERT_EQ(codeword.size(), num_leaves_ * arity, "codewords must share one size, a multiple of arity");
         }
         BB_ASSERT_GT(num_leaves_, size_t(0));
         BB_ASSERT_EQ(num_leaves_ & (num_leaves_ - 1), size_t(0), "number of leaves must be a power of two");
 
-        leaf_values_.resize(num_leaves_);
         if (salted) {
             salts_.resize(num_leaves_);
             for (auto& salt : salts_) {
@@ -170,14 +172,9 @@ template <typename Hasher> class MerkleTree {
         // Leaf digests
         std::vector<Digest> level(num_leaves_);
         parallel_for_range(num_leaves_, [&](size_t start, size_t end) {
+            std::vector<fr> values;
             for (size_t j = start; j < end; ++j) {
-                std::vector<fr>& values = leaf_values_[j];
-                values.resize(num_columns * arity);
-                for (size_t c = 0; c < num_columns; ++c) {
-                    for (size_t t = 0; t < arity; ++t) {
-                        values[c * arity + t] = codewords[c][j + t * num_leaves_];
-                    }
-                }
+                gather_leaf_values(j, values);
                 level[j] = Hasher::hash_leaf(values, salted ? std::optional<fr>(salts_[j]) : std::nullopt);
             }
         });
@@ -203,7 +200,7 @@ template <typename Hasher> class MerkleTree {
     {
         BB_ASSERT_LT(leaf_index, num_leaves_);
         Opening opening;
-        opening.values = leaf_values_[leaf_index];
+        gather_leaf_values(leaf_index, opening.values);
         if (!salts_.empty()) {
             opening.salt = salts_[leaf_index];
         }
@@ -227,9 +224,27 @@ template <typename Hasher> class MerkleTree {
     }
 
   private:
+    static std::vector<std::vector<fr>> single_column(std::vector<fr>&& codeword)
+    {
+        std::vector<std::vector<fr>> columns;
+        columns.push_back(std::move(codeword));
+        return columns;
+    }
+
+    void gather_leaf_values(size_t leaf_index, std::vector<fr>& values) const
+    {
+        const size_t arity = size_t(1) << log_arity_;
+        values.resize(codewords_.size() * arity);
+        for (size_t c = 0; c < codewords_.size(); ++c) {
+            for (size_t t = 0; t < arity; ++t) {
+                values[c * arity + t] = codewords_[c][leaf_index + t * num_leaves_];
+            }
+        }
+    }
+
     size_t log_arity_;
     size_t num_leaves_;
-    std::vector<std::vector<fr>> leaf_values_;
+    std::vector<std::vector<fr>> codewords_;
     std::vector<fr> salts_;
     std::vector<std::vector<Digest>> levels_;
 };
