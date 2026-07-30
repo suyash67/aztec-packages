@@ -176,6 +176,9 @@ template <typename Hasher> class WhirProver {
         // to-be-shifted commitments (constant coefficient zero); evaluations are of their shifts
         std::vector<const WhirProverData<Hasher>*> to_be_shifted;
         std::vector<fr> shifted_evaluations;
+        // false when the commitment roots are already bound to the transcript by earlier protocol
+        // rounds (the Honk integration); true for standalone use
+        bool send_roots = true;
     };
 
     template <typename Transcript>
@@ -198,13 +201,15 @@ template <typename Hasher> class WhirProver {
 
         // Commitment roots enter the transcript before the batching challenge. In the Honk
         // integration they are already there (sent during earlier rounds); standalone, send them now.
-        for (size_t p = 0; p < claims.unshifted.size(); ++p) {
-            transcript->send_to_verifier(detail::whir_label("root_u", p),
-                                         Hasher::digest_to_fields(claims.unshifted[p]->tree.root()));
-        }
-        for (size_t p = 0; p < claims.to_be_shifted.size(); ++p) {
-            transcript->send_to_verifier(detail::whir_label("root_s", p),
-                                         Hasher::digest_to_fields(claims.to_be_shifted[p]->tree.root()));
+        if (claims.send_roots) {
+            for (size_t p = 0; p < claims.unshifted.size(); ++p) {
+                transcript->send_to_verifier(detail::whir_label("root_u", p),
+                                             Hasher::digest_to_fields(claims.unshifted[p]->tree.root()));
+            }
+            for (size_t p = 0; p < claims.to_be_shifted.size(); ++p) {
+                transcript->send_to_verifier(detail::whir_label("root_s", p),
+                                             Hasher::digest_to_fields(claims.to_be_shifted[p]->tree.root()));
+            }
         }
 
         // zk: commit a uniformly random mask polynomial and reveal its (independent, uniform)
@@ -370,6 +375,10 @@ template <typename Hasher> class WhirVerifier {
     struct Claims {
         std::vector<fr> unshifted_evaluations;
         std::vector<fr> shifted_evaluations;
+        // When non-empty, the commitment roots are already known (bound to the transcript by earlier
+        // protocol rounds, as in the Honk integration) and are not read from the proof stream.
+        std::vector<Digest> unshifted_roots;
+        std::vector<Digest> shifted_roots;
     };
 
     template <typename Transcript>
@@ -388,16 +397,29 @@ template <typename Hasher> class WhirVerifier {
 
         // Commitment roots (and the zk mask root/evaluation), then the batching challenge and the
         // batched claim value σ₀.
+        const bool roots_provided = !claims.unshifted_roots.empty() || !claims.shifted_roots.empty();
+        if (roots_provided) {
+            BB_ASSERT_EQ(claims.unshifted_roots.size(), claims.unshifted_evaluations.size());
+            BB_ASSERT_EQ(claims.shifted_roots.size(), claims.shifted_evaluations.size());
+        }
         std::vector<WhirOracleComponent<Hasher>> components;
         for (size_t p = 0; p < claims.unshifted_evaluations.size(); ++p) {
-            const auto fields = transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
-                detail::whir_label("root_u", p));
-            components.push_back({ nullptr, Hasher::digest_from_fields(fields), fr::one(), false, config.zk });
+            const Digest root =
+                roots_provided
+                    ? claims.unshifted_roots[p]
+                    : Hasher::digest_from_fields(
+                          transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
+                              detail::whir_label("root_u", p)));
+            components.push_back({ nullptr, root, fr::one(), false, config.zk });
         }
         for (size_t p = 0; p < claims.shifted_evaluations.size(); ++p) {
-            const auto fields = transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
-                detail::whir_label("root_s", p));
-            components.push_back({ nullptr, Hasher::digest_from_fields(fields), fr::one(), true, config.zk });
+            const Digest root =
+                roots_provided
+                    ? claims.shifted_roots[p]
+                    : Hasher::digest_from_fields(
+                          transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
+                              detail::whir_label("root_s", p)));
+            components.push_back({ nullptr, root, fr::one(), true, config.zk });
         }
         fr mask_evaluation = fr::zero();
         if (config.zk) {
