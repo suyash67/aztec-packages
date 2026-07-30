@@ -49,13 +49,16 @@ template <typename Hasher> struct WhirBenchInstance {
     typename WhirProver<Hasher>::Claims claims;
     typename WhirVerifier<Hasher>::Claims verifier_claims;
 
-    WhirBenchInstance(size_t log_n, size_t log_inv_rate)
+    WhirBenchInstance(size_t log_n,
+                      size_t log_inv_rate,
+                      size_t num_polynomials = NUM_POLYNOMIALS,
+                      size_t num_to_be_shifted = NUM_TO_BE_SHIFTED)
         : ck(bench_config(log_n, log_inv_rate))
         , u(random_point(log_n))
     {
         const size_t n = size_t(1) << log_n;
-        for (size_t p = 0; p < NUM_POLYNOMIALS; ++p) {
-            const bool to_be_shifted = p >= NUM_POLYNOMIALS - NUM_TO_BE_SHIFTED;
+        for (size_t p = 0; p < num_polynomials; ++p) {
+            const bool to_be_shifted = p >= num_polynomials - num_to_be_shifted;
             std::vector<fr> array = random_array(n);
             if (to_be_shifted) {
                 array[0] = fr::zero();
@@ -63,11 +66,11 @@ template <typename Hasher> struct WhirBenchInstance {
             arrays.push_back(std::move(array));
             data.push_back(ck.commit(std::span<const fr>(arrays.back()), to_be_shifted));
         }
-        for (size_t p = 0; p < NUM_POLYNOMIALS; ++p) {
+        for (size_t p = 0; p < num_polynomials; ++p) {
             claims.unshifted.push_back(&data[p]);
             claims.unshifted_evaluations.push_back(Polynomial<fr>(std::span<const fr>(arrays[p])).evaluate_mle(u));
         }
-        for (size_t p = NUM_POLYNOMIALS - NUM_TO_BE_SHIFTED; p < NUM_POLYNOMIALS; ++p) {
+        for (size_t p = num_polynomials - num_to_be_shifted; p < num_polynomials; ++p) {
             std::vector<fr> shifted(arrays[p].begin() + 1, arrays[p].end());
             shifted.push_back(fr::zero());
             claims.to_be_shifted.push_back(&data[p]);
@@ -129,6 +132,71 @@ template <typename Hasher> void whir_verify(benchmark::State& state)
         state.SkipWithError("WHIR verification failed");
     }
 }
+
+// Single-polynomial configuration matching the WHIR reference implementation's PCS benchmarks
+// (WizardOfMenlo/whir defaults: one polynomial, one evaluation claim, k = 4, λ = 100 conjectured).
+
+// Timed region: commit + claimed-evaluation computation + opening proof, as in the paper's
+// "time to commit and open".
+template <typename Hasher> void whir_single_commit_open(benchmark::State& state)
+{
+    const size_t log_n = static_cast<size_t>(state.range(0));
+    const size_t log_inv_rate = static_cast<size_t>(state.range(1));
+    WhirCommitmentKey<Hasher> ck(bench_config(log_n, log_inv_rate));
+    const std::vector<fr> array = random_array(size_t(1) << log_n);
+    const std::vector<fr> u = random_point(log_n);
+    HonkProof proof;
+    for (auto _ : state) {
+        WhirProverData<Hasher> data = ck.commit(std::span<const fr>(array));
+        typename WhirProver<Hasher>::Claims claims;
+        claims.unshifted = { &data };
+        claims.unshifted_evaluations = { Polynomial<fr>(std::span<const fr>(array)).evaluate_mle(u) };
+        auto transcript = NativeTranscript::test_prover_init_empty();
+        WhirProver<Hasher>::prove(ck, claims, u, transcript);
+        proof = transcript->export_proof();
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+}
+
+template <typename Hasher> void whir_single_verify(benchmark::State& state)
+{
+    const size_t log_n = static_cast<size_t>(state.range(0));
+    const size_t log_inv_rate = static_cast<size_t>(state.range(1));
+    WhirCommitmentKey<Hasher> ck(bench_config(log_n, log_inv_rate));
+    const std::vector<fr> array = random_array(size_t(1) << log_n);
+    const std::vector<fr> u = random_point(log_n);
+    WhirProverData<Hasher> data = ck.commit(std::span<const fr>(array));
+    typename WhirProver<Hasher>::Claims claims;
+    claims.unshifted = { &data };
+    claims.unshifted_evaluations = { Polynomial<fr>(std::span<const fr>(array)).evaluate_mle(u) };
+    auto prover_transcript = NativeTranscript::test_prover_init_empty();
+    WhirProver<Hasher>::prove(ck, claims, u, prover_transcript);
+    const HonkProof proof = prover_transcript->export_proof();
+
+    const typename WhirVerifier<Hasher>::Claims verifier_claims{ claims.unshifted_evaluations, {}, {}, {} };
+    bool ok = true;
+    for (auto _ : state) {
+        auto transcript = std::make_shared<NativeTranscript>(proof);
+        [[maybe_unused]] auto init = transcript->template receive_from_prover<fr>("Init");
+        ok = ok && WhirVerifier<Hasher>::verify(ck.config, verifier_claims, u, transcript);
+    }
+    if (!ok) {
+        state.SkipWithError("WHIR verification failed");
+    }
+}
+
+BENCHMARK_TEMPLATE(whir_single_commit_open, Blake3sMerkleHasher)
+    ->ArgsProduct({ { 20, 22 }, { 1, 4 } })
+    ->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_single_commit_open, Poseidon2MerkleHasher)
+    ->ArgsProduct({ { 22 }, { 1, 4 } })
+    ->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_single_verify, Blake3sMerkleHasher)
+    ->ArgsProduct({ { 20, 22 }, { 1, 4 } })
+    ->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_single_verify, Poseidon2MerkleHasher)
+    ->ArgsProduct({ { 22 }, { 1, 4 } })
+    ->Unit(benchmark::kMillisecond);
 
 // --- Gemini+Shplonk+KZG baseline on the identical claim shape ---
 
