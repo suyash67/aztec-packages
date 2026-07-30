@@ -36,12 +36,19 @@ struct WhirRound {
  * same inputs, so none of it is sent through the transcript. See README.md §2 and §6.
  */
 struct WhirConfig {
-    size_t num_variables;       // m: committed polynomials have 2^m coefficients
+    size_t num_variables;       // committed arrays have 2^num_variables coefficients
     size_t security_bits;       // λ
-    size_t log_inv_rate;        // r₀: initial codeword length is 2^{m + r₀}
+    size_t log_inv_rate;        // r₀: initial codeword length is 2^{num_variables + r₀}
     size_t folding_factor_bits; // k: each iteration folds 2^k
     size_t final_poly_bits;     // lower bound on the clear final polynomial's log-size
     WhirSoundness soundness;
+
+    // Zero-knowledge mode (README.md §8): committed arrays gain one variable over the payload
+    // (blinding coefficients live in the high half), leaves are salted, and the opening batches in a
+    // fresh random mask polynomial.
+    bool zk = false;
+    size_t num_payload_variables = 0;     // m: payload polynomials have 2^m coefficients
+    size_t num_blinding_coefficients = 0; // q: random coefficients per commitment in zk mode
 
     std::vector<WhirRound> rounds; // the M fold-and-commit iterations
     WhirRound final_round;         // query schedule for the final clear-polynomial phase
@@ -95,14 +102,18 @@ struct WhirConfig {
     /**
      * @brief Build the full parameter schedule. Iterations continue while at least `final_poly_bits`
      * variables would remain after folding; the rate improves by k-1 bits per iteration.
+     * @param num_payload_variables log-size of the polynomials being opened; in zk mode the
+     * committed arrays have one variable more (the blinded high half).
      */
-    static WhirConfig create(size_t num_variables,
+    static WhirConfig create(size_t num_payload_variables,
                              size_t security_bits = 100,
                              size_t log_inv_rate = 2,
                              size_t folding_factor_bits = 4,
                              size_t final_poly_bits = 4,
-                             WhirSoundness soundness = WhirSoundness::CONJECTURED_LIST)
+                             WhirSoundness soundness = WhirSoundness::CONJECTURED_LIST,
+                             bool zk = false)
     {
+        const size_t num_variables = num_payload_variables + (zk ? 1 : 0);
         BB_ASSERT_GT(folding_factor_bits, size_t(0));
         BB_ASSERT_GTE(num_variables, folding_factor_bits, "polynomial too small for one fold");
         // BN254 Fr has 2-adicity 28; the initial codeword domain must be a power-of-two subgroup.
@@ -114,6 +125,9 @@ struct WhirConfig {
                            .folding_factor_bits = folding_factor_bits,
                            .final_poly_bits = final_poly_bits,
                            .soundness = soundness,
+                           .zk = zk,
+                           .num_payload_variables = num_payload_variables,
+                           .num_blinding_coefficients = 0,
                            .rounds = {},
                            .final_round = {} };
 
@@ -135,6 +149,19 @@ struct WhirConfig {
                                .log_domain_size = log_domain,
                                .log_inv_rate = final_rate_bits,
                                .num_queries = compute_num_queries(security_bits, final_rate_bits, soundness) };
+
+        if (zk) {
+            // Round-0 queries are the only openings of per-polynomial leaves; q of them must remain
+            // information-theoretically blinded (README.md §8), with a small slack margin.
+            const size_t round0_queries =
+                config.rounds.empty() ? config.final_round.num_queries : config.rounds[0].num_queries;
+            config.num_blinding_coefficients = round0_queries + 8;
+            // Blinding lives in [2^m + 1, 2^{m+1}) so it never collides with the payload or the
+            // shift contract's zero slot at 2^m.
+            BB_ASSERT_LT(config.num_blinding_coefficients + 1,
+                         size_t(1) << num_payload_variables,
+                         "blinding coefficients do not fit above the payload");
+        }
         return config;
     }
 };

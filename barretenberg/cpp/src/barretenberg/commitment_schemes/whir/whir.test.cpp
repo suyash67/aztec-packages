@@ -44,13 +44,15 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
     using Verifier = WhirVerifier<Hasher>;
     using ProverData = WhirProverData<Hasher>;
 
-    static WhirConfig test_config(size_t num_variables)
+    static WhirConfig test_config(size_t num_variables, bool zk = false)
     {
         return WhirConfig::create(num_variables,
                                   /*security_bits=*/64,
                                   /*log_inv_rate=*/2,
                                   /*folding_factor_bits=*/4,
-                                  /*final_poly_bits=*/4);
+                                  /*final_poly_bits=*/4,
+                                  WhirSoundness::CONJECTURED_LIST,
+                                  zk);
     }
 
     struct Instance {
@@ -64,9 +66,9 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
 
     static Instance make_instance(const CK& ck, size_t num_unshifted, size_t num_shifted)
     {
-        const size_t n = size_t(1) << ck.config.num_variables;
+        const size_t n = size_t(1) << ck.config.num_payload_variables;
         Instance instance;
-        instance.u = random_point(ck.config.num_variables);
+        instance.u = random_point(ck.config.num_payload_variables);
         for (size_t p = 0; p < num_unshifted; ++p) {
             instance.unshifted_arrays.push_back(random_array(n));
         }
@@ -79,7 +81,7 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
             instance.prover_data.push_back(ck.commit(std::span<const fr>(array)));
         }
         for (const auto& array : instance.to_be_shifted_arrays) {
-            instance.prover_data.push_back(ck.commit(std::span<const fr>(array)));
+            instance.prover_data.push_back(ck.commit(std::span<const fr>(array), /*to_be_shifted=*/true));
         }
         size_t data_idx = 0;
         for (const auto& array : instance.unshifted_arrays) {
@@ -189,6 +191,60 @@ TYPED_TEST(WhirTest, TamperedProofRejected)
         EXPECT_FALSE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, tampered))
             << "position " << position;
     }
+}
+
+TYPED_TEST(WhirTest, ZkBatchedCompleteness)
+{
+    const WhirConfig config = TestFixture::test_config(8, /*zk=*/true);
+    ASSERT_EQ(config.num_variables, 9U);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 2, 1);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+    EXPECT_TRUE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+TYPED_TEST(WhirTest, ZkZeroIterationCompleteness)
+{
+    const WhirConfig config = TestFixture::test_config(6, /*zk=*/true);
+    ASSERT_EQ(config.num_iterations(), 0U);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 2, 1);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+    EXPECT_TRUE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+TYPED_TEST(WhirTest, ZkWrongEvaluationRejected)
+{
+    const WhirConfig config = TestFixture::test_config(8, /*zk=*/true);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 2, 1);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+
+    auto bad_claims = instance.verifier_claims;
+    bad_claims.shifted_evaluations[0] += fr(1);
+    EXPECT_FALSE(TestFixture::verify_proof(config, bad_claims, instance.u, proof));
+}
+
+// Salted, blinded commitments to the same payload are distinct: the commitment is hiding.
+TYPED_TEST(WhirTest, ZkCommitmentIsHiding)
+{
+    const WhirConfig config = TestFixture::test_config(8, /*zk=*/true);
+    typename TestFixture::CK ck(config);
+    const std::vector<fr> payload = random_array(size_t(1) << config.num_payload_variables);
+    const auto data_a = ck.commit(std::span<const fr>(payload));
+    const auto data_b = ck.commit(std::span<const fr>(payload));
+    EXPECT_NE(data_a.tree.root(), data_b.tree.root());
+}
+
+TEST(WhirConfigTest, ZkSchedule)
+{
+    const WhirConfig config = WhirConfig::create(8, 64, 2, 4, 4, WhirSoundness::CONJECTURED_LIST, /*zk=*/true);
+    EXPECT_TRUE(config.zk);
+    EXPECT_EQ(config.num_variables, 9U);
+    EXPECT_EQ(config.num_payload_variables, 8U);
+    ASSERT_EQ(config.num_iterations(), 1U);
+    // Blinding must cover every round-0 query with slack.
+    EXPECT_EQ(config.num_blinding_coefficients, config.rounds[0].num_queries + 8);
 }
 
 TEST(WhirConfigTest, QueryCountFormulas)
