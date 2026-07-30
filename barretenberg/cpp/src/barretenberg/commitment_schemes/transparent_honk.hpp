@@ -193,7 +193,7 @@ template <typename Pcs> class TransparentHonk {
             public_inputs[i] = transcript->template receive_from_prover<FF>("public_input_" + std::to_string(i));
         }
 
-        const GroupCommitment wires = Pcs::receive_group_commitment(transcript, "HONK:wires", GROUP_COLUMNS[1]);
+        const GroupCommitment wires = Pcs::receive_group_commitment(transcript, "HONK:wires", GROUP_COLUMNS[1], config);
 
         auto [eta, rom_logup_gamma] =
             transcript->template get_challenges<FF>(std::array<std::string, 2>{ "eta", "rom_logup_gamma" });
@@ -203,7 +203,7 @@ template <typename Pcs> class TransparentHonk {
         relation_parameters.eta_three = relation_parameters.eta_two * eta;
         relation_parameters.rom_logup_gamma = rom_logup_gamma;
         const GroupCommitment counts_w4 =
-            Pcs::receive_group_commitment(transcript, "HONK:counts_w4", GROUP_COLUMNS[2]);
+            Pcs::receive_group_commitment(transcript, "HONK:counts_w4", GROUP_COLUMNS[2], config);
 
         auto [beta, gamma] = transcript->template get_challenges<FF>(std::array<std::string, 2>{ "beta", "gamma" });
         relation_parameters.beta = beta;
@@ -213,8 +213,8 @@ template <typename Pcs> class TransparentHonk {
         relation_parameters.public_input_delta =
             compute_public_input_delta<Flavor>(public_inputs, beta, gamma, FF(vk.pub_inputs_offset));
         const GroupCommitment lookup_inverses =
-            Pcs::receive_group_commitment(transcript, "HONK:lookup_inverses", GROUP_COLUMNS[3]);
-        const GroupCommitment z_perm = Pcs::receive_group_commitment(transcript, "HONK:z_perm", GROUP_COLUMNS[4]);
+            Pcs::receive_group_commitment(transcript, "HONK:lookup_inverses", GROUP_COLUMNS[3], config);
+        const GroupCommitment z_perm = Pcs::receive_group_commitment(transcript, "HONK:z_perm", GROUP_COLUMNS[4], config);
 
         const FF alpha = transcript->template get_challenge<FF>("alpha");
         const std::vector<FF> gate_challenges =

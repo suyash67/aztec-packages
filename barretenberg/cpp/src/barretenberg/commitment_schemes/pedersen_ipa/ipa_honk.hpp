@@ -33,7 +33,8 @@ struct IpaPcs {
     template <typename Transcript>
     static GroupCommitment receive_group_commitment(const std::shared_ptr<Transcript>& transcript,
                                                     const std::string& label,
-                                                    size_t num_columns)
+                                                    size_t num_columns,
+                                                    const Config& /*config*/)
     {
         GroupCommitment commitments;
         for (size_t c = 0; c < num_columns; ++c) {

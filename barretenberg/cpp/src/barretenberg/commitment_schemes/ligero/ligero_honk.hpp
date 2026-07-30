@@ -34,7 +34,8 @@ template <typename Hasher_> struct LigeroPcs {
     template <typename Transcript>
     static GroupCommitment receive_group_commitment(const std::shared_ptr<Transcript>& transcript,
                                                     const std::string& label,
-                                                    size_t /*num_columns*/)
+                                                    size_t /*num_columns*/,
+                                                    const Config& /*config*/)
     {
         return Hasher::digest_from_fields(
             transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(label));
