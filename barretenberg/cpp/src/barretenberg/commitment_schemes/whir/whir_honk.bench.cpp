@@ -1,8 +1,8 @@
 #include "barretenberg/commitment_schemes/whir/whir_honk.hpp"
-#include "barretenberg/commitment_schemes/ligero/ligero_honk.hpp"
 #include "barretenberg/commitment_schemes/dory/dory_honk.hpp"
 #include "barretenberg/commitment_schemes/hyrax/hyrax_honk.hpp"
 #include "barretenberg/commitment_schemes/kzh/kzh_honk.hpp"
+#include "barretenberg/commitment_schemes/ligero/ligero_honk.hpp"
 #include "barretenberg/commitment_schemes/mercury/mercury_honk.hpp"
 #include "barretenberg/commitment_schemes/pedersen_ipa/ipa_honk.hpp"
 #include "barretenberg/special_public_inputs/special_public_inputs.hpp"
@@ -32,7 +32,18 @@ UltraCircuitBuilder build_circuit(size_t target_log_n, bool add_default_io)
 {
     UltraCircuitBuilder builder;
     MockCircuits::add_arithmetic_gates_with_public_inputs(builder, 16);
-    MockCircuits::add_lookup_gates(builder, 2);
+    if (target_log_n >= 14) {
+        MockCircuits::add_lookup_gates(builder, 2);
+    } else {
+        // UINT32_XOR's 4096-row table cannot fit a 2^12 trace; use the 8-row dummy multitable so
+        // the lookup argument stays active at small sizes.
+        const fr a_value(1);
+        const auto a_idx = builder.add_variable(a_value);
+        const auto accumulators =
+            plookup::get_lookup_accumulators(plookup::MultiTableId::HONK_DUMMY_MULTI, a_value, fr(0), true);
+        builder.create_gates_from_plookup_accumulators(
+            plookup::MultiTableId::HONK_DUMMY_MULTI, accumulators, a_idx, std::nullopt);
+    }
     const size_t rom_id = builder.create_ROM_array(4);
     for (size_t i = 0; i < 4; ++i) {
         builder.set_ROM_element(rom_id, i, builder.add_variable(fr(3 * i + 1)));
@@ -163,7 +174,6 @@ void mercury_honk_verify(benchmark::State& state)
         state.SkipWithError("MercuryHonk verification failed");
     }
 }
-
 
 void ipa_honk_prove(benchmark::State& state)
 {
@@ -351,56 +361,26 @@ void ultra_honk_kzg_verify(benchmark::State& state)
     }
 }
 
-BENCHMARK_TEMPLATE(whir_honk_prove, Blake3sMerkleHasher)
-    ->Arg(14)
-    ->Arg(16)
-    ->Arg(18)
-    ->Arg(20)
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(whir_honk_prove, Poseidon2MerkleHasher)
-    ->Arg(14)
-    ->Arg(16)
-    ->Arg(18)
-    ->Arg(20)
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(whir_honk_verify, Blake3sMerkleHasher)
-    ->Arg(14)
-    ->Arg(16)
-    ->Arg(18)
-    ->Arg(20)
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(whir_honk_verify, Poseidon2MerkleHasher)
-    ->Arg(14)
-    ->Arg(16)
-    ->Arg(18)
-    ->Arg(20)
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(ligero_honk_prove, Blake3sMerkleHasher)
-    ->Arg(14)
-    ->Arg(16)
-    ->Arg(18)
-    ->Arg(20)
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(ligero_honk_prove, Poseidon2MerkleHasher)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(ligero_honk_verify, Blake3sMerkleHasher)
-    ->Arg(14)
-    ->Arg(16)
-    ->Arg(18)
-    ->Arg(20)
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(ligero_honk_verify, Poseidon2MerkleHasher)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK(mercury_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(mercury_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(ipa_honk_prove)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK(ipa_honk_verify)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK(hyrax_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(hyrax_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(kzh_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(kzh_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(dory_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Unit(benchmark::kMillisecond);
-BENCHMARK(dory_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Unit(benchmark::kMillisecond);
-BENCHMARK(ultra_honk_kzg_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
-BENCHMARK(ultra_honk_kzg_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_prove, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_verify, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(ligero_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(ligero_honk_prove, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(ligero_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(ligero_honk_verify, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(mercury_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(mercury_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(ipa_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(ipa_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(hyrax_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(hyrax_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(kzh_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(kzh_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(dory_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(dory_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(ultra_honk_kzg_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(ultra_honk_kzg_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 
 } // namespace
 } // namespace bb::whir
