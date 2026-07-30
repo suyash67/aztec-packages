@@ -44,25 +44,26 @@ final $14$):
 
 | Layout | Round-0 perms | Inner+final perms | $H_{\text{FS}}$ perms | Total perms | Ultra gates |
 |---|---|---|---|---|---|
-| Per-poly trees, shifted dups, full absorption (current `WhirHonk`) | $50 \cdot 41 \cdot (6{+}18) = 49{,}200$ | $1{,}116$ | $\approx 24{,}000$ | $\approx 74{,}300$ | $\approx 5.4$M |
-| Shared trees + dedup + minimal absorption | $50 \cdot 284 = 14{,}200$ | $1{,}116$ | $\approx 300$ | $\approx 15{,}600$ | $\approx 1.14$M |
+| Per-poly trees, duplicated shifted openings, full absorption | $50 \cdot 41 \cdot (6{+}18) = 49{,}200$ | $1{,}116$ | $\approx 24{,}000$ | $\approx 74{,}300$ | $\approx 5.4$M |
+| Shared trees + dedup + minimal absorption (implemented) | $50 \cdot 284 = 14{,}200$ | $1{,}116$ | $\approx 300$ | $\approx 15{,}600$ | $\approx 1.14$M |
 | same, $r_0 = 3$ ($t_0 = 34$) | $9{,}656$ | $\approx 1{,}050$ | $\approx 300$ | $\approx 11{,}000$ | $\approx 0.80$M |
 | same, $r_0 = 4$ + 20-bit grinding ($t_0 = 20$) | $5{,}680$ | $\approx 700$ | $\approx 300$ | $\approx 6{,}700$ | $\approx 0.49$M |
 
-The three layout changes behind rows 2–4:
+The three design choices separating row 1 from rows 2–4, all implemented (`WhirGroupData`
+groups, shifted-claim reuse, `send_unhashed_to_verifier`):
 
 1. **One tree per commitment round.** Five trees (precomputed 28 columns; wires 3; counts+w_4 3;
    lookup_inverses; z_perm) instead of 36: a round-0 query then costs
    $\lceil 448/3 \rceil + 2\lceil 48/3 \rceil + 6 + 6 = 194$ leaf permutations plus $5 \cdot 18 = 90$
    path permutations $= 284$. Value hashing is irreducible — every opened value must enter a leaf
-   hash — so column count is the fundamental driver; the change eliminates the 36-fold path
+   hash — so column count is the fundamental driver; grouping eliminates the 36-fold path
    duplication.
 2. **Deduplicate shifted openings.** A to-be-shifted column's shifted value is derived from the
    same opened leaf ($A(x)/x$); opening its tree twice per query is pure waste.
 3. **Absorb only unbound prover messages into Fiat-Shamir.** Opened values and Merkle paths are
-   already bound to pre-challenge roots by path verification; re-absorbing them (as the current
-   uniform transcript flow does) costs $\approx$ proof-size/96 B permutations for no soundness
-   benefit. Only roots, sumcheck univariates, OOD answers, and the final polynomial need absorption.
+   already bound to pre-challenge roots by path verification; re-absorbing them would cost
+   $\approx$ proof-size/96 B permutations for no soundness benefit. Only roots, sumcheck
+   univariates, OOD answers, and the final polynomial are absorbed.
 
 Field-operation costs are negligible beside hashing: per query one inversion, $k \cdot 2^{k-1}$
 fold mul-adds, and an $\omega^{\text{idx}}$ exponentiation by bit-decomposition
@@ -109,16 +110,13 @@ the optimized configurations at roughly 180–420k gates — below the non-gobli
 - **Witness volume:** the proof stream (hundreds of KiB at $m = 20$ with the round-layout
   optimizations pending) enters as ~tens of thousands of witnesses — well within builder limits.
 
-Prerequisite before a stdlib port is worthwhile: implement the §2 layout changes natively
-(shared per-round trees, dedup, minimal absorption), since they change the proof format the
-in-circuit verifier consumes.
-
 ## 5. Recommendation
 
 For Aztec's current Goblin-based stack, recursive WHIR does not beat in-circuit EC deferral on
 gates. It becomes the right choice when any of these matter: removing the trusted setup end-to-end,
 a post-quantum-plausible recursion story, eliminating the ECCVM/Translator provers, or a uniform
-hash-only verifier (e.g. final verification layers on hash-friendly L1s). The concrete path:
-land the round-layout optimizations, re-benchmark proof size, then port `WhirVerifier` to stdlib
-with the Poseidon2 hasher and measure a real recursive-verifier circuit against
-`UltraRecursiveFlavor`'s.
+hash-only verifier (e.g. final verification layers on hash-friendly L1s). The native layout
+already produces the recursion-friendly proof format (§2 rows 2–4); the concrete next step is
+porting `WhirVerifier` to stdlib with the Poseidon2 hasher and measuring a real
+recursive-verifier circuit against `UltraRecursiveFlavor`'s, with grinding and a higher initial
+rate as the remaining parameter levers.

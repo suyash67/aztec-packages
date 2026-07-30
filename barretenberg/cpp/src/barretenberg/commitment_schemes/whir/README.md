@@ -119,14 +119,16 @@ hold for affine lines [7]).
 
 ### 4.1 Commitment
 
-`WhirCommitmentKey::commit(poly)`: pad $a$ to $n = 2^m$, FFT onto $L_0$
-($N_0 = 2^{m+r_0}$ points, natural order), and build a Merkle tree whose leaf $j$ hashes the
-$2^k$ codeword values of fold-coset $j$,
+`WhirCommitmentKey::commit_group`: polynomials committed together (a "group" — e.g. all
+columns of one Honk round) are padded to $n = 2^m$, FFT'd onto $L_0$ ($N_0 = 2^{m+r_0}$
+points, natural order), and bound by one Merkle tree whose leaf $j$ hashes, column-major,
+every column's values on fold-coset $j$,
 
 $$\operatorname{coset}(j) = \{\, j + t \cdot N_0/2^k \;:\; t \in [2^k] \,\}, \qquad j \in [N_0 / 2^k],$$
 
-so one opening authenticates everything needed to fold at index $j$. The commitment is the
-root. The prover retains codeword and tree (`WhirProverData`).
+so one opening authenticates everything needed to fold every column of the group at index
+$j$. The commitment is the root. The prover retains the coefficient arrays and tree
+(`WhirGroupData`); a single polynomial is a group of one.
 
 ### 4.2 Opening statement
 
@@ -194,8 +196,10 @@ variables, oracle on $L_M$. The prover sends the array of $\hat g_M$ in the clea
 All messages go through the standard Honk transcript (Poseidon2 Fiat–Shamir for
 `NativeTranscript`); challenges are full-width field elements. Query indices are reduced
 from field challenges modulo the (power-of-two) index space, which introduces no usable
-bias at 254 bits. Merkle authentication paths are sent through the transcript after the
-indices they answer are fixed; absorbing them is sound and keeps a single proof container.
+bias at 254 bits. Opened leaves and Merkle paths travel in the proof stream without
+Fiat-Shamir absorption (`send_unhashed_to_verifier`): they are bound by the roots absorbed
+before the query indices were drawn, so re-absorbing them adds no soundness and would
+dominate verifier hashing.
 
 | Order | Label | Direction | Content |
 |---|---|---|---|
@@ -259,7 +263,7 @@ costs across the batch; only round-0 leaf openings scale with the number of tree
 |---|---|
 | Prover commit | one size-$N_0$ FFT + $N_0/2^k$ leaf hashes + $N_0/2^k$ tree hashes |
 | Prover open | per iteration: $O(2^{m_i})$ sumcheck/weight field ops, size-$N_{i+1}$ FFT, tree build |
-| Proof size | $\sum_i t_i \cdot \big(2^k \cdot 32\,\text{B} + 32\,\text{B} \cdot \log_2(N_i/2^k)\big)$ + $3 \cdot 32\,\text{B} \cdot k M$ (sumcheck) + $2^{m_{\text{fin}}} \cdot 32\,\text{B}$ |
+| Proof size | round 0: $t_0 \cdot 32\,\text{B} \cdot \big(C \cdot 2^k + \sum_{\text{groups}} d \cdot \log_2(N_0/2^k)\big)$ ($C$ total columns, $d$ digest fields); rounds $i \ge 1$: $t_i \cdot 32\,\text{B} \cdot \big(2^k + d \log_2(N_i/2^k)\big)$; + $3 \cdot 32\,\text{B} \cdot k M$ (sumcheck) + $2^{m_{\text{fin}}} \cdot 32\,\text{B}$ |
 | Verifier | $\sum_i t_i \cdot (\log_2(N_i/2^k) + 1)$ hashes + $O\big(\sum_i t_i (2^k + m_i)\big)$ field ops |
 
 For the §6 example the proof is $\approx 90$ KiB and the verifier computes $\approx 1{,}700$
@@ -323,10 +327,11 @@ root, and the opening phase is one batched WHIR run.
   `sumcheck_output.claimed_evaluations` — the identical inputs Shplemini consumes — with the
   roots already transcript-bound (`Claims::send_roots = false`). The verifier replaces the
   Shplemini batch-mul + pairing with `WhirVerifier` (no `PairingPoints`, no SRS anywhere).
-- **Multi-tree layout (future).** Polynomials committed in the same Honk round should share
-  one tree with interleaved leaves, so round-0 query cost scales with the number of
-  commitment *rounds*, not the number of polynomials; see RECURSION.md §2 for the quantified
-  effect. The current layout commits each polynomial to its own tree.
+- **Per-round tree groups.** Polynomials committed in the same Honk round share one tree
+  (five groups: the 28 precomputed columns, wires, counts+w_4, lookup_inverses, z_perm), so
+  a round-0 query opens one path per commitment round rather than per polynomial, and a
+  shifted claim reuses its column's opened values with $x^{-1}$ scaling instead of a second
+  opening. RECURSION.md §2 quantifies the effect.
 - **ZK flavors.** Witness masking rows and Libra sumcheck masking carry over unchanged;
   the PCS phase uses §8. The `SmallSubgroupIPA` sub-protocol reduces to standard opening
   claims, which fold into the same batched WHIR statement.
