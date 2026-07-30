@@ -310,19 +310,23 @@ relative conclusions should be re-checked on the remote benchmark machine.
 
 ## 10. UltraHonk integration
 
-The integration replaces the object `Flavor::PCS` and the commitment type end to end:
+`whir_honk.hpp` (`WhirHonk`) is UltraHonk with WHIR as the PCS: `UltraFlavor`'s
+arithmetization, relations, and sumcheck are unchanged, every commitment is a WHIR Merkle
+root, and the opening phase is one batched WHIR run.
 
-- **Commitment type.** `Commitment` becomes the Merkle digest (`fr` for Poseidon2). Oink's
-  per-round wire/permutation commitments become WHIR commitments; the verification key holds
-  roots of the precomputed polynomials' trees.
-- **Opening phase.** `UltraProver_::execute_pcs` builds the batched statement of §4.2
-  directly from `prover_instance->polynomials.get_unshifted()` /
-  `get_to_be_shifted()` and `sumcheck_output` — the identical inputs Shplemini consumes —
-  and runs `WhirProver`. The verifier side replaces the Shplemini batch-mul + pairing with
-  `WhirVerifier` (no `PairingPoints`, no transcript SRS).
-- **Multi-tree layout.** Polynomials committed in the same Honk round share one tree with
-  interleaved leaves, so round-0 query cost scales with the number of commitment *rounds*,
-  not the number of polynomials.
+- **Commitments and VK.** The transparent `WhirHonk::VerificationKey` holds circuit metadata
+  and the precomputed polynomials' roots. Witness commitments follow Oink's round schedule
+  with the identical challenge labels, so the derived-polynomial computations are the shared
+  `OinkProver` static helpers and the relation parameters bind to hash commitments.
+- **Opening phase.** `WhirHonk::prove` assembles the §4.2 statement from
+  `polynomials.get_unshifted()` / `get_to_be_shifted()` and
+  `sumcheck_output.claimed_evaluations` — the identical inputs Shplemini consumes — with the
+  roots already transcript-bound (`Claims::send_roots = false`). The verifier replaces the
+  Shplemini batch-mul + pairing with `WhirVerifier` (no `PairingPoints`, no SRS anywhere).
+- **Multi-tree layout (future).** Polynomials committed in the same Honk round should share
+  one tree with interleaved leaves, so round-0 query cost scales with the number of
+  commitment *rounds*, not the number of polynomials; see RECURSION.md §2 for the quantified
+  effect. The current layout commits each polynomial to its own tree.
 - **ZK flavors.** Witness masking rows and Libra sumcheck masking carry over unchanged;
   the PCS phase uses §8. The `SmallSubgroupIPA` sub-protocol reduces to standard opening
   claims, which fold into the same batched WHIR statement.
@@ -368,7 +372,8 @@ stdlib design sketch live in `RECURSION.md`.
 | commit (§4.1) | `whir.hpp`: `WhirCommitmentKey::commit` |
 | prover iterations (§4.3–4.4) | `whir.hpp`: `WhirProver` |
 | verifier (§4.3–4.4) | `whir.hpp`: `WhirVerifier` |
-| batched statement (§4.2) | `whir.hpp`: `WhirClaimBatch` |
-| zk mode (§8) | `whir.hpp` (`zk` flag), salting in `merkle_tree.hpp` |
+| batched statement (§4.2) | `whir.hpp`: `WhirProver::Claims`, `WhirVerifier::Claims` |
+| zk mode (§8) | `WhirConfig::zk` schedule fields, blinding in `WhirCommitmentKey`, salting in `merkle_tree.hpp` |
+| UltraHonk integration (§10) | `whir_honk.hpp`: `WhirHonk` |
 | benchmarks (§9) | `whir.bench.cpp` |
 | recursion analysis (§11) | `RECURSION.md` |
