@@ -40,11 +40,14 @@ WhirConfig bench_config(size_t log_n, size_t log_inv_rate)
     return WhirConfig::create(log_n, SECURITY_BITS, log_inv_rate, /*folding_factor_bits=*/4, /*final_poly_bits=*/4);
 }
 
-/** @brief The Ultra-shaped batch: 31 unshifted-only + 5 to-be-shifted polynomials, 41 claims. */
+/**
+ * @brief The Ultra-shaped batch: 31 unshifted-only + 5 to-be-shifted polynomials (41 claims), in
+ * two shared-tree groups.
+ */
 template <typename Hasher> struct WhirBenchInstance {
     WhirCommitmentKey<Hasher> ck;
     std::vector<std::vector<fr>> arrays;
-    std::vector<WhirProverData<Hasher>> data;
+    std::vector<WhirGroupData<Hasher>> groups;
     std::vector<fr> u;
     typename WhirProver<Hasher>::Claims claims;
     typename WhirVerifier<Hasher>::Claims verifier_claims;
@@ -57,26 +60,46 @@ template <typename Hasher> struct WhirBenchInstance {
         , u(random_point(log_n))
     {
         const size_t n = size_t(1) << log_n;
+        const size_t num_unshifted_only = num_polynomials - num_to_be_shifted;
         for (size_t p = 0; p < num_polynomials; ++p) {
-            const bool to_be_shifted = p >= num_polynomials - num_to_be_shifted;
             std::vector<fr> array = random_array(n);
-            if (to_be_shifted) {
+            if (p >= num_unshifted_only) {
                 array[0] = fr::zero();
             }
             arrays.push_back(std::move(array));
-            data.push_back(ck.commit(std::span<const fr>(arrays.back()), to_be_shifted));
+        }
+        size_t shifted_group = 0;
+        if (num_unshifted_only > 0) {
+            std::vector<std::vector<fr>> columns(arrays.begin(),
+                                                 arrays.begin() + static_cast<std::ptrdiff_t>(num_unshifted_only));
+            groups.push_back(ck.commit_group(std::move(columns)));
+            shifted_group = 1;
+        }
+        if (num_to_be_shifted > 0) {
+            std::vector<std::vector<fr>> columns(arrays.begin() + static_cast<std::ptrdiff_t>(num_unshifted_only),
+                                                 arrays.end());
+            groups.push_back(ck.commit_group(std::move(columns), std::vector<bool>(num_to_be_shifted, true)));
+        }
+        for (auto& group : groups) {
+            claims.groups.push_back(&group);
+            verifier_claims.group_num_columns.push_back(group.num_columns());
         }
         for (size_t p = 0; p < num_polynomials; ++p) {
-            claims.unshifted.push_back(&data[p]);
+            const bool in_shifted_group = p >= num_unshifted_only;
+            claims.unshifted.push_back(
+                { in_shifted_group ? shifted_group : 0, in_shifted_group ? p - num_unshifted_only : p });
             claims.unshifted_evaluations.push_back(Polynomial<fr>(std::span<const fr>(arrays[p])).evaluate_mle(u));
         }
-        for (size_t p = num_polynomials - num_to_be_shifted; p < num_polynomials; ++p) {
+        for (size_t p = num_unshifted_only; p < num_polynomials; ++p) {
             std::vector<fr> shifted(arrays[p].begin() + 1, arrays[p].end());
             shifted.push_back(fr::zero());
-            claims.to_be_shifted.push_back(&data[p]);
+            claims.to_be_shifted.push_back({ shifted_group, p - num_unshifted_only });
             claims.shifted_evaluations.push_back(Polynomial<fr>(std::span<const fr>(shifted)).evaluate_mle(u));
         }
-        verifier_claims = { claims.unshifted_evaluations, claims.shifted_evaluations, {}, {} };
+        verifier_claims.unshifted = claims.unshifted;
+        verifier_claims.unshifted_evaluations = claims.unshifted_evaluations;
+        verifier_claims.to_be_shifted = claims.to_be_shifted;
+        verifier_claims.shifted_evaluations = claims.shifted_evaluations;
     }
 
     HonkProof prove() const
@@ -147,9 +170,10 @@ template <typename Hasher> void whir_single_commit_open(benchmark::State& state)
     const std::vector<fr> u = random_point(log_n);
     HonkProof proof;
     for (auto _ : state) {
-        WhirProverData<Hasher> data = ck.commit(std::span<const fr>(array));
+        WhirGroupData<Hasher> data = ck.commit(std::span<const fr>(array));
         typename WhirProver<Hasher>::Claims claims;
-        claims.unshifted = { &data };
+        claims.groups = { &data };
+        claims.unshifted = { { 0, 0 } };
         claims.unshifted_evaluations = { Polynomial<fr>(std::span<const fr>(array)).evaluate_mle(u) };
         auto transcript = NativeTranscript::test_prover_init_empty();
         WhirProver<Hasher>::prove(ck, claims, u, transcript);
@@ -165,15 +189,19 @@ template <typename Hasher> void whir_single_verify(benchmark::State& state)
     WhirCommitmentKey<Hasher> ck(bench_config(log_n, log_inv_rate));
     const std::vector<fr> array = random_array(size_t(1) << log_n);
     const std::vector<fr> u = random_point(log_n);
-    WhirProverData<Hasher> data = ck.commit(std::span<const fr>(array));
+    WhirGroupData<Hasher> data = ck.commit(std::span<const fr>(array));
     typename WhirProver<Hasher>::Claims claims;
-    claims.unshifted = { &data };
+    claims.groups = { &data };
+    claims.unshifted = { { 0, 0 } };
     claims.unshifted_evaluations = { Polynomial<fr>(std::span<const fr>(array)).evaluate_mle(u) };
     auto prover_transcript = NativeTranscript::test_prover_init_empty();
     WhirProver<Hasher>::prove(ck, claims, u, prover_transcript);
     const HonkProof proof = prover_transcript->export_proof();
 
-    const typename WhirVerifier<Hasher>::Claims verifier_claims{ claims.unshifted_evaluations, {}, {}, {} };
+    typename WhirVerifier<Hasher>::Claims verifier_claims;
+    verifier_claims.group_num_columns = { 1 };
+    verifier_claims.unshifted = { { 0, 0 } };
+    verifier_claims.unshifted_evaluations = claims.unshifted_evaluations;
     bool ok = true;
     for (auto _ : state) {
         auto transcript = std::make_shared<NativeTranscript>(proof);

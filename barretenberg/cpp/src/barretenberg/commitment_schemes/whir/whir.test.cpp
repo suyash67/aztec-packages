@@ -42,7 +42,7 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
     using CK = WhirCommitmentKey<Hasher>;
     using Prover = WhirProver<Hasher>;
     using Verifier = WhirVerifier<Hasher>;
-    using ProverData = WhirProverData<Hasher>;
+    using GroupData = WhirGroupData<Hasher>;
 
     static WhirConfig test_config(size_t num_variables, bool zk = false)
     {
@@ -59,7 +59,7 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
         std::vector<std::vector<fr>> unshifted_arrays;
         std::vector<std::vector<fr>> to_be_shifted_arrays; // constant term zero
         std::vector<fr> u;
-        std::vector<ProverData> prover_data;
+        std::vector<WhirGroupData<Hasher>> groups; // one group of unshifted columns, one of shifted
         typename Prover::Claims prover_claims;
         typename Verifier::Claims verifier_claims;
     };
@@ -77,23 +77,32 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
             array[0] = fr::zero();
             instance.to_be_shifted_arrays.push_back(std::move(array));
         }
-        for (const auto& array : instance.unshifted_arrays) {
-            instance.prover_data.push_back(ck.commit(std::span<const fr>(array)));
+        size_t shifted_group = 0;
+        if (num_unshifted > 0) {
+            instance.groups.push_back(ck.commit_group(instance.unshifted_arrays));
+            shifted_group = 1;
         }
-        for (const auto& array : instance.to_be_shifted_arrays) {
-            instance.prover_data.push_back(ck.commit(std::span<const fr>(array), /*to_be_shifted=*/true));
+        if (num_shifted > 0) {
+            instance.groups.push_back(
+                ck.commit_group(instance.to_be_shifted_arrays, std::vector<bool>(num_shifted, true)));
         }
-        size_t data_idx = 0;
-        for (const auto& array : instance.unshifted_arrays) {
-            instance.prover_claims.unshifted.push_back(&instance.prover_data[data_idx++]);
-            instance.prover_claims.unshifted_evaluations.push_back(mle(array, instance.u));
+        for (auto& group : instance.groups) {
+            instance.prover_claims.groups.push_back(&group);
+            instance.verifier_claims.group_num_columns.push_back(group.num_columns());
         }
-        for (const auto& array : instance.to_be_shifted_arrays) {
-            instance.prover_claims.to_be_shifted.push_back(&instance.prover_data[data_idx++]);
-            instance.prover_claims.shifted_evaluations.push_back(shifted_mle(array, instance.u));
+        for (size_t c = 0; c < num_unshifted; ++c) {
+            instance.prover_claims.unshifted.push_back({ 0, c });
+            instance.prover_claims.unshifted_evaluations.push_back(mle(instance.unshifted_arrays[c], instance.u));
         }
-        instance.verifier_claims = { instance.prover_claims.unshifted_evaluations,
-                                     instance.prover_claims.shifted_evaluations };
+        for (size_t c = 0; c < num_shifted; ++c) {
+            instance.prover_claims.to_be_shifted.push_back({ shifted_group, c });
+            instance.prover_claims.shifted_evaluations.push_back(
+                shifted_mle(instance.to_be_shifted_arrays[c], instance.u));
+        }
+        instance.verifier_claims.unshifted = instance.prover_claims.unshifted;
+        instance.verifier_claims.unshifted_evaluations = instance.prover_claims.unshifted_evaluations;
+        instance.verifier_claims.to_be_shifted = instance.prover_claims.to_be_shifted;
+        instance.verifier_claims.shifted_evaluations = instance.prover_claims.shifted_evaluations;
         return instance;
     }
 

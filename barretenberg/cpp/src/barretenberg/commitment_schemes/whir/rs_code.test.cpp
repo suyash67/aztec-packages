@@ -25,7 +25,7 @@ TEST(WhirRSCode, EncodeIsNaturalOrderEvaluation)
     const std::vector<fr> coeffs = random_array(n);
     RSDomains domains;
     const auto& domain = domains.get(domain_size);
-    const std::vector<fr> codeword = rs_encode(coeffs, domain);
+    const std::vector<fr> codeword = rs_encode(coeffs, domain, domains.round_roots());
     ASSERT_EQ(codeword.size(), domain_size);
 
     fr point = fr::one();
@@ -63,7 +63,7 @@ TEST(WhirRSCode, FoldCosetMatchesFoldedEncode)
     const std::vector<fr> coeffs = random_array(size_t(1) << m);
     RSDomains domains;
     const auto& domain = domains.get(domain_size);
-    const std::vector<fr> codeword = rs_encode(coeffs, domain);
+    const std::vector<fr> codeword = rs_encode(coeffs, domain, domains.round_roots());
 
     const std::vector<fr> alphas = { fr::random_element(), fr::random_element() };
     std::vector<fr> folded = coeffs;
@@ -98,8 +98,8 @@ TEST(WhirRSCode, ShiftedCodewordIsDivisionByX)
 
     RSDomains domains;
     const auto& domain = domains.get(domain_size);
-    const std::vector<fr> codeword = rs_encode(coeffs, domain);
-    const std::vector<fr> shifted_codeword = rs_encode(shifted, domain);
+    const std::vector<fr> codeword = rs_encode(coeffs, domain, domains.round_roots());
+    const std::vector<fr> shifted_codeword = rs_encode(shifted, domain, domains.round_roots());
 
     fr point_inv = fr::one();
     for (size_t i = 0; i < domain_size; ++i) {

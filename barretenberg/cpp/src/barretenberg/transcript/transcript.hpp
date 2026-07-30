@@ -409,6 +409,35 @@ template <typename Codec_, typename HashFunction_> class BaseTranscript {
     }
 
     /**
+     * @brief Appends elements to the proof stream without absorbing them into the Fiat-Shamir hash.
+     *
+     * @details Sound only for data whose integrity is enforced by other absorbed messages — e.g.
+     * Merkle-authenticated openings that the verifier checks against roots already in the hash
+     * buffer. Absorbing such data is redundant for soundness and, for hash-based PCS openings, is a
+     * dominant verifier cost.
+     */
+    void send_unhashed_to_verifier(std::span<const DataType> elements)
+    {
+        proof_data.insert(proof_data.end(), elements.begin(), elements.end());
+        num_frs_written += elements.size();
+    }
+
+    /**
+     * @brief Reads `count` elements appended by `send_unhashed_to_verifier`; not absorbed into the
+     * Fiat-Shamir hash.
+     */
+    std::vector<DataType> receive_unhashed_from_prover(size_t count)
+    {
+        if (num_frs_read + count > proof_data.size()) {
+            throw_or_abort("Transcript: receive_unhashed_from_prover out of bounds (proof too short)");
+        }
+        std::vector<DataType> elements(proof_data.begin() + static_cast<std::ptrdiff_t>(num_frs_read),
+                                       proof_data.begin() + static_cast<std::ptrdiff_t>(num_frs_read + count));
+        num_frs_read += count;
+        return elements;
+    }
+
+    /**
      * @brief Reads the next element of type `T` from the transcript, with a predefined label, only used by
      * verifier.
      *

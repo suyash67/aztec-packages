@@ -18,12 +18,21 @@
 namespace bb::whir {
 
 /**
- * @brief Prover-side result of committing one polynomial: the dense coefficient array, and the
- * Merkle tree over its codeword. The commitment sent to the verifier is `tree.root()`.
+ * @brief Prover-side result of committing a group of polynomials ("columns") into one shared Merkle
+ * tree (README.md §4.1, §10): the dense coefficient arrays and the tree over their codewords with
+ * column-major interleaved leaves. The commitment sent to the verifier is the single `tree.root()`.
  */
-template <typename Hasher> struct WhirProverData {
-    std::vector<fr> coefficients;
+template <typename Hasher> struct WhirGroupData {
+    std::vector<std::vector<fr>> coefficients;
     MerkleTree<Hasher> tree;
+
+    size_t num_columns() const { return coefficients.size(); }
+};
+
+/** @brief Reference to one column of one committed group, shared by prover and verifier claims. */
+struct WhirColumnRef {
+    size_t group;
+    size_t column;
 };
 
 /**
@@ -37,48 +46,91 @@ template <typename Hasher> class WhirCommitmentKey {
     {}
 
     /**
-     * @brief Commit to a payload coefficient span (length <= 2^m; zero-padded).
-     * @details In zk mode the committed array doubles: the payload occupies the low half and
+     * @brief Commit a group of payload columns (each of length <= 2^m, zero-padded) into one tree.
+     * @details In zk mode each column's array doubles: the payload occupies the low half and
      * `config.num_blinding_coefficients` fresh random coefficients occupy the high half (offset 2^m,
-     * or 2^m + 1 for a to-be-shifted polynomial so the shift contract's zero slot is preserved), and
-     * the Merkle leaves are salted. See README.md §8.
+     * or 2^m + 1 for a to-be-shifted column so the shift contract's zero slot is preserved), and the
+     * leaves are salted. See README.md §8.
+     *
+     * @param payload_columns payload coefficient arrays; consumed
+     * @param to_be_shifted per-column flag; empty means all false
      */
-    WhirProverData<Hasher> commit(std::span<const fr> coefficients, bool to_be_shifted = false) const
+    WhirGroupData<Hasher> commit_group(std::vector<std::vector<fr>> payload_columns,
+                                       const std::vector<bool>& to_be_shifted = {}) const
     {
+        BB_ASSERT(to_be_shifted.empty() || to_be_shifted.size() == payload_columns.size(),
+                  "per-column shift flags must match the column count");
         const size_t payload_size = size_t(1) << config.num_payload_variables;
-        BB_ASSERT_LTE(coefficients.size(), payload_size, "polynomial too large for the configured size");
-        std::vector<fr> dense(size_t(1) << config.num_variables, fr::zero());
-        std::copy(coefficients.begin(), coefficients.end(), dense.begin());
-        add_blinding(dense, to_be_shifted);
-        return commit_dense(std::move(dense));
-    }
-
-    /** @brief Commit to a Honk polynomial (virtual zeros outside its span are honored). */
-    WhirProverData<Hasher> commit(const Polynomial<fr>& polynomial, bool to_be_shifted = false) const
-    {
-        const size_t payload_size = size_t(1) << config.num_payload_variables;
-        BB_ASSERT_LTE(polynomial.end_index(), payload_size, "polynomial too large for the configured size");
-        std::vector<fr> dense(size_t(1) << config.num_variables, fr::zero());
-        for (size_t i = polynomial.start_index(); i < polynomial.end_index(); ++i) {
-            dense[i] = polynomial[i];
+        std::vector<std::vector<fr>> dense;
+        dense.reserve(payload_columns.size());
+        for (size_t c = 0; c < payload_columns.size(); ++c) {
+            BB_ASSERT_LTE(payload_columns[c].size(), payload_size, "polynomial too large for the configured size");
+            std::vector<fr> column = std::move(payload_columns[c]);
+            column.resize(size_t(1) << config.num_variables, fr::zero());
+            add_blinding(column, !to_be_shifted.empty() && to_be_shifted[c]);
+            dense.push_back(std::move(column));
         }
-        add_blinding(dense, to_be_shifted);
-        return commit_dense(std::move(dense));
+        return commit_dense_group(std::move(dense));
     }
 
-    /** @brief Commit to a full-width dense array as-is (used for the zk mask polynomial). */
-    WhirProverData<Hasher> commit_dense(std::vector<fr> dense) const
+    /** @brief Commit a group of Honk polynomials (virtual zeros outside their spans are honored). */
+    WhirGroupData<Hasher> commit_group(std::span<const Polynomial<fr>* const> polynomials,
+                                       const std::vector<bool>& to_be_shifted = {}) const
     {
-        BB_ASSERT_EQ(dense.size(), size_t(1) << config.num_variables);
-        std::vector<fr> codeword = rs_encode(dense, domains.get(dense.size() << config.log_inv_rate));
-        MerkleTree<Hasher> tree(codeword, config.folding_factor_bits, /*salted=*/config.zk);
-        return { std::move(dense), std::move(tree) };
+        std::vector<std::vector<fr>> payload_columns;
+        payload_columns.reserve(polynomials.size());
+        for (const Polynomial<fr>* polynomial : polynomials) {
+            BB_ASSERT_LTE(polynomial->end_index(),
+                          size_t(1) << config.num_payload_variables,
+                          "polynomial too large for the configured size");
+            std::vector<fr> column(polynomial->end_index(), fr::zero());
+            for (size_t i = polynomial->start_index(); i < polynomial->end_index(); ++i) {
+                column[i] = (*polynomial)[i];
+            }
+            payload_columns.push_back(std::move(column));
+        }
+        return commit_group(std::move(payload_columns), to_be_shifted);
+    }
+
+    /** @brief Single-polynomial convenience: a group of one column. */
+    WhirGroupData<Hasher> commit(std::span<const fr> coefficients, bool to_be_shifted = false) const
+    {
+        std::vector<std::vector<fr>> columns;
+        columns.emplace_back(coefficients.begin(), coefficients.end());
+        return commit_group(std::move(columns), { to_be_shifted });
+    }
+
+    /** @brief Commit a group of one full-width uniformly random column (the zk mask, README.md §8). */
+    WhirGroupData<Hasher> commit_random_mask() const
+    {
+        std::vector<fr> mask(size_t(1) << config.num_variables);
+        for (fr& value : mask) {
+            value = fr::random_element();
+        }
+        std::vector<std::vector<fr>> columns;
+        columns.push_back(std::move(mask));
+        return commit_dense_group(std::move(columns));
     }
 
     WhirConfig config;
     mutable RSDomains domains;
 
   private:
+    WhirGroupData<Hasher> commit_dense_group(std::vector<std::vector<fr>> dense) const
+    {
+        const size_t n = size_t(1) << config.num_variables;
+        const auto& domain = domains.get(n << config.log_inv_rate);
+        std::vector<std::vector<fr>> codewords;
+        codewords.reserve(dense.size());
+        for (const auto& column : dense) {
+            BB_ASSERT_EQ(column.size(), n);
+            codewords.push_back(rs_encode(column, domain, domains.round_roots()));
+        }
+        std::vector<std::span<const fr>> codeword_spans(codewords.begin(), codewords.end());
+        MerkleTree<Hasher> tree(codeword_spans, config.folding_factor_bits, /*salted=*/config.zk);
+        return { std::move(dense), std::move(tree) };
+    }
+
     void add_blinding(std::vector<fr>& dense, bool to_be_shifted) const
     {
         if (!config.zk) {
@@ -146,38 +198,36 @@ inline size_t index_from_challenge(const fr& challenge, size_t index_bits)
     return static_cast<size_t>(uint256_t(challenge).data[0] & ((uint64_t(1) << index_bits) - 1));
 }
 
+/**
+ * @brief Number of proof-stream field elements of one opening: the leaf values, the salt (zk), and
+ * the authentication path digests.
+ */
+template <typename Hasher> size_t opening_num_fields(size_t num_columns, size_t arity, size_t depth, bool salted)
+{
+    return num_columns * arity + (salted ? 1 : 0) + depth * Hasher::DIGEST_NUM_FIELDS;
+}
+
 } // namespace detail
 
 /**
- * @brief One constituent of the (possibly virtual) round-0 oracle: a commitment plus how its opened
- * values enter the batched codeword F (README.md §4.2): scaled by `batching_scalar`, and by x⁻¹ when
- * the claim is for the shift.
- */
-template <typename Hasher> struct WhirOracleComponent {
-    const MerkleTree<Hasher>* tree; // prover side; nullptr on the verifier
-    typename Hasher::Digest root;   // verifier side
-    fr batching_scalar;
-    bool is_shifted;
-    bool salted; // whether openings of this tree carry a leaf salt (zk round-0 commitments)
-};
-
-/**
  * @brief WHIR opening prover for a batch of evaluation claims {P_j(u) = v_j} and shifted claims at a
- * common point u. Implements the iteration of README.md §4.3 and the final phase of §4.4; the
- * transcript schedule is §4.5.
+ * common point u, over columns committed in shared-tree groups. Implements the iteration of
+ * README.md §4.3 and the final phase of §4.4; the transcript schedule is §4.5. Openings travel in
+ * the proof stream without Fiat-Shamir absorption — they are bound by the absorbed roots.
  */
 template <typename Hasher> class WhirProver {
   public:
     using Tree = MerkleTree<Hasher>;
 
     struct Claims {
-        std::vector<const WhirProverData<Hasher>*> unshifted;
+        std::vector<const WhirGroupData<Hasher>*> groups;
+        std::vector<WhirColumnRef> unshifted;
         std::vector<fr> unshifted_evaluations;
-        // to-be-shifted commitments (constant coefficient zero); evaluations are of their shifts
-        std::vector<const WhirProverData<Hasher>*> to_be_shifted;
+        // columns with a zero constant coefficient; evaluations are of their shifts
+        std::vector<WhirColumnRef> to_be_shifted;
         std::vector<fr> shifted_evaluations;
-        // false when the commitment roots are already bound to the transcript by earlier protocol
-        // rounds (the Honk integration); true for standalone use
+        // false when the group roots are already bound to the transcript by earlier protocol rounds
+        // (the Honk integration); true for standalone use
         bool send_roots = true;
     };
 
@@ -191,6 +241,8 @@ template <typename Hasher> class WhirProver {
         const size_t k = config.folding_factor_bits;
         const size_t n = size_t(1) << config.num_variables;
         BB_ASSERT_EQ(u.size(), config.num_payload_variables, "opening point size mismatch");
+        BB_ASSERT_EQ(claims.unshifted.size(), claims.unshifted_evaluations.size());
+        BB_ASSERT_EQ(claims.to_be_shifted.size(), claims.shifted_evaluations.size());
 
         // In zk mode every claim lifts to (u, 0): the appended top variable selects the payload half
         // of the blinded arrays (README.md §8).
@@ -199,70 +251,51 @@ template <typename Hasher> class WhirProver {
             u_ext.push_back(fr::zero());
         }
 
-        // Commitment roots enter the transcript before the batching challenge. In the Honk
-        // integration they are already there (sent during earlier rounds); standalone, send them now.
         if (claims.send_roots) {
-            for (size_t p = 0; p < claims.unshifted.size(); ++p) {
-                transcript->send_to_verifier(detail::whir_label("root_u", p),
-                                             Hasher::digest_to_fields(claims.unshifted[p]->tree.root()));
-            }
-            for (size_t p = 0; p < claims.to_be_shifted.size(); ++p) {
-                transcript->send_to_verifier(detail::whir_label("root_s", p),
-                                             Hasher::digest_to_fields(claims.to_be_shifted[p]->tree.root()));
+            for (size_t g = 0; g < claims.groups.size(); ++g) {
+                transcript->send_to_verifier(detail::whir_label("root", g),
+                                             Hasher::digest_to_fields(claims.groups[g]->tree.root()));
             }
         }
 
         // zk: commit a uniformly random mask polynomial and reveal its (independent, uniform)
         // claimed evaluation; batched into F below, it makes every post-ρ message witness-independent.
-        std::optional<WhirProverData<Hasher>> mask_data;
+        std::vector<const WhirGroupData<Hasher>*> groups = claims.groups;
+        std::optional<WhirGroupData<Hasher>> mask_group;
         if (config.zk) {
-            std::vector<fr> mask(n);
-            for (fr& value : mask) {
-                value = fr::random_element();
-            }
-            mask_data = ck.commit_dense(std::move(mask));
+            mask_group = ck.commit_random_mask();
             transcript->send_to_verifier(std::string("WHIR:root_mask"),
-                                         Hasher::digest_to_fields(mask_data->tree.root()));
-            const fr mask_evaluation = Polynomial<fr>(std::span<const fr>(mask_data->coefficients)).evaluate_mle(u_ext);
+                                         Hasher::digest_to_fields(mask_group->tree.root()));
+            const fr mask_evaluation =
+                Polynomial<fr>(std::span<const fr>(mask_group->coefficients[0])).evaluate_mle(u_ext);
             transcript->send_to_verifier(std::string("WHIR:mask_eval"), mask_evaluation);
+            groups.push_back(&*mask_group);
         }
 
         const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
 
-        // Round-0 oracle components and the batched array F = ∑_j ρʲ·a_j + ∑_l ρ^{n_u+l}·shift(a_l)
-        // (+ the mask with the last ρ power in zk mode).
-        std::vector<WhirOracleComponent<Hasher>> components;
+        // Batched array F = ∑_j ρʲ·a_j + ∑_l ρ^{n_u+l}·shift(a_l) (+ the mask with the last power).
         std::vector<fr> batched(n, fr::zero());
         fr rho_power = fr::one();
-        for (const WhirProverData<Hasher>* data : claims.unshifted) {
-            components.push_back({ &data->tree, {}, rho_power, false, config.zk });
-            const fr scalar = rho_power;
-            parallel_for_range(n, [&](size_t start, size_t end) {
+        auto accumulate_column = [&](const std::vector<fr>& column, const fr& scalar, bool shifted) {
+            parallel_for_range(n - (shifted ? 1 : 0), [&](size_t start, size_t end) {
                 for (size_t i = start; i < end; ++i) {
-                    batched[i] += scalar * data->coefficients[i];
+                    batched[i] += scalar * column[i + (shifted ? 1 : 0)];
                 }
             });
+        };
+        for (const WhirColumnRef& ref : claims.unshifted) {
+            accumulate_column(claims.groups[ref.group]->coefficients[ref.column], rho_power, false);
             rho_power *= rho;
         }
-        for (const WhirProverData<Hasher>* data : claims.to_be_shifted) {
-            BB_ASSERT_EQ(data->coefficients[0], fr::zero(), "to-be-shifted polynomial must have zero constant term");
-            components.push_back({ &data->tree, {}, rho_power, true, config.zk });
-            const fr scalar = rho_power;
-            parallel_for_range(n - 1, [&](size_t start, size_t end) {
-                for (size_t i = start; i < end; ++i) {
-                    batched[i] += scalar * data->coefficients[i + 1];
-                }
-            });
+        for (const WhirColumnRef& ref : claims.to_be_shifted) {
+            const std::vector<fr>& column = claims.groups[ref.group]->coefficients[ref.column];
+            BB_ASSERT_EQ(column[0], fr::zero(), "to-be-shifted polynomial must have zero constant term");
+            accumulate_column(column, rho_power, true);
             rho_power *= rho;
         }
         if (config.zk) {
-            components.push_back({ &mask_data->tree, {}, rho_power, false, true });
-            const fr scalar = rho_power;
-            parallel_for_range(n, [&](size_t start, size_t end) {
-                for (size_t i = start; i < end; ++i) {
-                    batched[i] += scalar * mask_data->coefficients[i];
-                }
-            });
+            accumulate_column(mask_group->coefficients[0], rho_power, false);
         }
 
         // Weight table of the initial claim: W = eq(u, ·) over the committed variables.
@@ -271,10 +304,17 @@ template <typename Hasher> class WhirProver {
 
         std::vector<fr> current = std::move(batched);
         std::deque<Tree> folded_trees; // owns the trees committed during the proof
-        std::vector<const Tree*> query_trees;
-        for (const auto& component : components) {
-            query_trees.push_back(component.tree);
-        }
+
+        // Openings of the current oracle at a query index: all round-0 groups, or the last folded tree.
+        auto send_query_openings = [&](size_t idx) {
+            if (folded_trees.empty()) {
+                for (const WhirGroupData<Hasher>* group : groups) {
+                    send_opening(transcript, group->tree.open(idx));
+                }
+            } else {
+                send_opening(transcript, folded_trees.back().open(idx));
+            }
+        };
 
         for (size_t i = 0; i < config.rounds.size(); ++i) {
             const WhirRound& round = config.rounds[i];
@@ -290,8 +330,8 @@ template <typename Hasher> class WhirProver {
 
             // 2. Commit the folded polynomial on the halved domain.
             const auto& next_domain = ck.domains.get(size_t(1) << (round.log_domain_size - 1));
-            std::vector<fr> codeword = rs_encode(current, next_domain);
-            folded_trees.emplace_back(codeword, k, /*salted=*/false);
+            std::vector<fr> codeword = rs_encode(current, next_domain, ck.domains.round_roots());
+            folded_trees.emplace_back(std::span<const fr>(codeword), k, /*salted=*/false);
             transcript->send_to_verifier(detail::whir_label("root_g", i + 1),
                                          Hasher::digest_to_fields(folded_trees.back().root()));
 
@@ -300,16 +340,23 @@ template <typename Hasher> class WhirProver {
             const fr y_ood = polynomial_arithmetic::evaluate(current.data(), z_ood, current.size());
             transcript->send_to_verifier(detail::whir_label("y_ood", i), y_ood);
 
-            // 4. In-domain queries against the round-i oracle.
+            // 4. In-domain queries against the round-i oracle. Note the openings are needed for step
+            // 2 of the NEXT iteration's committed tree only when i = 0... they always target the
+            // previous oracle, so they are emitted before the trees rotate below.
             const size_t index_bits = round.log_domain_size - k;
             std::vector<size_t> indices(round.num_queries);
             for (size_t s = 0; s < round.num_queries; ++s) {
                 const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("query", i, s));
                 indices[s] = detail::index_from_challenge(challenge, index_bits);
             }
+            const bool query_folded_oracle = (i > 0);
             for (size_t s = 0; s < round.num_queries; ++s) {
-                for (size_t p = 0; p < query_trees.size(); ++p) {
-                    send_opening(transcript, query_trees[p]->open(indices[s]), i, s, p);
+                if (query_folded_oracle) {
+                    send_opening(transcript, folded_trees[i - 1].open(indices[s]));
+                } else {
+                    for (const WhirGroupData<Hasher>* group : groups) {
+                        send_opening(transcript, group->tree.open(indices[s]));
+                    }
                 }
             }
 
@@ -324,8 +371,6 @@ template <typename Hasher> class WhirProver {
                 const fr folded_point = omega.pow(uint256_t(uint64_t(indices[s])) << k);
                 WeightTerm::pow_weight(folded_point, next_vars, gamma_power).accumulate_table(weight_table);
             }
-
-            query_trees = { &folded_trees.back() };
         }
 
         // Final phase: the remaining polynomial in the clear, plus direct consistency queries.
@@ -335,31 +380,25 @@ template <typename Hasher> class WhirProver {
         const size_t index_bits = config.final_round.log_domain_size - k;
         for (size_t s = 0; s < config.final_round.num_queries; ++s) {
             const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("fquery", s));
-            const size_t idx = detail::index_from_challenge(challenge, index_bits);
-            for (size_t p = 0; p < query_trees.size(); ++p) {
-                send_opening(transcript, query_trees[p]->open(idx), config.rounds.size(), s, p);
-            }
+            send_query_openings(detail::index_from_challenge(challenge, index_bits));
         }
     }
 
   private:
     template <typename Transcript>
-    static void send_opening(const std::shared_ptr<Transcript>& transcript,
-                             const typename Tree::Opening& opening,
-                             size_t i,
-                             size_t s,
-                             size_t p)
+    static void send_opening(const std::shared_ptr<Transcript>& transcript, const typename Tree::Opening& opening)
     {
-        const std::string base = "WHIR:open_" + std::to_string(i) + "_" + std::to_string(s) + "_" + std::to_string(p);
-        for (size_t t = 0; t < opening.values.size(); ++t) {
-            transcript->send_to_verifier(base + ":v" + std::to_string(t), opening.values[t]);
-        }
+        std::vector<fr> flat;
+        flat.reserve(opening.values.size() + 1 + opening.path.size() * Hasher::DIGEST_NUM_FIELDS);
+        flat.insert(flat.end(), opening.values.begin(), opening.values.end());
         if (opening.salt) {
-            transcript->send_to_verifier(base + ":salt", *opening.salt);
+            flat.push_back(*opening.salt);
         }
-        for (size_t l = 0; l < opening.path.size(); ++l) {
-            transcript->send_to_verifier(base + ":p" + std::to_string(l), Hasher::digest_to_fields(opening.path[l]));
+        for (const auto& digest : opening.path) {
+            const auto fields = Hasher::digest_to_fields(digest);
+            flat.insert(flat.end(), fields.begin(), fields.end());
         }
+        transcript->send_unhashed_to_verifier(flat);
     }
 };
 
@@ -373,12 +412,14 @@ template <typename Hasher> class WhirVerifier {
     using Digest = typename Hasher::Digest;
 
     struct Claims {
+        std::vector<size_t> group_num_columns; // leaf layout of each round-0 group
+        std::vector<WhirColumnRef> unshifted;
         std::vector<fr> unshifted_evaluations;
+        std::vector<WhirColumnRef> to_be_shifted;
         std::vector<fr> shifted_evaluations;
-        // When non-empty, the commitment roots are already known (bound to the transcript by earlier
+        // When non-empty, the group roots are already known (bound to the transcript by earlier
         // protocol rounds, as in the Honk integration) and are not read from the proof stream.
-        std::vector<Digest> unshifted_roots;
-        std::vector<Digest> shifted_roots;
+        std::vector<Digest> group_roots;
     };
 
     template <typename Transcript>
@@ -389,65 +430,61 @@ template <typename Hasher> class WhirVerifier {
     {
         const size_t k = config.folding_factor_bits;
         BB_ASSERT_EQ(u.size(), config.num_payload_variables, "opening point size mismatch");
+        BB_ASSERT_EQ(claims.unshifted.size(), claims.unshifted_evaluations.size());
+        BB_ASSERT_EQ(claims.to_be_shifted.size(), claims.shifted_evaluations.size());
 
         std::vector<fr> u_ext(u.begin(), u.end());
         if (config.zk) {
             u_ext.push_back(fr::zero());
         }
 
-        // Commitment roots (and the zk mask root/evaluation), then the batching challenge and the
-        // batched claim value σ₀.
-        const bool roots_provided = !claims.unshifted_roots.empty() || !claims.shifted_roots.empty();
-        if (roots_provided) {
-            BB_ASSERT_EQ(claims.unshifted_roots.size(), claims.unshifted_evaluations.size());
-            BB_ASSERT_EQ(claims.shifted_roots.size(), claims.shifted_evaluations.size());
+        // Group roots (and the zk mask root/evaluation), then the batching challenge and σ₀.
+        std::vector<size_t> group_columns = claims.group_num_columns;
+        std::vector<Digest> roots = claims.group_roots;
+        if (roots.empty()) {
+            for (size_t g = 0; g < group_columns.size(); ++g) {
+                const auto fields = transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
+                    detail::whir_label("root", g));
+                roots.push_back(Hasher::digest_from_fields(fields));
+            }
         }
-        std::vector<WhirOracleComponent<Hasher>> components;
-        for (size_t p = 0; p < claims.unshifted_evaluations.size(); ++p) {
-            const Digest root =
-                roots_provided
-                    ? claims.unshifted_roots[p]
-                    : Hasher::digest_from_fields(
-                          transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
-                              detail::whir_label("root_u", p)));
-            components.push_back({ nullptr, root, fr::one(), false, config.zk });
-        }
-        for (size_t p = 0; p < claims.shifted_evaluations.size(); ++p) {
-            const Digest root =
-                roots_provided
-                    ? claims.shifted_roots[p]
-                    : Hasher::digest_from_fields(
-                          transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
-                              detail::whir_label("root_s", p)));
-            components.push_back({ nullptr, root, fr::one(), true, config.zk });
-        }
+        BB_ASSERT_EQ(roots.size(), group_columns.size(), "one root per group required");
         fr mask_evaluation = fr::zero();
         if (config.zk) {
             const auto fields = transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
                 std::string("WHIR:root_mask"));
-            components.push_back({ nullptr, Hasher::digest_from_fields(fields), fr::one(), false, true });
+            roots.push_back(Hasher::digest_from_fields(fields));
+            group_columns.push_back(1);
             mask_evaluation = transcript->template receive_from_prover<fr>(std::string("WHIR:mask_eval"));
         }
+
         const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
+        // Per-column RLC contributions to the virtual round-0 oracle, in ρ-power order.
+        struct Contribution {
+            WhirColumnRef ref;
+            fr scalar;
+            bool shifted;
+        };
+        std::vector<Contribution> contributions;
         fr sigma = fr::zero();
         fr rho_power = fr::one();
-        size_t component_idx = 0;
-        for (const fr& evaluation : claims.unshifted_evaluations) {
-            components[component_idx++].batching_scalar = rho_power;
-            sigma += rho_power * evaluation;
+        for (size_t j = 0; j < claims.unshifted.size(); ++j) {
+            contributions.push_back({ claims.unshifted[j], rho_power, false });
+            sigma += rho_power * claims.unshifted_evaluations[j];
             rho_power *= rho;
         }
-        for (const fr& evaluation : claims.shifted_evaluations) {
-            components[component_idx++].batching_scalar = rho_power;
-            sigma += rho_power * evaluation;
+        for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
+            contributions.push_back({ claims.to_be_shifted[l], rho_power, true });
+            sigma += rho_power * claims.shifted_evaluations[l];
             rho_power *= rho;
         }
         if (config.zk) {
-            components[component_idx].batching_scalar = rho_power;
+            contributions.push_back({ { group_columns.size() - 1, 0 }, rho_power, false });
             sigma += rho_power * mask_evaluation;
         }
 
         std::vector<WeightTerm> terms = { WeightTerm::eq_weight(u_ext, fr::one()) };
+        std::optional<Digest> folded_root; // the g_i oracle once i >= 1
 
         for (size_t i = 0; i < config.rounds.size(); ++i) {
             const WhirRound& round = config.rounds[i];
@@ -487,16 +524,20 @@ template <typename Hasher> class WhirVerifier {
             std::vector<fr> folded_values(round.num_queries);
             for (size_t s = 0; s < round.num_queries; ++s) {
                 std::vector<fr> virtual_values;
-                if (!assemble_virtual_values(transcript,
-                                             components,
-                                             indices[s],
-                                             index_bits,
-                                             round.log_domain_size,
-                                             omega,
-                                             eta_inv,
-                                             i,
-                                             s,
-                                             virtual_values)) {
+                const bool ok =
+                    folded_root
+                        ? read_folded_opening(transcript, config, *folded_root, indices[s], index_bits, virtual_values)
+                        : read_round0_openings(transcript,
+                                               config,
+                                               roots,
+                                               group_columns,
+                                               contributions,
+                                               indices[s],
+                                               index_bits,
+                                               omega,
+                                               eta_inv,
+                                               virtual_values);
+                if (!ok) {
                     return false;
                 }
                 const fr x_base_inv = omega.pow(uint256_t(uint64_t(indices[s]))).invert();
@@ -516,7 +557,7 @@ template <typename Hasher> class WhirVerifier {
                 terms.push_back(WeightTerm::pow_weight(folded_point, next_vars, gamma_power));
             }
 
-            components = { { nullptr, next_root, fr::one(), false, false } };
+            folded_root = next_root;
         }
 
         // Final phase: clear polynomial, oracle consistency at queried cosets, and the claim itself.
@@ -533,16 +574,19 @@ template <typename Hasher> class WhirVerifier {
             const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("fquery", s));
             const size_t idx = detail::index_from_challenge(challenge, index_bits);
             std::vector<fr> virtual_values;
-            if (!assemble_virtual_values(transcript,
-                                         components,
-                                         idx,
-                                         index_bits,
-                                         config.final_round.log_domain_size,
-                                         omega,
-                                         eta_inv,
-                                         config.rounds.size(),
-                                         s,
-                                         virtual_values)) {
+            const bool ok = folded_root
+                                ? read_folded_opening(transcript, config, *folded_root, idx, index_bits, virtual_values)
+                                : read_round0_openings(transcript,
+                                                       config,
+                                                       roots,
+                                                       group_columns,
+                                                       contributions,
+                                                       idx,
+                                                       index_bits,
+                                                       omega,
+                                                       eta_inv,
+                                                       virtual_values);
+            if (!ok) {
                 return false;
             }
             // Every value of the opened coset must match the clear polynomial.
@@ -563,28 +607,52 @@ template <typename Hasher> class WhirVerifier {
     }
 
   private:
-    /**
-     * @brief Receive and authenticate the openings of every oracle component at leaf `idx`, then
-     * assemble the virtual codeword values ∑_p scalar_p · v_p[t] (· x_t⁻¹ for shifted components).
-     */
     template <typename Transcript>
-    static bool assemble_virtual_values(const std::shared_ptr<Transcript>& transcript,
-                                        const std::vector<WhirOracleComponent<Hasher>>& components,
-                                        size_t idx,
-                                        size_t index_bits,
-                                        size_t log_domain_size,
-                                        const fr& omega,
-                                        const fr& eta_inv,
-                                        size_t i,
-                                        size_t s,
-                                        std::vector<fr>& out)
+    static typename Tree::Opening read_opening(
+        const std::shared_ptr<Transcript>& transcript, size_t num_columns, size_t arity, size_t depth, bool salted)
     {
-        const size_t arity = size_t(1) << (log_domain_size - index_bits);
-        const size_t depth = index_bits;
-        out.assign(arity, fr::zero());
+        const std::vector<fr> flat = transcript->receive_unhashed_from_prover(
+            detail::opening_num_fields<Hasher>(num_columns, arity, depth, salted));
+        typename Tree::Opening opening;
+        size_t cursor = num_columns * arity;
+        opening.values.assign(flat.begin(), flat.begin() + static_cast<std::ptrdiff_t>(cursor));
+        if (salted) {
+            opening.salt = flat[cursor++];
+        }
+        opening.path.reserve(depth);
+        for (size_t l = 0; l < depth; ++l) {
+            opening.path.push_back(
+                Hasher::digest_from_fields(std::span<const fr>(flat).subspan(cursor, Hasher::DIGEST_NUM_FIELDS)));
+            cursor += Hasher::DIGEST_NUM_FIELDS;
+        }
+        return opening;
+    }
 
-        const bool any_shifted =
-            std::any_of(components.begin(), components.end(), [](const auto& c) { return c.is_shifted; });
+    /** @brief Open every round-0 group at `idx` and assemble the RLC'd virtual coset values. */
+    template <typename Transcript, typename ContributionList>
+    static bool read_round0_openings(const std::shared_ptr<Transcript>& transcript,
+                                     const WhirConfig& config,
+                                     const std::vector<Digest>& roots,
+                                     const std::vector<size_t>& group_columns,
+                                     const ContributionList& contributions,
+                                     size_t idx,
+                                     size_t index_bits,
+                                     const fr& omega,
+                                     const fr& eta_inv,
+                                     std::vector<fr>& out)
+    {
+        const size_t arity = size_t(1) << config.folding_factor_bits;
+        std::vector<typename Tree::Opening> openings;
+        openings.reserve(roots.size());
+        for (size_t g = 0; g < roots.size(); ++g) {
+            openings.push_back(read_opening(transcript, group_columns[g], arity, index_bits, config.zk));
+            if (!Tree::verify(roots[g], idx, openings.back())) {
+                return false;
+            }
+        }
+
+        const bool any_shifted = std::any_of(
+            contributions.begin(), contributions.end(), [](const auto& contribution) { return contribution.shifted; });
         std::vector<fr> x_inverses;
         if (any_shifted) {
             x_inverses.resize(arity);
@@ -595,14 +663,12 @@ template <typename Hasher> class WhirVerifier {
             }
         }
 
-        for (size_t p = 0; p < components.size(); ++p) {
-            typename Tree::Opening opening = receive_opening(transcript, arity, depth, components[p].salted, i, s, p);
-            if (!Tree::verify(components[p].root, idx, opening)) {
-                return false;
-            }
+        out.assign(arity, fr::zero());
+        for (const auto& contribution : contributions) {
+            const std::vector<fr>& values = openings[contribution.ref.group].values;
             for (size_t t = 0; t < arity; ++t) {
-                fr value = components[p].batching_scalar * opening.values[t];
-                if (components[p].is_shifted) {
+                fr value = contribution.scalar * values[contribution.ref.column * arity + t];
+                if (contribution.shifted) {
                     value *= x_inverses[t];
                 }
                 out[t] += value;
@@ -611,31 +677,22 @@ template <typename Hasher> class WhirVerifier {
         return true;
     }
 
+    /** @brief Open the single-column folded oracle g_i at `idx`; out = the coset values. */
     template <typename Transcript>
-    static typename Tree::Opening receive_opening(const std::shared_ptr<Transcript>& transcript,
-                                                  size_t arity,
-                                                  size_t depth,
-                                                  bool salted,
-                                                  size_t i,
-                                                  size_t s,
-                                                  size_t p)
+    static bool read_folded_opening(const std::shared_ptr<Transcript>& transcript,
+                                    const WhirConfig& config,
+                                    const Digest& root,
+                                    size_t idx,
+                                    size_t index_bits,
+                                    std::vector<fr>& out)
     {
-        const std::string base = "WHIR:open_" + std::to_string(i) + "_" + std::to_string(s) + "_" + std::to_string(p);
-        typename Tree::Opening opening;
-        opening.values.resize(arity);
-        for (size_t t = 0; t < arity; ++t) {
-            opening.values[t] = transcript->template receive_from_prover<fr>(base + ":v" + std::to_string(t));
+        const size_t arity = size_t(1) << config.folding_factor_bits;
+        const typename Tree::Opening opening = read_opening(transcript, 1, arity, index_bits, /*salted=*/false);
+        if (!Tree::verify(root, idx, opening)) {
+            return false;
         }
-        if (salted) {
-            opening.salt = transcript->template receive_from_prover<fr>(base + ":salt");
-        }
-        opening.path.resize(depth);
-        for (size_t l = 0; l < depth; ++l) {
-            const auto fields = transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
-                base + ":p" + std::to_string(l));
-            opening.path[l] = Hasher::digest_from_fields(fields);
-        }
-        return opening;
+        out = opening.values;
+        return true;
     }
 };
 

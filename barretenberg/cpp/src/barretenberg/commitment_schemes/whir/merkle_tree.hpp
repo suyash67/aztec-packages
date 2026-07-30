@@ -19,8 +19,7 @@ namespace bb::whir {
 /**
  * @brief Merkle hasher over BN254 Fr leaves with an Fr digest; one Poseidon2 sponge call per node.
  * @details The recursion-friendly choice: an in-circuit verifier pays one Poseidon2 permutation per
- * tree level. Domain separation between leaves and inner nodes is by input length (leaves hash
- * 2^k ≥ 4 elements, nodes hash 2), which the sponge padding makes injective.
+ * tree level. Leaves and inner nodes are domain-separated by a tag element (0 and 1 respectively).
  */
 struct Poseidon2MerkleHasher {
     using Digest = fr;
@@ -30,26 +29,31 @@ struct Poseidon2MerkleHasher {
     static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
     {
         std::vector<fr> input;
-        input.reserve(values.size() + 1);
+        input.reserve(values.size() + 2);
+        input.push_back(fr(0));
         if (salt) {
             input.push_back(*salt);
         }
         input.insert(input.end(), values.begin(), values.end());
         return Poseidon2::hash(input);
     }
-    static Digest hash_node(const Digest& left, const Digest& right) { return Poseidon2::hash({ left, right }); }
+    static Digest hash_node(const Digest& left, const Digest& right) { return Poseidon2::hash({ fr(1), left, right }); }
     static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest) { return { digest }; }
     static Digest digest_from_fields(std::span<const fr> fields) { return fields[0]; }
 };
 
 /**
  * @brief Merkle hasher with 32-byte Blake3s digests; the fast-native-proving choice.
- * @details Fr values are absorbed as their canonical 4x64-bit little-endian limbs. A digest crosses
- * the transcript as two 128-bit field elements.
+ * @details Fr values are absorbed as their canonical 4x64-bit little-endian limbs. bb's blake3s is
+ * restricted to inputs under 1024 bytes, so wide leaves (many columns) are hashed as a chain of
+ * fixed 24-element chunks, each absorbing the previous chunk's digest; the chunk structure is
+ * determined by the leaf length, which is fixed per tree. Leaves and nodes are domain-separated by
+ * a tag byte (0x00 and 0x01). A digest crosses the transcript as two 128-bit field elements.
  */
 struct Blake3sMerkleHasher {
     using Digest = std::array<uint8_t, 32>;
     static constexpr size_t DIGEST_NUM_FIELDS = 2;
+    static constexpr size_t LEAF_CHUNK_VALUES = 24;
 
     static void append_fr_bytes(std::vector<uint8_t>& buffer, const fr& value)
     {
@@ -61,21 +65,31 @@ struct Blake3sMerkleHasher {
 
     static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
     {
-        std::vector<uint8_t> input;
-        input.reserve(32 * (values.size() + 1));
+        std::vector<uint8_t> buffer;
+        buffer.reserve(33 + 32 * (LEAF_CHUNK_VALUES + 1));
+        buffer.push_back(uint8_t(0)); // leaf tag
         if (salt) {
-            append_fr_bytes(input, *salt);
+            append_fr_bytes(buffer, *salt);
         }
-        for (const fr& value : values) {
-            append_fr_bytes(input, value);
+        Digest digest{};
+        size_t absorbed = 0;
+        while (absorbed < values.size()) {
+            const size_t chunk = std::min(LEAF_CHUNK_VALUES, values.size() - absorbed);
+            for (size_t t = 0; t < chunk; ++t) {
+                append_fr_bytes(buffer, values[absorbed + t]);
+            }
+            absorbed += chunk;
+            digest = to_digest(blake3::blake3s(buffer));
+            buffer.assign(digest.begin(), digest.end()); // chain into the next chunk
         }
-        return to_digest(blake3::blake3s(input));
+        return digest;
     }
     static Digest hash_node(const Digest& left, const Digest& right)
     {
-        std::vector<uint8_t> input(64);
-        std::memcpy(input.data(), left.data(), 32);
-        std::memcpy(input.data() + 32, right.data(), 32);
+        std::vector<uint8_t> input(65);
+        input[0] = uint8_t(1); // node tag
+        std::memcpy(input.data() + 1, left.data(), 32);
+        std::memcpy(input.data() + 33, right.data(), 32);
         return to_digest(blake3::blake3s(input));
     }
     static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest)
@@ -125,11 +139,23 @@ template <typename Hasher> class MerkleTree {
     };
 
     MerkleTree(std::span<const fr> codeword, size_t log_arity, bool salted = false)
+        : MerkleTree(std::vector<std::span<const fr>>{ codeword }, log_arity, salted)
+    {}
+
+    /**
+     * @brief Tree over several same-length codewords ("columns") sharing leaves: leaf j holds every
+     * column's coset-j values (column-major: values[c*arity + t]). One authentication path then
+     * opens all columns of a commitment round at a query index.
+     */
+    MerkleTree(const std::vector<std::span<const fr>>& codewords, size_t log_arity, bool salted = false)
         : log_arity_(log_arity)
-        , num_leaves_(codeword.size() >> log_arity)
+        , num_leaves_(codewords.at(0).size() >> log_arity)
     {
         const size_t arity = size_t(1) << log_arity;
-        BB_ASSERT_EQ(codeword.size(), num_leaves_ * arity, "codeword size must be a multiple of arity");
+        const size_t num_columns = codewords.size();
+        for (const auto& codeword : codewords) {
+            BB_ASSERT_EQ(codeword.size(), num_leaves_ * arity, "codewords must share one size, a multiple of arity");
+        }
         BB_ASSERT_GT(num_leaves_, size_t(0));
         BB_ASSERT_EQ(num_leaves_ & (num_leaves_ - 1), size_t(0), "number of leaves must be a power of two");
 
@@ -146,9 +172,11 @@ template <typename Hasher> class MerkleTree {
         parallel_for_range(num_leaves_, [&](size_t start, size_t end) {
             for (size_t j = start; j < end; ++j) {
                 std::vector<fr>& values = leaf_values_[j];
-                values.resize(arity);
-                for (size_t t = 0; t < arity; ++t) {
-                    values[t] = codeword[j + t * num_leaves_];
+                values.resize(num_columns * arity);
+                for (size_t c = 0; c < num_columns; ++c) {
+                    for (size_t t = 0; t < arity; ++t) {
+                        values[c * arity + t] = codewords[c][j + t * num_leaves_];
+                    }
                 }
                 level[j] = Hasher::hash_leaf(values, salted ? std::optional<fr>(salts_[j]) : std::nullopt);
             }

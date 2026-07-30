@@ -14,7 +14,11 @@
 namespace bb::whir {
 
 /**
- * @brief Lazily-built cache of FFT evaluation domains, one per codeword size used by the schedule.
+ * @brief Lazily-built cache of FFT evaluation domains for the schedule's codeword sizes.
+ * @details The FFT's per-round twiddle tables are indexed by round subgroup order, independent of
+ * the domain size, so only the largest domain requested (the "master" — the initial commitment
+ * domain, which is always requested first) carries tables; smaller domains are lightweight and
+ * their FFTs index a prefix of the master's tables.
  */
 class RSDomains {
   public:
@@ -23,28 +27,42 @@ class RSDomains {
         auto it = domains_.find(size);
         if (it == domains_.end()) {
             auto domain = std::make_unique<EvaluationDomain<fr>>(size);
-            domain->compute_lookup_table();
+            if (size > master_size_) {
+                domain->compute_lookup_table();
+                master_size_ = size;
+                master_ = domain.get();
+            }
             it = domains_.emplace(size, std::move(domain)).first;
         }
         return *it->second;
     }
 
+    const std::vector<fr*>& round_roots() const
+    {
+        BB_ASSERT(master_ != nullptr, "no domain with twiddle tables requested yet");
+        return master_->get_round_roots();
+    }
+
   private:
     std::map<size_t, std::unique_ptr<EvaluationDomain<fr>>> domains_;
+    size_t master_size_ = 0;
+    const EvaluationDomain<fr>* master_ = nullptr;
 };
 
 /**
  * @brief Reed-Solomon encode: evaluate the univariate with coefficients `coeffs` over the domain's
  * subgroup, natural order (`codeword[i] = A(ωⁱ)`).
+ * @param round_roots twiddle tables covering at least the domain's rounds (`RSDomains::round_roots`)
  */
-inline std::vector<fr> rs_encode(std::span<const fr> coeffs, const EvaluationDomain<fr>& domain)
+inline std::vector<fr> rs_encode(std::span<const fr> coeffs,
+                                 const EvaluationDomain<fr>& domain,
+                                 const std::vector<fr*>& round_roots)
 {
     BB_ASSERT_LTE(coeffs.size(), domain.size, "coefficients exceed codeword length");
     std::vector<fr> scratch(domain.size, fr::zero());
     std::copy(coeffs.begin(), coeffs.end(), scratch.begin());
     std::vector<fr> codeword(domain.size);
-    polynomial_arithmetic::fft_inner_parallel<fr>(
-        scratch.data(), codeword.data(), domain, domain.root, domain.get_round_roots());
+    polynomial_arithmetic::fft_inner_parallel<fr>(scratch.data(), codeword.data(), domain, domain.root, round_roots);
     return codeword;
 }
 
