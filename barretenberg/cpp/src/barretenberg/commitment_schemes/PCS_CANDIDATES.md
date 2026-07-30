@@ -38,8 +38,37 @@ Keccak/SHA/Blake batches natively and connecting through a recursion bridge — 
 verifying a binary-tower proof inside an Fr circuit (tower arithmetic emulation), a proof-system
 integration study rather than a `commitment_schemes/` addition.
 
-**Other tracked candidates:** Samaritan ([2025/419](https://eprint.iacr.org/2025/419), Mercury's
-concurrent sibling — implemented design point covered by Mercury); Greyhound/lattice PCS
-(post-quantum with structured verification, wrong-field and immature tooling for BN254 Honk);
-FRIttata ([2025/1285](https://eprint.iacr.org/2025/1285), distributed-prover FRI — orthogonal
-axis: prover distribution rather than a new cost profile).
+## Next candidates, prioritized
+
+The implemented set spans {pairing, hash} x {logarithmic, constant, folding, tensor} at BN254.
+Three cells remain genuinely open, plus one unmeasured axis:
+
+1. **IPA/Bulletproofs over BN254 G1** — the {transparent x small-proof} corner (the Halo2 trade:
+   ~2-3 KiB proofs, no setup, O(N) verifier). Cheapest addition: bb's IPA template and Shplemini's
+   IPA support exist (Grumpkin/ECCVM); the work is an independent-generator setup (hash-to-curve —
+   the powers-of-tau SRS cannot serve as IPA generators) plus a backend adapter.
+2. **Dory** ([2020/1274](https://eprint.iacr.org/2020/1274)) — the strongest missing combination:
+   transparent AND O(log n) verifier AND O(log n) proof (~10-20 KiB), linear prover paid in
+   pairing-group operations (expect ~5-10x the KZG prover). Needs inner-pairing-product argument
+   machinery and GT multi-exponentiation on top of bb's Fq12 arithmetic. Highest research value of
+   the remaining points.
+3. **KZH / KZH-Fold** ([2025/144](https://eprint.iacr.org/2025/144)) — sublinear opening for both
+   parties with *native sublinear accumulation* (reported 50x decider improvement over Nova).
+   Accumulation-friendliness is the axis this comparison has not measured and the most
+   Aztec-relevant one (Chonk/IVC): KZG-family backends accumulate homomorphically, hash backends
+   do not fold natively. Adding KZH would turn the suite into a folding-oriented comparison.
+4. **Samaritan** ([2025/419](https://eprint.iacr.org/2025/419)) — intra-corner A/B against
+   Mercury; quick on the existing infrastructure, low marginal insight.
+5. **Brakedown with expander codes** ([2021/1043](https://eprint.iacr.org/2021/1043)) — FFT-free
+   linear-time encoding under our Ligero structure; extends the prover-optimal frontier
+   (predictably wins the prover column at all sizes, worse proof constants).
+6. **zip proof compression** ([2025/1446](https://eprint.iacr.org/2025/1446)) — not a PCS: a
+   compression layer for hash-based proofs that directly attacks WHIR/Ligero's MiB proof sizes.
+
+Tracked but not planned: class-group constant-size transparent PCS
+([2025/1233](https://eprint.iacr.org/2025/1233), 10 group elements, shortest transparent PCS —
+no GUO arithmetic in bb, seconds-scale provers); Zeromorph/PST/HyperKZG (the Shplemini corner,
+already represented); BaseFold/STIR (dominated by WHIR; useful only as ablation baselines);
+Hyrax (dominated by Dory/KZH in its corner); Greyhound/lattice (wrong ring);
+FRIttata ([2025/1285](https://eprint.iacr.org/2025/1285), distributed proving — an orthogonal
+axis).
