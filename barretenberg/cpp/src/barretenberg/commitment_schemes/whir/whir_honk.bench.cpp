@@ -120,12 +120,12 @@ void ultra_honk_kzg_verify(benchmark::State& state)
     }
 }
 
-BENCHMARK_TEMPLATE(whir_honk_prove, Blake3sMerkleHasher)->Arg(12)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(whir_honk_prove, Poseidon2MerkleHasher)->Arg(12)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(whir_honk_verify, Blake3sMerkleHasher)->Arg(12)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(whir_honk_verify, Poseidon2MerkleHasher)->Arg(12)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK(ultra_honk_kzg_prove)->Arg(12)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
-BENCHMARK(ultra_honk_kzg_verify)->Arg(12)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_prove, Blake3sMerkleHasher)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_prove, Poseidon2MerkleHasher)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_verify, Blake3sMerkleHasher)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(whir_honk_verify, Poseidon2MerkleHasher)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(ultra_honk_kzg_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(ultra_honk_kzg_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
 
 } // namespace
 } // namespace bb::whir
