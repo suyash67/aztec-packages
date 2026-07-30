@@ -1,6 +1,10 @@
 #include "barretenberg/commitment_schemes/whir/whir_honk.hpp"
 #include "barretenberg/commitment_schemes/ligero/ligero_honk.hpp"
+#include "barretenberg/commitment_schemes/dory/dory_honk.hpp"
+#include "barretenberg/commitment_schemes/hyrax/hyrax_honk.hpp"
+#include "barretenberg/commitment_schemes/kzh/kzh_honk.hpp"
 #include "barretenberg/commitment_schemes/mercury/mercury_honk.hpp"
+#include "barretenberg/commitment_schemes/pedersen_ipa/ipa_honk.hpp"
 #include "barretenberg/special_public_inputs/special_public_inputs.hpp"
 #include "barretenberg/srs/global_crs.hpp"
 #include "barretenberg/stdlib_circuit_builders/mock_circuits.hpp"
@@ -160,6 +164,155 @@ void mercury_honk_verify(benchmark::State& state)
     }
 }
 
+
+void ipa_honk_prove(benchmark::State& state)
+{
+    using Honk = pedersen_ipa::IpaHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const pedersen_ipa::IpaConfig config = Honk::make_config(log_n);
+    HonkProof proof;
+    for (auto _ : state) {
+        state.PauseTiming();
+        UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+        auto pk = Honk::create_proving_key(builder, config);
+        state.ResumeTiming();
+        proof = Honk::prove(pk);
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+    state.counters["log_n"] = static_cast<double>(log_n);
+}
+
+void ipa_honk_verify(benchmark::State& state)
+{
+    using Honk = pedersen_ipa::IpaHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const pedersen_ipa::IpaConfig config = Honk::make_config(log_n);
+    UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+    auto pk = Honk::create_proving_key(builder, config);
+    const auto vk = pk.vk;
+    const HonkProof proof = Honk::prove(pk);
+    bool ok = true;
+    for (auto _ : state) {
+        ok = ok && Honk::verify(vk, config, proof);
+    }
+    if (!ok) {
+        state.SkipWithError("IpaHonk verification failed");
+    }
+}
+
+void hyrax_honk_prove(benchmark::State& state)
+{
+    using Honk = hyrax::HyraxHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const hyrax::HyraxConfig config = Honk::make_config(log_n);
+    HonkProof proof;
+    for (auto _ : state) {
+        state.PauseTiming();
+        UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+        auto pk = Honk::create_proving_key(builder, config);
+        state.ResumeTiming();
+        proof = Honk::prove(pk);
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+    state.counters["log_n"] = static_cast<double>(log_n);
+}
+
+void hyrax_honk_verify(benchmark::State& state)
+{
+    using Honk = hyrax::HyraxHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const hyrax::HyraxConfig config = Honk::make_config(log_n);
+    UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+    auto pk = Honk::create_proving_key(builder, config);
+    const auto vk = pk.vk;
+    const HonkProof proof = Honk::prove(pk);
+    bool ok = true;
+    for (auto _ : state) {
+        ok = ok && Honk::verify(vk, config, proof);
+    }
+    if (!ok) {
+        state.SkipWithError("HyraxHonk verification failed");
+    }
+}
+
+void kzh_honk_prove(benchmark::State& state)
+{
+    using Honk = kzh::KzhHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const kzh::KzhConfig config = Honk::make_config(log_n);
+    HonkProof proof;
+    for (auto _ : state) {
+        state.PauseTiming();
+        UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+        auto pk = Honk::create_proving_key(builder, config);
+        state.ResumeTiming();
+        proof = Honk::prove(pk);
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+    state.counters["log_n"] = static_cast<double>(log_n);
+}
+
+void kzh_honk_verify(benchmark::State& state)
+{
+    using Honk = kzh::KzhHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const kzh::KzhConfig config = Honk::make_config(log_n);
+    UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+    auto pk = Honk::create_proving_key(builder, config);
+    const auto vk = pk.vk;
+    const HonkProof proof = Honk::prove(pk);
+    bool ok = true;
+    for (auto _ : state) {
+        ok = ok && Honk::verify(vk, config, proof);
+    }
+    if (!ok) {
+        state.SkipWithError("KzhHonk verification failed");
+    }
+}
+
+void dory_honk_prove(benchmark::State& state)
+{
+    using Honk = dory::DoryHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const dory::DoryConfig config = Honk::make_config(log_n);
+    HonkProof proof;
+    for (auto _ : state) {
+        state.PauseTiming();
+        UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+        auto pk = Honk::create_proving_key(builder, config);
+        state.ResumeTiming();
+        proof = Honk::prove(pk);
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+    state.counters["log_n"] = static_cast<double>(log_n);
+}
+
+void dory_honk_verify(benchmark::State& state)
+{
+    using Honk = dory::DoryHonk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const dory::DoryConfig config = Honk::make_config(log_n);
+    UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+    auto pk = Honk::create_proving_key(builder, config);
+    const auto vk = pk.vk;
+    const HonkProof proof = Honk::prove(pk);
+    bool ok = true;
+    for (auto _ : state) {
+        ok = ok && Honk::verify(vk, config, proof);
+    }
+    if (!ok) {
+        state.SkipWithError("DoryHonk verification failed");
+    }
+}
+
 void ultra_honk_kzg_prove(benchmark::State& state)
 {
     srs::init_file_crs_factory(srs::bb_crs_path());
@@ -238,6 +391,14 @@ BENCHMARK_TEMPLATE(ligero_honk_verify, Blake3sMerkleHasher)
 BENCHMARK_TEMPLATE(ligero_honk_verify, Poseidon2MerkleHasher)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
 BENCHMARK(mercury_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
 BENCHMARK(mercury_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(ipa_honk_prove)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
+BENCHMARK(ipa_honk_verify)->Arg(14)->Arg(16)->Unit(benchmark::kMillisecond);
+BENCHMARK(hyrax_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(hyrax_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(kzh_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(kzh_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
+BENCHMARK(dory_honk_prove)->Arg(14)->Arg(16)->Arg(18)->Unit(benchmark::kMillisecond);
+BENCHMARK(dory_honk_verify)->Arg(14)->Arg(16)->Arg(18)->Unit(benchmark::kMillisecond);
 BENCHMARK(ultra_honk_kzg_prove)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
 BENCHMARK(ultra_honk_kzg_verify)->Arg(14)->Arg(16)->Arg(18)->Arg(20)->Unit(benchmark::kMillisecond);
 
