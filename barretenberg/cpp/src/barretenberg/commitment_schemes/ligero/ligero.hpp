@@ -2,6 +2,7 @@
 
 #include "barretenberg/commitment_schemes/whir/merkle_tree.hpp"
 #include "barretenberg/commitment_schemes/whir/rs_code.hpp"
+#include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/common/thread.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
@@ -17,8 +18,8 @@
 namespace bb::ligero {
 
 using whir::MerkleTree;
-using whir::RSDomains;
 using whir::rs_encode;
+using whir::RSDomains;
 
 /** @brief Reference to one polynomial ("column" of the claim batch) of one committed group. */
 struct LigeroColumnRef {
@@ -77,20 +78,7 @@ template <typename Hasher> struct LigeroGroupData {
 
 namespace detail {
 
-/** @brief eq tensor table over the given challenge slice, LSB variable first: out[j] = eq_j(u). */
-inline std::vector<fr> eq_tensor(std::span<const fr> u)
-{
-    std::vector<fr> table(size_t(1) << u.size());
-    table[0] = fr::one();
-    for (size_t i = 0; i < u.size(); ++i) {
-        const size_t built = size_t(1) << i;
-        for (size_t j = 0; j < built; ++j) {
-            table[j + built] = table[j] * u[i];
-            table[j] -= table[j + built];
-        }
-    }
-    return table;
-}
+using whir::eq_tensor;
 
 inline std::string ligero_label(const std::string& name, size_t i)
 {

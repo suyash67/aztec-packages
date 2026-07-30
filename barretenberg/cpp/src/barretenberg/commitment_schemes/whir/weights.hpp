@@ -8,6 +8,21 @@
 
 namespace bb::whir {
 
+/** @brief eq tensor table over the given challenge slice, LSB variable first: out[j] = eq_j(u). */
+inline std::vector<fr> eq_tensor(std::span<const fr> u)
+{
+    std::vector<fr> table(size_t(1) << u.size());
+    table[0] = fr::one();
+    for (size_t i = 0; i < u.size(); ++i) {
+        const size_t built = size_t(1) << i;
+        for (size_t j = 0; j < built; ++j) {
+            table[j + built] = table[j] * u[i];
+            table[j] -= table[j + built];
+        }
+    }
+    return table;
+}
+
 /**
  * @brief A weight polynomial that is a scalar times a product of per-variable affine factors,
  * W(X) = coeff · ∏ⱼ (aⱼ + bⱼ·Xⱼ). Covers both claim types of README.md eq. (3.2):
