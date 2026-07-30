@@ -1,0 +1,224 @@
+#include "barretenberg/commitment_schemes/whir/whir.hpp"
+
+#include "barretenberg/transcript/transcript.hpp"
+
+#include <gtest/gtest.h>
+
+namespace bb::whir {
+
+namespace {
+
+std::vector<fr> random_array(size_t size)
+{
+    std::vector<fr> array(size);
+    for (fr& value : array) {
+        value = fr::random_element();
+    }
+    return array;
+}
+
+std::vector<fr> random_point(size_t size)
+{
+    return random_array(size);
+}
+
+fr mle(std::span<const fr> array, std::span<const fr> u)
+{
+    return Polynomial<fr>(array).evaluate_mle(u);
+}
+
+/** @brief MLE of the shifted array (a₁, ..., a_{n-1}, 0) at u — Honk's shifted-claim semantics. */
+fr shifted_mle(std::span<const fr> array, std::span<const fr> u)
+{
+    std::vector<fr> shifted(array.begin() + 1, array.end());
+    shifted.push_back(fr::zero());
+    return mle(shifted, u);
+}
+
+} // namespace
+
+template <typename Hasher> class WhirTest : public ::testing::Test {
+  public:
+    using CK = WhirCommitmentKey<Hasher>;
+    using Prover = WhirProver<Hasher>;
+    using Verifier = WhirVerifier<Hasher>;
+    using ProverData = WhirProverData<Hasher>;
+
+    static WhirConfig test_config(size_t num_variables)
+    {
+        return WhirConfig::create(num_variables,
+                                  /*security_bits=*/64,
+                                  /*log_inv_rate=*/2,
+                                  /*folding_factor_bits=*/4,
+                                  /*final_poly_bits=*/4);
+    }
+
+    struct Instance {
+        std::vector<std::vector<fr>> unshifted_arrays;
+        std::vector<std::vector<fr>> to_be_shifted_arrays; // constant term zero
+        std::vector<fr> u;
+        std::vector<ProverData> prover_data;
+        typename Prover::Claims prover_claims;
+        typename Verifier::Claims verifier_claims;
+    };
+
+    static Instance make_instance(const CK& ck, size_t num_unshifted, size_t num_shifted)
+    {
+        const size_t n = size_t(1) << ck.config.num_variables;
+        Instance instance;
+        instance.u = random_point(ck.config.num_variables);
+        for (size_t p = 0; p < num_unshifted; ++p) {
+            instance.unshifted_arrays.push_back(random_array(n));
+        }
+        for (size_t p = 0; p < num_shifted; ++p) {
+            std::vector<fr> array = random_array(n);
+            array[0] = fr::zero();
+            instance.to_be_shifted_arrays.push_back(std::move(array));
+        }
+        for (const auto& array : instance.unshifted_arrays) {
+            instance.prover_data.push_back(ck.commit(std::span<const fr>(array)));
+        }
+        for (const auto& array : instance.to_be_shifted_arrays) {
+            instance.prover_data.push_back(ck.commit(std::span<const fr>(array)));
+        }
+        size_t data_idx = 0;
+        for (const auto& array : instance.unshifted_arrays) {
+            instance.prover_claims.unshifted.push_back(&instance.prover_data[data_idx++]);
+            instance.prover_claims.unshifted_evaluations.push_back(mle(array, instance.u));
+        }
+        for (const auto& array : instance.to_be_shifted_arrays) {
+            instance.prover_claims.to_be_shifted.push_back(&instance.prover_data[data_idx++]);
+            instance.prover_claims.shifted_evaluations.push_back(shifted_mle(array, instance.u));
+        }
+        instance.verifier_claims = { instance.prover_claims.unshifted_evaluations,
+                                     instance.prover_claims.shifted_evaluations };
+        return instance;
+    }
+
+    static HonkProof prove_instance(const CK& ck, const Instance& instance)
+    {
+        auto prover_transcript = NativeTranscript::test_prover_init_empty();
+        Prover::prove(ck, instance.prover_claims, instance.u, prover_transcript);
+        return prover_transcript->export_proof();
+    }
+
+    static bool verify_proof(const WhirConfig& config,
+                             const typename Verifier::Claims& claims,
+                             std::span<const fr> u,
+                             const HonkProof& proof)
+    {
+        auto verifier_transcript = std::make_shared<NativeTranscript>(proof);
+        [[maybe_unused]] auto init = verifier_transcript->template receive_from_prover<fr>("Init");
+        return Verifier::verify(config, claims, u, verifier_transcript);
+    }
+};
+
+using HasherTypes = ::testing::Types<Poseidon2MerkleHasher, Blake3sMerkleHasher>;
+TYPED_TEST_SUITE(WhirTest, HasherTypes);
+
+TYPED_TEST(WhirTest, SingleUnshiftedCompleteness)
+{
+    const WhirConfig config = TestFixture::test_config(10);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 1, 0);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+    EXPECT_TRUE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+TYPED_TEST(WhirTest, BatchedWithShiftedCompleteness)
+{
+    const WhirConfig config = TestFixture::test_config(10);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 3, 2);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+    EXPECT_TRUE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+// A configuration small enough that there are no fold-and-commit iterations: the final phase checks
+// the batched virtual oracle (with shift scaling) directly against the clear polynomial.
+TYPED_TEST(WhirTest, ZeroIterationEdgeCase)
+{
+    const WhirConfig config = TestFixture::test_config(4);
+    ASSERT_EQ(config.num_iterations(), 0U);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 2, 1);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+    EXPECT_TRUE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+TYPED_TEST(WhirTest, WrongEvaluationRejected)
+{
+    const WhirConfig config = TestFixture::test_config(10);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 2, 1);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+
+    auto bad_claims = instance.verifier_claims;
+    bad_claims.unshifted_evaluations[1] += fr(1);
+    EXPECT_FALSE(TestFixture::verify_proof(config, bad_claims, instance.u, proof));
+
+    bad_claims = instance.verifier_claims;
+    bad_claims.shifted_evaluations[0] += fr(1);
+    EXPECT_FALSE(TestFixture::verify_proof(config, bad_claims, instance.u, proof));
+}
+
+TYPED_TEST(WhirTest, WrongOpeningPointRejected)
+{
+    const WhirConfig config = TestFixture::test_config(10);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 1, 0);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+
+    auto wrong_u = instance.u;
+    wrong_u[3] += fr(1);
+    EXPECT_FALSE(TestFixture::verify_proof(config, instance.verifier_claims, wrong_u, proof));
+}
+
+TYPED_TEST(WhirTest, TamperedProofRejected)
+{
+    const WhirConfig config = TestFixture::test_config(10);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 1, 0);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+
+    // Tamper with elements spread across the proof: roots, sumcheck messages, opened values, the
+    // final polynomial.
+    for (const size_t position : { size_t(1), proof.size() / 4, proof.size() / 2, proof.size() - 2 }) {
+        HonkProof tampered = proof;
+        tampered[position] += fr(1);
+        EXPECT_FALSE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, tampered))
+            << "position " << position;
+    }
+}
+
+TEST(WhirConfigTest, QueryCountFormulas)
+{
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 2, WhirSoundness::CONJECTURED_LIST), 50U);
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 3, WhirSoundness::CONJECTURED_LIST), 34U);
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 2, WhirSoundness::PROVABLE_LIST), 100U);
+    // Unique decoding at rate 1/2 tests distance 1/4: -log2(3/4) ≈ 0.415 bits per query.
+    const size_t ud_queries = WhirConfig::compute_num_queries(64, 1, WhirSoundness::UNIQUE_DECODING);
+    EXPECT_GE(ud_queries, 154U);
+    EXPECT_LE(ud_queries, 156U);
+}
+
+// The README.md §6 worked example: m = 20, r₀ = 2, k = 4, λ = 100.
+TEST(WhirConfigTest, ScheduleWorkedExample)
+{
+    const WhirConfig config = WhirConfig::create(20, 100, 2, 4, 4);
+    ASSERT_EQ(config.num_iterations(), 4U);
+    const std::vector<size_t> expected_rates = { 2, 5, 8, 11 };
+    const std::vector<size_t> expected_queries = { 50, 20, 13, 10 };
+    for (size_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(config.rounds[i].num_variables, 20 - 4 * i);
+        EXPECT_EQ(config.rounds[i].log_domain_size, 22 - i);
+        EXPECT_EQ(config.rounds[i].log_inv_rate, expected_rates[i]);
+        EXPECT_EQ(config.rounds[i].num_queries, expected_queries[i]);
+    }
+    EXPECT_EQ(config.final_round.num_variables, 4U);
+    EXPECT_EQ(config.final_round.log_domain_size, 18U);
+    EXPECT_EQ(config.final_round.log_inv_rate, 14U);
+    EXPECT_EQ(config.final_round.num_queries, 8U);
+}
+
+} // namespace bb::whir

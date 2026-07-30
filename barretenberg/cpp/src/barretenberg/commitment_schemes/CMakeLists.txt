@@ -1,1 +1,1 @@
-barretenberg_module(commitment_schemes common transcript polynomials ecc numeric srs)
+barretenberg_module(commitment_schemes common transcript polynomials ecc numeric srs crypto_blake3s crypto_poseidon2)
