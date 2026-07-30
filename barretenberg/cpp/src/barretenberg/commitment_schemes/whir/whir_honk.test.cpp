@@ -79,9 +79,9 @@ TYPED_TEST(WhirHonkTest, WrongVkRejected)
     const auto setup = TestFixture::prove_test_circuit();
 
     auto bad_vk = setup.vk;
-    auto root_fields = TypeParam::digest_to_fields(bad_vk.precomputed_root);
+    auto root_fields = TypeParam::digest_to_fields(bad_vk.precomputed_commitment);
     root_fields[0] += fr(1);
-    bad_vk.precomputed_root = TypeParam::digest_from_fields(root_fields);
+    bad_vk.precomputed_commitment = TypeParam::digest_from_fields(root_fields);
     EXPECT_FALSE(TestFixture::Honk::verify(bad_vk, setup.config, setup.proof));
 }
 

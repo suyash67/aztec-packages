@@ -34,10 +34,11 @@ namespace bb::honk_transparent {
  * | 4 `HONK:z_perm` | z_perm | z_perm |
  *
  * The `Pcs` backend supplies: `Config`, `CommitmentKey` (constructible from `Config`, with
- * `commit_group(span of Polynomial*, to_be_shifted flags)`), `GroupData` (with `tree.root()`),
- * `Digest`, `Hasher` (digest/field conversions), `ProverClaims`/`VerifierClaims` (the shared
- * claim-shape: groups/roots, `{group, column}` refs, evaluations), `make_config`, `prove_opening`,
- * and `verify_opening`.
+ * `commit_group(span of Polynomial*, to_be_shifted flags)`), `GroupData`, `GroupCommitment` (a
+ * Merkle digest for hash backends; a vector of curve points for KZG-based backends) with the
+ * send/receive/absorb hooks, `ProverClaims`/`VerifierClaims` (the shared claim shape:
+ * groups/commitments, `{group, column}` refs, evaluations), `make_config`, `payload_variables`,
+ * `prove_opening`, and `verify_opening`.
  *
  * `prove` consumes the proving key's instance (memory records are appended to w_4, derived
  * polynomials are computed in place): create a fresh proving key per proof.
@@ -52,8 +53,7 @@ template <typename Pcs> class TransparentHonk {
     using Config = typename Pcs::Config;
     using CommitmentKey = typename Pcs::CommitmentKey;
     using GroupData = typename Pcs::GroupData;
-    using Digest = typename Pcs::Digest;
-    using Hasher = typename Pcs::Hasher;
+    using GroupCommitment = typename Pcs::GroupCommitment;
     using Transcript = NativeTranscript;
 
     static constexpr size_t NUM_WITNESS = Flavor::NUM_WITNESS_ENTITIES;
@@ -68,7 +68,7 @@ template <typename Pcs> class TransparentHonk {
         size_t log_dyadic_size = 0;
         size_t num_public_inputs = 0;
         size_t pub_inputs_offset = 0;
-        Digest precomputed_root = {};
+        GroupCommitment precomputed_commitment = {};
     };
 
     struct ProvingKey {
@@ -97,7 +97,7 @@ template <typename Pcs> class TransparentHonk {
         pk.vk = VerificationKey{ .log_dyadic_size = pk.instance->log_dyadic_size(),
                                  .num_public_inputs = pk.instance->num_public_inputs(),
                                  .pub_inputs_offset = pk.instance->pub_inputs_offset(),
-                                 .precomputed_root = pk.precomputed->tree.root() };
+                                 .precomputed_commitment = Pcs::group_commitment(*pk.precomputed) };
         return pk;
     }
 
@@ -193,7 +193,7 @@ template <typename Pcs> class TransparentHonk {
             public_inputs[i] = transcript->template receive_from_prover<FF>("public_input_" + std::to_string(i));
         }
 
-        const Digest wires = receive_root(transcript, "wires");
+        const GroupCommitment wires = Pcs::receive_group_commitment(transcript, "HONK:wires", GROUP_COLUMNS[1]);
 
         auto [eta, rom_logup_gamma] =
             transcript->template get_challenges<FF>(std::array<std::string, 2>{ "eta", "rom_logup_gamma" });
@@ -202,7 +202,8 @@ template <typename Pcs> class TransparentHonk {
         relation_parameters.eta_two = eta * eta;
         relation_parameters.eta_three = relation_parameters.eta_two * eta;
         relation_parameters.rom_logup_gamma = rom_logup_gamma;
-        const Digest counts_w4 = receive_root(transcript, "counts_w4");
+        const GroupCommitment counts_w4 =
+            Pcs::receive_group_commitment(transcript, "HONK:counts_w4", GROUP_COLUMNS[2]);
 
         auto [beta, gamma] = transcript->template get_challenges<FF>(std::array<std::string, 2>{ "beta", "gamma" });
         relation_parameters.beta = beta;
@@ -211,8 +212,9 @@ template <typename Pcs> class TransparentHonk {
         relation_parameters.gamma = gamma;
         relation_parameters.public_input_delta =
             compute_public_input_delta<Flavor>(public_inputs, beta, gamma, FF(vk.pub_inputs_offset));
-        const Digest lookup_inverses = receive_root(transcript, "lookup_inverses");
-        const Digest z_perm = receive_root(transcript, "z_perm");
+        const GroupCommitment lookup_inverses =
+            Pcs::receive_group_commitment(transcript, "HONK:lookup_inverses", GROUP_COLUMNS[3]);
+        const GroupCommitment z_perm = Pcs::receive_group_commitment(transcript, "HONK:z_perm", GROUP_COLUMNS[4]);
 
         const FF alpha = transcript->template get_challenge<FF>("alpha");
         const std::vector<FF> gate_challenges =
@@ -226,7 +228,8 @@ template <typename Pcs> class TransparentHonk {
 
         typename Pcs::VerifierClaims claims;
         claims.group_num_columns.assign(GROUP_COLUMNS.begin(), GROUP_COLUMNS.end());
-        claims.group_roots = { vk.precomputed_root, wires, counts_w4, lookup_inverses, z_perm };
+        Pcs::set_group_commitments(claims,
+                                   { vk.precomputed_commitment, wires, counts_w4, lookup_inverses, z_perm });
         append_unshifted_refs(claims.unshifted);
         const auto unshifted_evaluations = sumcheck_output.claimed_evaluations.get_unshifted();
         claims.unshifted_evaluations.assign(unshifted_evaluations.begin(), unshifted_evaluations.end());
@@ -273,7 +276,7 @@ template <typename Pcs> class TransparentHonk {
         transcript->add_to_hash_buffer("vk_log_dyadic_size", FF(vk.log_dyadic_size));
         transcript->add_to_hash_buffer("vk_num_public_inputs", FF(vk.num_public_inputs));
         transcript->add_to_hash_buffer("vk_pub_inputs_offset", FF(vk.pub_inputs_offset));
-        transcript->add_to_hash_buffer("vk_root", Hasher::digest_to_fields(vk.precomputed_root));
+        Pcs::absorb_group_commitment(transcript, "vk_root", vk.precomputed_commitment);
     }
 
     static GroupData commit_and_send(const CommitmentKey& ck,
@@ -283,16 +286,8 @@ template <typename Pcs> class TransparentHonk {
                                      const std::string& label)
     {
         GroupData data = ck.commit_group(columns, to_be_shifted);
-        transcript->send_to_verifier("HONK:" + label, Hasher::digest_to_fields(data.tree.root()));
+        Pcs::send_group_commitment(transcript, "HONK:" + label, data);
         return data;
-    }
-
-    template <typename TranscriptPtr>
-    static Digest receive_root(const TranscriptPtr& transcript, const std::string& label)
-    {
-        const auto fields =
-            transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>("HONK:" + label);
-        return Hasher::digest_from_fields(fields);
     }
 };
 
