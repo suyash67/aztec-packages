@@ -62,6 +62,23 @@ field operations with no FFT; verifier: one claim-count-sized commitment RLC, $O
 work, one pairing check. zk (not implemented; design): standard KZG-style masking of $h, g, S$
 with bounded-degree blinders, as in [1, §5].
 
+## Siblings in this directory
+
+Two later schemes reuse this module's commitment key, tensor evaluation, Laurent accumulator and
+exact division, and are benchmarked against it in `../pcs_report.html`:
+
+- **`vela.hpp`** — Vela [4]. Same constant-term encoding, but the inversion-symmetric residual
+  $D(X) = H(X) + H(1/X) - 2y$ collapses the opening to a single auxiliary polynomial $h$ opened at
+  $z$ and $1/z$; the fourth evaluation $h(1/z)$ is recovered by the verifier from the Laurent
+  identity rather than transmitted. Smallest proof and fastest verifier in the suite, at the cost
+  of $O(N\log N)$ structured field work.
+- **`chopin.hpp`** — CHOPIN [5]. Reads the claim as a bilinear form over a *bivariate* twin, so the
+  fold consistency check is a cross-evaluation rather than a univariate division. That removes the
+  high-degree quotient commitment and leaves a single size-$N$ MSM, at one extra pairing.
+
+Both are described in `../PCS_CANDIDATES.md` §1–2, including the deviations bb's two-element G2
+SRS forces on them.
+
 ## References
 
 1. L. Eagen, A. Gabizon, *MERCURY: A multilinear Polynomial Commitment Scheme with constant proof
@@ -70,3 +87,7 @@ with bounded-degree blinders, as in [1, §5].
    points and polynomials*, [ePrint 2020/081](https://eprint.iacr.org/2020/081).
 3. J. Xie, Y. Guo, *Mercury Notes* (sec-bit/mle-pcs), the protocol exposition this implementation
    follows round by round.
+4. Y. Zhang, *Vela and Carina: Fast Pairing-Based Multilinear Polynomial Commitments from Reciprocal
+   Polynomials*, [ePrint 2026/1438](https://eprint.iacr.org/2026/1438).
+5. J. Belohorec, P. Hubáček, A. Kalsta, K. Mašková, *CHOPIN: Optimal Pairing-Based Multilinear
+   Polynomial Commitments from Bivariate KZG*, [ePrint 2026/480](https://eprint.iacr.org/2026/480).

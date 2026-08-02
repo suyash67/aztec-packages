@@ -1,1534 +1,710 @@
 {
-  "context": {
-    "date": "2026-07-30T22:38:53+02:00",
-    "host_name": "Suyashs-Macbook.local",
-    "executable": "./bin/whir_honk_bench",
-    "num_cpus": 14,
-    "mhz_per_cpu": 24,
-    "cpu_scaling_enabled": false,
-    "caches": [
-      {
-        "type": "Data",
-        "level": 1,
-        "size": 65536,
-        "num_sharing": 0
-      },
-      {
-        "type": "Instruction",
-        "level": 1,
-        "size": 131072,
-        "num_sharing": 0
-      },
-      {
-        "type": "Unified",
-        "level": 2,
-        "size": 4194304,
-        "num_sharing": 1
-      }
-    ],
-    "load_avg": [4.99365,3.89355,2.80029],
-    "library_build_type": "release"
+ "all_benchmarks": {
+  "chopin_honk": {
+   "proof": {
+    "12": 7.65625,
+    "14": 8.15625,
+    "16": 8.65625,
+    "18": 9.15625,
+    "20": 9.65625
+   },
+   "prove": {
+    "12": 28.004166902974248,
+    "14": 64.3167500384152,
+    "16": 191.23370805755258,
+    "18": 572.8537081740797,
+    "20": 2341.70433296822
+   },
+   "verify": {
+    "12": 4.34391712769866,
+    "14": 4.382041981443763,
+    "16": 4.450459033250809,
+    "18": 4.667208064347506,
+    "20": 4.685041960328817
+   }
   },
-  "benchmarks": [
-    {
-      "name": "whir_honk_prove<Blake3sMerkleHasher>/12",
-      "family_index": 0,
-      "per_family_instance_index": 0,
-      "run_name": "whir_honk_prove<Blake3sMerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.1739542018622160e+01,
-      "cpu_time": 1.7339000000000215e+01,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 1.0970000000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Blake3sMerkleHasher>/14",
-      "family_index": 0,
-      "per_family_instance_index": 1,
-      "run_name": "whir_honk_prove<Blake3sMerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.2099624872207642e+01,
-      "cpu_time": 3.5281000000000120e+01,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 1.1343750000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Blake3sMerkleHasher>/16",
-      "family_index": 0,
-      "per_family_instance_index": 2,
-      "run_name": "whir_honk_prove<Blake3sMerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.5634295891504735e+02,
-      "cpu_time": 1.4144300000000021e+02,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 1.1810937500000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Blake3sMerkleHasher>/18",
-      "family_index": 0,
-      "per_family_instance_index": 3,
-      "run_name": "whir_honk_prove<Blake3sMerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 5.6361366610508412e+02,
-      "cpu_time": 4.8956399999999991e+02,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 1.2197187500000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Blake3sMerkleHasher>/20",
-      "family_index": 0,
-      "per_family_instance_index": 4,
-      "run_name": "whir_honk_prove<Blake3sMerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.6267271242104471e+03,
-      "cpu_time": 2.5616500000000001e+03,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 1.2668125000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Poseidon2MerkleHasher>/12",
-      "family_index": 1,
-      "per_family_instance_index": 0,
-      "run_name": "whir_honk_prove<Poseidon2MerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.5384874944575131e+01,
-      "cpu_time": 5.2576999999999430e+01,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 1.0098125000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Poseidon2MerkleHasher>/14",
-      "family_index": 1,
-      "per_family_instance_index": 1,
-      "run_name": "whir_honk_prove<Poseidon2MerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.4387024901807308e+02,
-      "cpu_time": 1.8455600000000061e+02,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 1.0295000000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Poseidon2MerkleHasher>/16",
-      "family_index": 1,
-      "per_family_instance_index": 2,
-      "run_name": "whir_honk_prove<Poseidon2MerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 9.3275574897415936e+02,
-      "cpu_time": 7.7305399999999838e+02,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 1.0550625000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Poseidon2MerkleHasher>/18",
-      "family_index": 1,
-      "per_family_instance_index": 3,
-      "run_name": "whir_honk_prove<Poseidon2MerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.3732609179569408e+03,
-      "cpu_time": 2.9401689999999971e+03,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 1.0753750000000000e+03
-    },
-    {
-      "name": "whir_honk_prove<Poseidon2MerkleHasher>/20",
-      "family_index": 1,
-      "per_family_instance_index": 4,
-      "run_name": "whir_honk_prove<Poseidon2MerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.4465694291982800e+04,
-      "cpu_time": 1.2977665999999999e+04,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 1.1006250000000000e+03
-    },
-    {
-      "name": "whir_honk_verify<Blake3sMerkleHasher>/12",
-      "family_index": 2,
-      "per_family_instance_index": 0,
-      "run_name": "whir_honk_verify<Blake3sMerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.2529957923106849e+01,
-      "cpu_time": 1.1312000000003763e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Blake3sMerkleHasher>/14",
-      "family_index": 2,
-      "per_family_instance_index": 1,
-      "run_name": "whir_honk_verify<Blake3sMerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.3923915917985141e+01,
-      "cpu_time": 1.2049000000004639e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Blake3sMerkleHasher>/16",
-      "family_index": 2,
-      "per_family_instance_index": 2,
-      "run_name": "whir_honk_verify<Blake3sMerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1719250003807247e+01,
-      "cpu_time": 1.0764000000008878e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Blake3sMerkleHasher>/18",
-      "family_index": 2,
-      "per_family_instance_index": 3,
-      "run_name": "whir_honk_verify<Blake3sMerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.4179500052705407e+01,
-      "cpu_time": 1.2616999999991663e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Blake3sMerkleHasher>/20",
-      "family_index": 2,
-      "per_family_instance_index": 4,
-      "run_name": "whir_honk_verify<Blake3sMerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1854875017888844e+01,
-      "cpu_time": 1.1070000000003688e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Poseidon2MerkleHasher>/12",
-      "family_index": 3,
-      "per_family_instance_index": 0,
-      "run_name": "whir_honk_verify<Poseidon2MerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1641495907679200e+02,
-      "cpu_time": 1.1440900000000909e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Poseidon2MerkleHasher>/14",
-      "family_index": 3,
-      "per_family_instance_index": 1,
-      "run_name": "whir_honk_verify<Poseidon2MerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.2242745899129659e+02,
-      "cpu_time": 1.2058000000000391e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Poseidon2MerkleHasher>/16",
-      "family_index": 3,
-      "per_family_instance_index": 2,
-      "run_name": "whir_honk_verify<Poseidon2MerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.2521375005599111e+02,
-      "cpu_time": 1.2379399999998952e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Poseidon2MerkleHasher>/18",
-      "family_index": 3,
-      "per_family_instance_index": 3,
-      "run_name": "whir_honk_verify<Poseidon2MerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.3171474996488541e+02,
-      "cpu_time": 1.3021100000000274e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "whir_honk_verify<Poseidon2MerkleHasher>/20",
-      "family_index": 3,
-      "per_family_instance_index": 4,
-      "run_name": "whir_honk_verify<Poseidon2MerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.3511124998331070e+02,
-      "cpu_time": 1.3423000000000229e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_prove<Blake3sMerkleHasher>/12",
-      "family_index": 4,
-      "per_family_instance_index": 0,
-      "run_name": "ligero_honk_prove<Blake3sMerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.9364333129487932e+01,
-      "cpu_time": 1.3827000000020462e+01,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 5.1275000000000000e+02
-    },
-    {
-      "name": "ligero_honk_prove<Blake3sMerkleHasher>/14",
-      "family_index": 4,
-      "per_family_instance_index": 1,
-      "run_name": "ligero_honk_prove<Blake3sMerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.5458458005450666e+01,
-      "cpu_time": 2.8706999999997151e+01,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 8.3337500000000000e+02
-    },
-    {
-      "name": "ligero_honk_prove<Blake3sMerkleHasher>/16",
-      "family_index": 4,
-      "per_family_instance_index": 2,
-      "run_name": "ligero_honk_prove<Blake3sMerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.2966420804150403e+02,
-      "cpu_time": 1.0064299999999093e+02,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 1.4585000000000000e+03
-    },
-    {
-      "name": "ligero_honk_prove<Blake3sMerkleHasher>/18",
-      "family_index": 4,
-      "per_family_instance_index": 3,
-      "run_name": "ligero_honk_prove<Blake3sMerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.7539675005245954e+02,
-      "cpu_time": 3.2154499999998620e+02,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 2.6926250000000000e+03
-    },
-    {
-      "name": "ligero_honk_prove<Blake3sMerkleHasher>/20",
-      "family_index": 4,
-      "per_family_instance_index": 4,
-      "run_name": "ligero_honk_prove<Blake3sMerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.0309354590717703e+03,
-      "cpu_time": 1.3473720000000071e+03,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 5.1447500000000000e+03
-    },
-    {
-      "name": "ligero_honk_prove<Poseidon2MerkleHasher>/12",
-      "family_index": 5,
-      "per_family_instance_index": 0,
-      "run_name": "ligero_honk_prove<Poseidon2MerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1756387609057128e+02,
-      "cpu_time": 8.7019000000026381e+01,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 4.1103125000000000e+02
-    },
-    {
-      "name": "ligero_honk_prove<Poseidon2MerkleHasher>/14",
-      "family_index": 5,
-      "per_family_instance_index": 1,
-      "run_name": "ligero_honk_prove<Poseidon2MerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.1639099901076406e+02,
-      "cpu_time": 2.3680199999998308e+02,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 7.2384375000000000e+02
-    },
-    {
-      "name": "ligero_honk_prove<Poseidon2MerkleHasher>/16",
-      "family_index": 5,
-      "per_family_instance_index": 2,
-      "run_name": "ligero_honk_prove<Poseidon2MerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 8.7643258296884596e+02,
-      "cpu_time": 7.2530299999996828e+02,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 1.3411562500000000e+03
-    },
-    {
-      "name": "ligero_honk_prove<Poseidon2MerkleHasher>/18",
-      "family_index": 5,
-      "per_family_instance_index": 3,
-      "run_name": "ligero_honk_prove<Poseidon2MerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.9383942090207711e+03,
-      "cpu_time": 2.7165300000000343e+03,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 2.5674687500000000e+03
-    },
-    {
-      "name": "ligero_honk_prove<Poseidon2MerkleHasher>/20",
-      "family_index": 5,
-      "per_family_instance_index": 4,
-      "run_name": "ligero_honk_prove<Poseidon2MerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1841193291940726e+04,
-      "cpu_time": 1.0248605999999996e+04,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 5.0117812500000000e+03
-    },
-    {
-      "name": "ligero_honk_verify<Blake3sMerkleHasher>/12",
-      "family_index": 6,
-      "per_family_instance_index": 0,
-      "run_name": "ligero_honk_verify<Blake3sMerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 5.6430000113323331e+00,
-      "cpu_time": 5.1310000000057698e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Blake3sMerkleHasher>/14",
-      "family_index": 6,
-      "per_family_instance_index": 1,
-      "run_name": "ligero_honk_verify<Blake3sMerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.6944580068811774e+00,
-      "cpu_time": 7.0920000000000982e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Blake3sMerkleHasher>/16",
-      "family_index": 6,
-      "per_family_instance_index": 2,
-      "run_name": "ligero_honk_verify<Blake3sMerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1768375057727098e+01,
-      "cpu_time": 1.0930000000001883e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Blake3sMerkleHasher>/18",
-      "family_index": 6,
-      "per_family_instance_index": 3,
-      "run_name": "ligero_honk_verify<Blake3sMerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.3112874943763018e+01,
-      "cpu_time": 2.2234999999994898e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Blake3sMerkleHasher>/20",
-      "family_index": 6,
-      "per_family_instance_index": 4,
-      "run_name": "ligero_honk_verify<Blake3sMerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.5946208052337170e+01,
-      "cpu_time": 3.4868000000017219e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Poseidon2MerkleHasher>/12",
-      "family_index": 7,
-      "per_family_instance_index": 0,
-      "run_name": "ligero_honk_verify<Poseidon2MerkleHasher>/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 5.9734332957305014e+01,
-      "cpu_time": 5.9159000000022388e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Poseidon2MerkleHasher>/14",
-      "family_index": 7,
-      "per_family_instance_index": 1,
-      "run_name": "ligero_honk_verify<Poseidon2MerkleHasher>/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 9.0367499971762300e+01,
-      "cpu_time": 8.9793999999983498e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Poseidon2MerkleHasher>/16",
-      "family_index": 7,
-      "per_family_instance_index": 2,
-      "run_name": "ligero_honk_verify<Poseidon2MerkleHasher>/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.4844462496694177e+02,
-      "cpu_time": 1.4754000000002065e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Poseidon2MerkleHasher>/18",
-      "family_index": 7,
-      "per_family_instance_index": 3,
-      "run_name": "ligero_honk_verify<Poseidon2MerkleHasher>/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.6267495809588581e+02,
-      "cpu_time": 2.6108000000002107e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ligero_honk_verify<Poseidon2MerkleHasher>/20",
-      "family_index": 7,
-      "per_family_instance_index": 4,
-      "run_name": "ligero_honk_verify<Poseidon2MerkleHasher>/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.9042483302764595e+02,
-      "cpu_time": 4.8855099999997265e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "mercury_honk_prove/12",
-      "family_index": 8,
-      "per_family_instance_index": 0,
-      "run_name": "mercury_honk_prove/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.8327832929790020e+01,
-      "cpu_time": 2.0498999999972511e+01,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 7.8750000000000000e+00
-    },
-    {
-      "name": "mercury_honk_prove/14",
-      "family_index": 8,
-      "per_family_instance_index": 1,
-      "run_name": "mercury_honk_prove/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.4365083943121135e+01,
-      "cpu_time": 5.8949000000040996e+01,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 8.3750000000000000e+00
-    },
-    {
-      "name": "mercury_honk_prove/16",
-      "family_index": 8,
-      "per_family_instance_index": 2,
-      "run_name": "mercury_honk_prove/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.0434083289001137e+02,
-      "cpu_time": 1.5417300000007117e+02,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 8.8750000000000000e+00
-    },
-    {
-      "name": "mercury_honk_prove/18",
-      "family_index": 8,
-      "per_family_instance_index": 3,
-      "run_name": "mercury_honk_prove/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 6.7274795810226351e+02,
-      "cpu_time": 5.4591799999997193e+02,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 9.3750000000000000e+00
-    },
-    {
-      "name": "mercury_honk_prove/20",
-      "family_index": 8,
-      "per_family_instance_index": 4,
-      "run_name": "mercury_honk_prove/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.4324809169629589e+03,
-      "cpu_time": 1.9015130000000795e+03,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 9.8750000000000000e+00
-    },
-    {
-      "name": "mercury_honk_verify/12",
-      "family_index": 9,
-      "per_family_instance_index": 0,
-      "run_name": "mercury_honk_verify/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.1676670080050826e+00,
-      "cpu_time": 4.1679999999928441e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "mercury_honk_verify/14",
-      "family_index": 9,
-      "per_family_instance_index": 1,
-      "run_name": "mercury_honk_verify/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.0822079172357917e+00,
-      "cpu_time": 4.0810000000419677e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "mercury_honk_verify/16",
-      "family_index": 9,
-      "per_family_instance_index": 2,
-      "run_name": "mercury_honk_verify/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.1300830198451877e+00,
-      "cpu_time": 4.1289999999776228e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "mercury_honk_verify/18",
-      "family_index": 9,
-      "per_family_instance_index": 3,
-      "run_name": "mercury_honk_verify/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.2083340231329203e+00,
-      "cpu_time": 4.2069999999512220e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "mercury_honk_verify/20",
-      "family_index": 9,
-      "per_family_instance_index": 4,
-      "run_name": "mercury_honk_verify/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.2765419930219650e+00,
-      "cpu_time": 4.2760000000043874e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ipa_honk_prove/12",
-      "family_index": 10,
-      "per_family_instance_index": 0,
-      "run_name": "ipa_honk_prove/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.1862879197578877e+02,
-      "cpu_time": 7.1575599999999895e+02,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 1.1875000000000000e+01
-    },
-    {
-      "name": "ipa_honk_prove/14",
-      "family_index": 10,
-      "per_family_instance_index": 1,
-      "run_name": "ipa_honk_prove/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.8152209579711780e+03,
-      "cpu_time": 2.8111319999999864e+03,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 1.3375000000000000e+01
-    },
-    {
-      "name": "ipa_honk_prove/16",
-      "family_index": 10,
-      "per_family_instance_index": 2,
-      "run_name": "ipa_honk_prove/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1174919999088161e+04,
-      "cpu_time": 1.1166561999999998e+04,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 1.4875000000000000e+01
-    },
-    {
-      "name": "ipa_honk_prove/18",
-      "family_index": 10,
-      "per_family_instance_index": 3,
-      "run_name": "ipa_honk_prove/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.4580160834011622e+04,
-      "cpu_time": 4.4552185000000012e+04,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 1.6375000000000000e+01
-    },
-    {
-      "name": "ipa_honk_prove/20",
-      "family_index": 10,
-      "per_family_instance_index": 4,
-      "run_name": "ipa_honk_prove/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.7755500783387106e+05,
-      "cpu_time": 1.7745785599999994e+05,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 1.7875000000000000e+01
-    },
-    {
-      "name": "ipa_honk_verify/12",
-      "family_index": 11,
-      "per_family_instance_index": 0,
-      "run_name": "ipa_honk_verify/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 6.9816457922570407e+01,
-      "cpu_time": 6.4305999999987762e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ipa_honk_verify/14",
-      "family_index": 11,
-      "per_family_instance_index": 1,
-      "run_name": "ipa_honk_verify/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.4209275003522635e+02,
-      "cpu_time": 2.3002099999996517e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ipa_honk_verify/16",
-      "family_index": 11,
-      "per_family_instance_index": 2,
-      "run_name": "ipa_honk_verify/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 9.1746725002303720e+02,
-      "cpu_time": 9.0224000000000615e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ipa_honk_verify/18",
-      "family_index": 11,
-      "per_family_instance_index": 3,
-      "run_name": "ipa_honk_verify/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.5682448749430478e+03,
-      "cpu_time": 3.5321400000000267e+03,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ipa_honk_verify/20",
-      "family_index": 11,
-      "per_family_instance_index": 4,
-      "run_name": "ipa_honk_verify/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.4177157083991915e+04,
-      "cpu_time": 1.4092554000000064e+04,
-      "time_unit": "ms"
-    },
-    {
-      "name": "hyrax_honk_prove/12",
-      "family_index": 12,
-      "per_family_instance_index": 0,
-      "run_name": "hyrax_honk_prove/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.1131795910187066e+02,
-      "cpu_time": 3.0441900000005262e+02,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 7.4812500000000000e+01
-    },
-    {
-      "name": "hyrax_honk_prove/14",
-      "family_index": 12,
-      "per_family_instance_index": 1,
-      "run_name": "hyrax_honk_prove/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 9.2395841702818871e+02,
-      "cpu_time": 9.0498400000001311e+02,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 1.4531250000000000e+02
-    },
-    {
-      "name": "hyrax_honk_prove/16",
-      "family_index": 12,
-      "per_family_instance_index": 2,
-      "run_name": "hyrax_honk_prove/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.9021447090199217e+03,
-      "cpu_time": 2.8507600000000366e+03,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 2.8581250000000000e+02
-    },
-    {
-      "name": "hyrax_honk_prove/18",
-      "family_index": 12,
-      "per_family_instance_index": 3,
-      "run_name": "hyrax_honk_prove/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 6.0295606249710545e+03,
-      "cpu_time": 4.0421630000000732e+03,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 5.6631250000000000e+02
-    },
-    {
-      "name": "hyrax_honk_prove/20",
-      "family_index": 12,
-      "per_family_instance_index": 4,
-      "run_name": "hyrax_honk_prove/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.3107863417011686e+04,
-      "cpu_time": 1.1150676999999974e+04,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 1.1268125000000000e+03
-    },
-    {
-      "name": "hyrax_honk_verify/12",
-      "family_index": 13,
-      "per_family_instance_index": 0,
-      "run_name": "hyrax_honk_verify/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.9419332984834909e+01,
-      "cpu_time": 3.7652999999977510e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "hyrax_honk_verify/14",
-      "family_index": 13,
-      "per_family_instance_index": 1,
-      "run_name": "hyrax_honk_verify/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.1117999963462353e+01,
-      "cpu_time": 6.7097999999987223e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "hyrax_honk_verify/16",
-      "family_index": 13,
-      "per_family_instance_index": 2,
-      "run_name": "hyrax_honk_verify/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.2865529197733849e+02,
-      "cpu_time": 1.2753499999996620e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "hyrax_honk_verify/18",
-      "family_index": 13,
-      "per_family_instance_index": 3,
-      "run_name": "hyrax_honk_verify/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.4258229206316173e+02,
-      "cpu_time": 2.3506699999995817e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "hyrax_honk_verify/20",
-      "family_index": 13,
-      "per_family_instance_index": 4,
-      "run_name": "hyrax_honk_verify/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.6880933304782957e+02,
-      "cpu_time": 4.6483399999999619e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "kzh_honk_prove/12",
-      "family_index": 14,
-      "per_family_instance_index": 0,
-      "run_name": "kzh_honk_prove/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.9638683397788554e+02,
-      "cpu_time": 3.8785400000006121e+02,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 2.7812500000000000e+01
-    },
-    {
-      "name": "kzh_honk_prove/14",
-      "family_index": 14,
-      "per_family_instance_index": 1,
-      "run_name": "kzh_honk_prove/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1997742920648307e+03,
-      "cpu_time": 1.1747940000000199e+03,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 5.0312500000000000e+01
-    },
-    {
-      "name": "kzh_honk_prove/16",
-      "family_index": 14,
-      "per_family_instance_index": 2,
-      "run_name": "kzh_honk_prove/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.7865945419762284e+03,
-      "cpu_time": 3.7204110000001265e+03,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 9.4812500000000000e+01
-    },
-    {
-      "name": "kzh_honk_prove/18",
-      "family_index": 14,
-      "per_family_instance_index": 3,
-      "run_name": "kzh_honk_prove/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.7719087500590831e+03,
-      "cpu_time": 4.8986660000000484e+03,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 1.8331250000000000e+02
-    },
-    {
-      "name": "kzh_honk_prove/20",
-      "family_index": 14,
-      "per_family_instance_index": 4,
-      "run_name": "kzh_honk_prove/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.5919586918083951e+04,
-      "cpu_time": 1.3087449999999990e+04,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 3.5981250000000000e+02
-    },
-    {
-      "name": "kzh_honk_verify/12",
-      "family_index": 15,
-      "per_family_instance_index": 0,
-      "run_name": "kzh_honk_verify/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.4316625096835196e+01,
-      "cpu_time": 3.4215000000017426e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "kzh_honk_verify/14",
-      "family_index": 15,
-      "per_family_instance_index": 1,
-      "run_name": "kzh_honk_verify/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 6.1869584023952484e+01,
-      "cpu_time": 6.1712999999940621e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "kzh_honk_verify/16",
-      "family_index": 15,
-      "per_family_instance_index": 2,
-      "run_name": "kzh_honk_verify/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1607720900792629e+02,
-      "cpu_time": 1.1587100000008377e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "kzh_honk_verify/18",
-      "family_index": 15,
-      "per_family_instance_index": 3,
-      "run_name": "kzh_honk_verify/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.1420266595669091e+02,
-      "cpu_time": 2.0171599999991940e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "kzh_honk_verify/20",
-      "family_index": 15,
-      "per_family_instance_index": 4,
-      "run_name": "kzh_honk_verify/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.0647079201880842e+02,
-      "cpu_time": 4.0594700000008288e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "dory_honk_prove/12",
-      "family_index": 16,
-      "per_family_instance_index": 0,
-      "run_name": "dory_honk_prove/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 4.1988558392040431e+02,
-      "cpu_time": 4.1355400000009013e+02,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 3.9562500000000000e+01
-    },
-    {
-      "name": "dory_honk_prove/14",
-      "family_index": 16,
-      "per_family_instance_index": 1,
-      "run_name": "dory_honk_prove/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.1205271249637008e+03,
-      "cpu_time": 1.1011110000000599e+03,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 4.9812500000000000e+01
-    },
-    {
-      "name": "dory_honk_prove/16",
-      "family_index": 16,
-      "per_family_instance_index": 2,
-      "run_name": "dory_honk_prove/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.2428289580857381e+03,
-      "cpu_time": 3.1923959999999170e+03,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 6.6062500000000000e+01
-    },
-    {
-      "name": "dory_honk_prove/18",
-      "family_index": 16,
-      "per_family_instance_index": 3,
-      "run_name": "dory_honk_prove/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 6.6000663340091705e+03,
-      "cpu_time": 4.4934309999999869e+03,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 9.4312500000000000e+01
-    },
-    {
-      "name": "dory_honk_prove/20",
-      "family_index": 16,
-      "per_family_instance_index": 4,
-      "run_name": "dory_honk_prove/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.3629374917945825e+04,
-      "cpu_time": 1.1757798999999977e+04,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 1.4656250000000000e+02
-    },
-    {
-      "name": "dory_honk_verify/12",
-      "family_index": 17,
-      "per_family_instance_index": 0,
-      "run_name": "dory_honk_verify/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 7.6766874990426004e+01,
-      "cpu_time": 7.6719000000139204e+01,
-      "time_unit": "ms"
-    },
-    {
-      "name": "dory_honk_verify/14",
-      "family_index": 17,
-      "per_family_instance_index": 1,
-      "run_name": "dory_honk_verify/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.2003754207398742e+02,
-      "cpu_time": 1.1994899999990594e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "dory_honk_verify/16",
-      "family_index": 17,
-      "per_family_instance_index": 2,
-      "run_name": "dory_honk_verify/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 2.0424729201477021e+02,
-      "cpu_time": 2.0407800000009502e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "dory_honk_verify/18",
-      "family_index": 17,
-      "per_family_instance_index": 3,
-      "run_name": "dory_honk_verify/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.6968212504871190e+02,
-      "cpu_time": 3.6006000000008953e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "dory_honk_verify/20",
-      "family_index": 17,
-      "per_family_instance_index": 4,
-      "run_name": "dory_honk_verify/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 6.7813462496269494e+02,
-      "cpu_time": 6.7782199999999193e+02,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ultra_honk_kzg_prove/12",
-      "family_index": 18,
-      "per_family_instance_index": 0,
-      "run_name": "ultra_honk_kzg_prove/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.8289249991066754e+01,
-      "cpu_time": 2.4870999999961896e+01,
-      "time_unit": "ms",
-      "log_n": 1.2000000000000000e+01,
-      "proof_KiB": 1.3312500000000000e+01
-    },
-    {
-      "name": "ultra_honk_kzg_prove/14",
-      "family_index": 18,
-      "per_family_instance_index": 1,
-      "run_name": "ultra_honk_kzg_prove/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 5.9885416878387332e+01,
-      "cpu_time": 4.1454000000044289e+01,
-      "time_unit": "ms",
-      "log_n": 1.4000000000000000e+01,
-      "proof_KiB": 1.3312500000000000e+01
-    },
-    {
-      "name": "ultra_honk_kzg_prove/16",
-      "family_index": 18,
-      "per_family_instance_index": 2,
-      "run_name": "ultra_honk_kzg_prove/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.6692454111762345e+02,
-      "cpu_time": 1.1611499999992247e+02,
-      "time_unit": "ms",
-      "log_n": 1.6000000000000000e+01,
-      "proof_KiB": 1.3312500000000000e+01
-    },
-    {
-      "name": "ultra_honk_kzg_prove/18",
-      "family_index": 18,
-      "per_family_instance_index": 3,
-      "run_name": "ultra_honk_kzg_prove/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 5.6078158388845623e+02,
-      "cpu_time": 4.3983299999990777e+02,
-      "time_unit": "ms",
-      "log_n": 1.8000000000000000e+01,
-      "proof_KiB": 1.3312500000000000e+01
-    },
-    {
-      "name": "ultra_honk_kzg_prove/20",
-      "family_index": 18,
-      "per_family_instance_index": 4,
-      "run_name": "ultra_honk_kzg_prove/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 1.8553462489508092e+03,
-      "cpu_time": 1.3381099999999151e+03,
-      "time_unit": "ms",
-      "log_n": 2.0000000000000000e+01,
-      "proof_KiB": 1.3312500000000000e+01
-    },
-    {
-      "name": "ultra_honk_kzg_verify/12",
-      "family_index": 19,
-      "per_family_instance_index": 0,
-      "run_name": "ultra_honk_kzg_verify/12",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.9017080562189221e+00,
-      "cpu_time": 3.8610000000289801e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ultra_honk_kzg_verify/14",
-      "family_index": 19,
-      "per_family_instance_index": 1,
-      "run_name": "ultra_honk_kzg_verify/14",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.8280000444501638e+00,
-      "cpu_time": 3.8140000000339569e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ultra_honk_kzg_verify/16",
-      "family_index": 19,
-      "per_family_instance_index": 2,
-      "run_name": "ultra_honk_kzg_verify/16",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.8632500218227506e+00,
-      "cpu_time": 3.8349999999809370e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ultra_honk_kzg_verify/18",
-      "family_index": 19,
-      "per_family_instance_index": 3,
-      "run_name": "ultra_honk_kzg_verify/18",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.8926249835640192e+00,
-      "cpu_time": 3.8230000001249209e+00,
-      "time_unit": "ms"
-    },
-    {
-      "name": "ultra_honk_kzg_verify/20",
-      "family_index": 19,
-      "per_family_instance_index": 4,
-      "run_name": "ultra_honk_kzg_verify/20",
-      "run_type": "iteration",
-      "repetitions": 1,
-      "repetition_index": 0,
-      "threads": 1,
-      "iterations": 1,
-      "real_time": 3.8299579173326492e+00,
-      "cpu_time": 3.7999999999556167e+00,
-      "time_unit": "ms"
-    }
-  ]
+  "dory_honk": {
+   "proof": {
+    "12": 39.5625,
+    "14": 49.8125,
+    "16": 66.0625,
+    "18": 94.3125,
+    "20": 146.5625
+   },
+   "prove": {
+    "12": 421.62825004197657,
+    "14": 1125.8023739792407,
+    "16": 3254.115166142583,
+    "18": 6654.471916845068,
+    "20": 13578.351541887969
+   },
+   "verify": {
+    "12": 77.69070798531175,
+    "14": 120.48600008711219,
+    "16": 207.29591604322195,
+    "18": 361.5619170013815,
+    "20": 671.0122500080615
+   }
+  },
+  "hyrax_honk": {
+   "proof": {
+    "12": 74.8125,
+    "14": 145.3125,
+    "16": 285.8125,
+    "18": 566.3125,
+    "20": 1126.8125
+   },
+   "prove": {
+    "12": 308.9467491954565,
+    "14": 919.0219580195844,
+    "16": 2892.561625223607,
+    "18": 6086.995457997546,
+    "20": 13082.44650112465
+   },
+   "verify": {
+    "12": 39.633250096812844,
+    "14": 72.05699989572167,
+    "16": 129.36158408410847,
+    "18": 242.93299997225404,
+    "20": 469.934375025332
+   }
+  },
+  "ipa_honk": {
+   "proof": {
+    "12": 11.875,
+    "14": 13.375,
+    "16": 14.875,
+    "18": 16.375,
+    "20": 17.875
+   },
+   "prove": {
+    "12": 768.1925829965621,
+    "14": 3281.9294999353588,
+    "16": 11859.790582908317,
+    "18": 44726.25183290802,
+    "20": 179016.36170898564
+   },
+   "verify": {
+    "12": 69.32141701690853,
+    "14": 244.58845797926188,
+    "16": 917.5669169053435,
+    "18": 3596.0174170322716,
+    "20": 14419.632291886955
+   }
+  },
+  "kzh3_honk": {
+   "proof": {
+    "12": 17.8125,
+    "14": 26.3125,
+    "16": 34.8125,
+    "18": 55.3125,
+    "20": 87.8125
+   },
+   "prove": {
+    "12": 693.7730826903135,
+    "14": 2004.1891250293702,
+    "16": 6383.825334254652,
+    "18": 25166.826625121757,
+    "20": 77168.94149989821
+   },
+   "verify": {
+    "12": 25.846540927886963,
+    "14": 37.3946251347661,
+    "16": 46.40966700389981,
+    "18": 79.68762493692338,
+    "20": 124.00145782157779
+   }
+  },
+  "kzh_honk": {
+   "proof": {
+    "12": 27.8125,
+    "14": 50.3125,
+    "16": 94.8125,
+    "18": 183.3125,
+    "20": 359.8125
+   },
+   "prove": {
+    "12": 390.08454186841846,
+    "14": 1202.7059171814471,
+    "16": 3802.3585008922964,
+    "18": 7836.837749928236,
+    "20": 15939.275040756911
+   },
+   "verify": {
+    "12": 34.515917068347335,
+    "14": 61.81529094465077,
+    "16": 117.07004113122821,
+    "18": 216.1464171949774,
+    "20": 406.7527090664953
+   }
+  },
+  "ligero_honk<Blake3sMerkleHasher>": {
+   "proof": {
+    "12": 512.75,
+    "14": 833.375,
+    "16": 1458.5,
+    "18": 2692.625,
+    "20": 5144.75
+   },
+   "prove": {
+    "12": 18.743251217529178,
+    "14": 36.107457941398025,
+    "16": 118.68287483230233,
+    "18": 382.4476667214185,
+    "20": 1800.969374831766
+   },
+   "verify": {
+    "12": 5.830375012010336,
+    "14": 7.86762498319149,
+    "16": 11.738250032067299,
+    "18": 20.643083145841956,
+    "20": 36.44683305174112
+   }
+  },
+  "ligero_honk<Poseidon2MerkleHasher>": {
+   "proof": {
+    "12": 411.03125,
+    "14": 723.84375,
+    "16": 1341.15625,
+    "18": 2567.46875,
+    "20": 5011.78125
+   },
+   "prove": {
+    "12": 128.40683409012854,
+    "14": 298.78487600944936,
+    "16": 932.2802489623427,
+    "18": 3131.2397490255535,
+    "20": 11374.347666976973
+   },
+   "verify": {
+    "12": 60.44350005686283,
+    "14": 91.02162509225309,
+    "16": 148.72091612778604,
+    "18": 265.0000408757478,
+    "20": 489.9442088790238
+   }
+  },
+  "mercury_honk": {
+   "proof": {
+    "12": 7.875,
+    "14": 8.375,
+    "16": 8.875,
+    "18": 9.375,
+    "20": 9.875
+   },
+   "prove": {
+    "12": 28.18875014781952,
+    "14": 69.75204101763666,
+    "16": 222.9901251848787,
+    "18": 690.8387078437954,
+    "20": 2446.1139580234885
+   },
+   "verify": {
+    "12": 4.078124882653356,
+    "14": 4.068374866619706,
+    "16": 4.2114590760320425,
+    "18": 4.2117920238524675,
+    "20": 4.27987496368587
+   }
+  },
+  "switchfold_honk<Blake3sMerkleHasher>": {
+   "proof": {
+    "12": 496.09375,
+    "14": 582.0,
+    "16": 674.28125,
+    "18": 772.9375,
+    "20": 877.96875
+   },
+   "prove": {
+    "12": 46.878459164872766,
+    "14": 121.98916613124311,
+    "16": 435.8853336889297,
+    "18": 1618.6741662677377,
+    "20": 8608.557750936598
+   },
+   "verify": {
+    "12": 7.777458056807518,
+    "14": 8.7480410002172,
+    "16": 10.6606250628829,
+    "18": 13.610500143840909,
+    "20": 25.10629198513925
+   }
+  },
+  "switchfold_honk<Poseidon2MerkleHasher>": {
+   "proof": {
+    "12": 323.9375,
+    "14": 370.75,
+    "16": 420.8125,
+    "18": 474.125,
+    "20": 530.6875
+   },
+   "prove": {
+    "12": 157.48712490312755,
+    "14": 609.7768342588097,
+    "16": 2072.914293035865,
+    "18": 8959.39104235731,
+    "20": 36141.2992910482
+   },
+   "verify": {
+    "12": 67.59054213762283,
+    "14": 79.73925000987947,
+    "16": 94.26083392463624,
+    "18": 107.58616682142019,
+    "20": 131.37300009839237
+   }
+  },
+  "ultra_honk_kzg": {
+   "proof": {
+    "12": 13.3125,
+    "14": 13.3125,
+    "16": 13.3125,
+    "18": 13.3125,
+    "20": 13.3125
+   },
+   "prove": {
+    "12": 39.5925419870764,
+    "14": 59.25933294929564,
+    "16": 158.69391686283052,
+    "18": 545.3297500498593,
+    "20": 1894.6776250377297
+   },
+   "verify": {
+    "12": 3.8040420040488243,
+    "14": 3.822166007012129,
+    "16": 3.8843329530209303,
+    "18": 4.650917137041688,
+    "20": 5.22133382037282
+   }
+  },
+  "vela_honk": {
+   "proof": {
+    "12": 6.34375,
+    "14": 6.84375,
+    "16": 7.34375,
+    "18": 7.84375,
+    "20": 8.34375
+   },
+   "prove": {
+    "12": 26.37541596777737,
+    "14": 77.82929320819676,
+    "16": 260.34550089389086,
+    "18": 928.5006672143936,
+    "20": 3586.813166271895
+   },
+   "verify": {
+    "12": 3.3100408036261797,
+    "14": 3.3331671729683876,
+    "16": 3.418874926865101,
+    "18": 3.5061249509453773,
+    "20": 3.9194580167531967
+   }
+  },
+  "whir_honk<Blake3sMerkleHasher>": {
+   "proof": {
+    "12": 1097.0,
+    "14": 1134.375,
+    "16": 1181.09375,
+    "18": 1219.71875,
+    "20": 1266.8125
+   },
+   "prove": {
+    "12": 21.924416068941355,
+    "14": 42.98737505450845,
+    "16": 162.28654189035296,
+    "18": 591.0672079771757,
+    "20": 3239.522916963324
+   },
+   "verify": {
+    "12": 13.078582938760519,
+    "14": 14.894249849021435,
+    "16": 12.214374961331487,
+    "18": 13.549875002354383,
+    "20": 11.794082820415497
+   }
+  },
+  "whir_honk<Poseidon2MerkleHasher>": {
+   "proof": {
+    "12": 1009.8125,
+    "14": 1029.5,
+    "16": 1055.0625,
+    "18": 1075.375,
+    "20": 1100.625
+   },
+   "prove": {
+    "12": 82.1853328961879,
+    "14": 248.46216710284352,
+    "16": 892.2972488217056,
+    "18": 3641.402499983087,
+    "20": 15669.330958044156
+   },
+   "verify": {
+    "12": 117.5961249973625,
+    "14": 122.62366595678031,
+    "16": 138.98375001735985,
+    "18": 133.0563328228891,
+    "20": 136.22004189528525
+   }
+  },
+  "whir_honk_repaired<Blake3sMerkleHasher>": {
+   "proof": {
+    "12": 1119.1875,
+    "14": 1157.3125,
+    "16": 1204.78125,
+    "18": 1244.15625,
+    "20": 1292.0
+   },
+   "prove": {
+    "12": 21.48266602307558,
+    "14": 46.69500095769763,
+    "16": 215.00779199413955,
+    "18": 470.22729204036295,
+    "20": 2976.4022920280695
+   },
+   "verify": {
+    "12": 12.56000017747283,
+    "14": 14.655208215117455,
+    "16": 11.805916903540492,
+    "18": 13.738000066950917,
+    "20": 11.2978748511523
+   }
+  },
+  "whir_honk_repaired<Poseidon2MerkleHasher>": {
+   "proof": {
+    "12": 1030.15625,
+    "14": 1050.21875,
+    "16": 1076.15625,
+    "18": 1096.84375,
+    "20": 1122.46875
+   },
+   "prove": {
+    "12": 78.71620915830135,
+    "14": 259.70029179006815,
+    "16": 1084.2453751247376,
+    "18": 3273.5322918742895,
+    "20": 15759.403418051079
+   },
+   "verify": {
+    "12": 117.65270796604455,
+    "14": 126.21479202061892,
+    "16": 126.75333395600319,
+    "18": 133.93112504854798,
+    "20": 138.46504199318588
+   }
+  }
+ },
+ "backends": {
+  "CHOPIN": {
+   "proof": {
+    "12": 7.65625,
+    "14": 8.15625,
+    "16": 8.65625,
+    "18": 9.15625,
+    "20": 9.65625
+   },
+   "prove": {
+    "12": 28.004166902974248,
+    "14": 64.3167500384152,
+    "16": 191.23370805755258,
+    "18": 572.8537081740797,
+    "20": 2341.70433296822
+   },
+   "verify": {
+    "12": 4.34391712769866,
+    "14": 4.382041981443763,
+    "16": 4.450459033250809,
+    "18": 4.667208064347506,
+    "20": 4.685041960328817
+   }
+  },
+  "Dory": {
+   "proof": {
+    "12": 39.5625,
+    "14": 49.8125,
+    "16": 66.0625,
+    "18": 94.3125,
+    "20": 146.5625
+   },
+   "prove": {
+    "12": 421.62825004197657,
+    "14": 1125.8023739792407,
+    "16": 3254.115166142583,
+    "18": 6654.471916845068,
+    "20": 13578.351541887969
+   },
+   "verify": {
+    "12": 77.69070798531175,
+    "14": 120.48600008711219,
+    "16": 207.29591604322195,
+    "18": 361.5619170013815,
+    "20": 671.0122500080615
+   }
+  },
+  "Hyrax": {
+   "proof": {
+    "12": 74.8125,
+    "14": 145.3125,
+    "16": 285.8125,
+    "18": 566.3125,
+    "20": 1126.8125
+   },
+   "prove": {
+    "12": 308.9467491954565,
+    "14": 919.0219580195844,
+    "16": 2892.561625223607,
+    "18": 6086.995457997546,
+    "20": 13082.44650112465
+   },
+   "verify": {
+    "12": 39.633250096812844,
+    "14": 72.05699989572167,
+    "16": 129.36158408410847,
+    "18": 242.93299997225404,
+    "20": 469.934375025332
+   }
+  },
+  "IPA": {
+   "proof": {
+    "12": 11.875,
+    "14": 13.375,
+    "16": 14.875,
+    "18": 16.375,
+    "20": 17.875
+   },
+   "prove": {
+    "12": 768.1925829965621,
+    "14": 3281.9294999353588,
+    "16": 11859.790582908317,
+    "18": 44726.25183290802,
+    "20": 179016.36170898564
+   },
+   "verify": {
+    "12": 69.32141701690853,
+    "14": 244.58845797926188,
+    "16": 917.5669169053435,
+    "18": 3596.0174170322716,
+    "20": 14419.632291886955
+   }
+  },
+  "KZG (Gemini+Shplonk)": {
+   "proof": {
+    "12": 13.3125,
+    "14": 13.3125,
+    "16": 13.3125,
+    "18": 13.3125,
+    "20": 13.3125
+   },
+   "prove": {
+    "12": 39.5925419870764,
+    "14": 59.25933294929564,
+    "16": 158.69391686283052,
+    "18": 545.3297500498593,
+    "20": 1894.6776250377297
+   },
+   "verify": {
+    "12": 3.8040420040488243,
+    "14": 3.822166007012129,
+    "16": 3.8843329530209303,
+    "18": 4.650917137041688,
+    "20": 5.22133382037282
+   }
+  },
+  "KZH2": {
+   "proof": {
+    "12": 27.8125,
+    "14": 50.3125,
+    "16": 94.8125,
+    "18": 183.3125,
+    "20": 359.8125
+   },
+   "prove": {
+    "12": 390.08454186841846,
+    "14": 1202.7059171814471,
+    "16": 3802.3585008922964,
+    "18": 7836.837749928236,
+    "20": 15939.275040756911
+   },
+   "verify": {
+    "12": 34.515917068347335,
+    "14": 61.81529094465077,
+    "16": 117.07004113122821,
+    "18": 216.1464171949774,
+    "20": 406.7527090664953
+   }
+  },
+  "KZH3": {
+   "proof": {
+    "12": 17.8125,
+    "14": 26.3125,
+    "16": 34.8125,
+    "18": 55.3125,
+    "20": 87.8125
+   },
+   "prove": {
+    "12": 693.7730826903135,
+    "14": 2004.1891250293702,
+    "16": 6383.825334254652,
+    "18": 25166.826625121757,
+    "20": 77168.94149989821
+   },
+   "verify": {
+    "12": 25.846540927886963,
+    "14": 37.3946251347661,
+    "16": 46.40966700389981,
+    "18": 79.68762493692338,
+    "20": 124.00145782157779
+   }
+  },
+  "Ligero": {
+   "proof": {
+    "12": 512.75,
+    "14": 833.375,
+    "16": 1458.5,
+    "18": 2692.625,
+    "20": 5144.75
+   },
+   "prove": {
+    "12": 18.743251217529178,
+    "14": 36.107457941398025,
+    "16": 118.68287483230233,
+    "18": 382.4476667214185,
+    "20": 1800.969374831766
+   },
+   "verify": {
+    "12": 5.830375012010336,
+    "14": 7.86762498319149,
+    "16": 11.738250032067299,
+    "18": 20.643083145841956,
+    "20": 36.44683305174112
+   }
+  },
+  "Mercury": {
+   "proof": {
+    "12": 7.875,
+    "14": 8.375,
+    "16": 8.875,
+    "18": 9.375,
+    "20": 9.875
+   },
+   "prove": {
+    "12": 28.18875014781952,
+    "14": 69.75204101763666,
+    "16": 222.9901251848787,
+    "18": 690.8387078437954,
+    "20": 2446.1139580234885
+   },
+   "verify": {
+    "12": 4.078124882653356,
+    "14": 4.068374866619706,
+    "16": 4.2114590760320425,
+    "18": 4.2117920238524675,
+    "20": 4.27987496368587
+   }
+  },
+  "SwitchFold": {
+   "proof": {
+    "12": 496.09375,
+    "14": 582.0,
+    "16": 674.28125,
+    "18": 772.9375,
+    "20": 877.96875
+   },
+   "prove": {
+    "12": 46.878459164872766,
+    "14": 121.98916613124311,
+    "16": 435.8853336889297,
+    "18": 1618.6741662677377,
+    "20": 8608.557750936598
+   },
+   "verify": {
+    "12": 7.777458056807518,
+    "14": 8.7480410002172,
+    "16": 10.6606250628829,
+    "18": 13.610500143840909,
+    "20": 25.10629198513925
+   }
+  },
+  "Vela": {
+   "proof": {
+    "12": 6.34375,
+    "14": 6.84375,
+    "16": 7.34375,
+    "18": 7.84375,
+    "20": 8.34375
+   },
+   "prove": {
+    "12": 26.37541596777737,
+    "14": 77.82929320819676,
+    "16": 260.34550089389086,
+    "18": 928.5006672143936,
+    "20": 3586.813166271895
+   },
+   "verify": {
+    "12": 3.3100408036261797,
+    "14": 3.3331671729683876,
+    "16": 3.418874926865101,
+    "18": 3.5061249509453773,
+    "20": 3.9194580167531967
+   }
+  },
+  "WHIR": {
+   "proof": {
+    "12": 1097.0,
+    "14": 1134.375,
+    "16": 1181.09375,
+    "18": 1219.71875,
+    "20": 1266.8125
+   },
+   "prove": {
+    "12": 21.924416068941355,
+    "14": 42.98737505450845,
+    "16": 162.28654189035296,
+    "18": 591.0672079771757,
+    "20": 3239.522916963324
+   },
+   "verify": {
+    "12": 13.078582938760519,
+    "14": 14.894249849021435,
+    "16": 12.214374961331487,
+    "18": 13.549875002354383,
+    "20": 11.794082820415497
+   }
+  },
+  "WHIR (repaired)": {
+   "proof": {
+    "12": 1119.1875,
+    "14": 1157.3125,
+    "16": 1204.78125,
+    "18": 1244.15625,
+    "20": 1292.0
+   },
+   "prove": {
+    "12": 21.48266602307558,
+    "14": 46.69500095769763,
+    "16": 215.00779199413955,
+    "18": 470.22729204036295,
+    "20": 2976.4022920280695
+   },
+   "verify": {
+    "12": 12.56000017747283,
+    "14": 14.655208215117455,
+    "16": 11.805916903540492,
+    "18": 13.738000066950917,
+    "20": 11.2978748511523
+   }
+  }
+ },
+ "context": {
+  "date": "2026-08-02T19:21:56+02:00",
+  "host_name": "Suyashs-Macbook.local",
+  "library_build_type": "release",
+  "mhz_per_cpu": 24,
+  "num_cpus": 14
+ },
+ "sizes": [
+  12,
+  14,
+  16,
+  18,
+  20
+ ]
 }
