@@ -1,6 +1,7 @@
 #include "barretenberg/commitment_schemes/whir/whir_honk.hpp"
 #include "barretenberg/commitment_schemes/dory/dory_honk.hpp"
 #include "barretenberg/commitment_schemes/hyrax/hyrax_honk.hpp"
+#include "barretenberg/commitment_schemes/kzh/kzh3_honk.hpp"
 #include "barretenberg/commitment_schemes/kzh/kzh_honk.hpp"
 #include "barretenberg/commitment_schemes/ligero/ligero_honk.hpp"
 #include "barretenberg/commitment_schemes/mercury/mercury_honk.hpp"
@@ -286,6 +287,43 @@ void kzh_honk_verify(benchmark::State& state)
     }
 }
 
+void kzh3_honk_prove(benchmark::State& state)
+{
+    using Honk = kzh3::Kzh3Honk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const kzh3::Kzh3Config config = Honk::make_config(log_n);
+    HonkProof proof;
+    for (auto _ : state) {
+        state.PauseTiming();
+        UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+        auto pk = Honk::create_proving_key(builder, config);
+        state.ResumeTiming();
+        proof = Honk::prove(pk);
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+    state.counters["log_n"] = static_cast<double>(log_n);
+}
+
+void kzh3_honk_verify(benchmark::State& state)
+{
+    using Honk = kzh3::Kzh3Honk;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const kzh3::Kzh3Config config = Honk::make_config(log_n);
+    UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+    auto pk = Honk::create_proving_key(builder, config);
+    const auto vk = pk.vk;
+    const HonkProof proof = Honk::prove(pk);
+    bool ok = true;
+    for (auto _ : state) {
+        ok = ok && Honk::verify(vk, config, proof);
+    }
+    if (!ok) {
+        state.SkipWithError("Kzh3Honk verification failed");
+    }
+}
+
 void dory_honk_prove(benchmark::State& state)
 {
     using Honk = dory::DoryHonk;
@@ -377,6 +415,8 @@ BENCHMARK(hyrax_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond
 BENCHMARK(hyrax_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK(kzh_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK(kzh_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(kzh3_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK(kzh3_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK(dory_honk_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK(dory_honk_verify)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK(ultra_honk_kzg_prove)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
