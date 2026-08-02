@@ -147,6 +147,16 @@ TYPED_TEST(WhirTest, BatchedWithShiftedCompleteness)
 
 // A configuration small enough that there are no fold-and-commit iterations: the final phase checks
 // the batched virtual oracle (with shift scaling) directly against the clear polynomial.
+TYPED_TEST(WhirTest, RepairedSoundnessCompleteness)
+{
+    const WhirConfig config =
+        WhirConfig::create(10, /*security_bits=*/64, /*log_inv_rate=*/2, 4, 4, WhirSoundness::REPAIRED_LIST);
+    typename TestFixture::CK ck(config);
+    const auto instance = TestFixture::make_instance(ck, 2, 1);
+    const auto proof = TestFixture::prove_instance(ck, instance);
+    EXPECT_TRUE(TestFixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
 TYPED_TEST(WhirTest, ZeroIterationEdgeCase)
 {
     const WhirConfig config = TestFixture::test_config(4);
@@ -265,6 +275,26 @@ TEST(WhirConfigTest, QueryCountFormulas)
     const size_t ud_queries = WhirConfig::compute_num_queries(64, 1, WhirSoundness::UNIQUE_DECODING);
     EXPECT_GE(ud_queries, 154U);
     EXPECT_LE(ud_queries, 156U);
+}
+
+// The repaired-conjecture regime (Crites-Stewart, eprint 2025/2046) tests distance δ* with
+// H_q(δ*) = 1-ρ instead of the disproved capacity δ = 1-ρ. At 254-bit q the entropy penalty
+// h₂(δ)/log₂q costs about one extra query at aggressive rates and vanishes at high rates.
+TEST(WhirConfigTest, RepairedQueryCountsExceedDisprovenCapacityCounts)
+{
+    // r=2: per-query error 1/4 + h₂(0.747)/253 ≈ 2^-1.98 -> 51 queries against 50.
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 2, WhirSoundness::REPAIRED_LIST), 51U);
+    // r=5: 2^-4.96 bits per query -> 21 against 20.
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 5, WhirSoundness::REPAIRED_LIST), 21U);
+    // r=8 and beyond: the penalty is below the ceiling granularity.
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 8, WhirSoundness::REPAIRED_LIST), 13U);
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 11, WhirSoundness::REPAIRED_LIST), 10U);
+    // The repaired count is never below the capacity count and never above Johnson.
+    for (size_t rate = 1; rate <= 20; ++rate) {
+        const size_t repaired = WhirConfig::compute_num_queries(100, rate, WhirSoundness::REPAIRED_LIST);
+        EXPECT_GE(repaired, WhirConfig::compute_num_queries(100, rate, WhirSoundness::CONJECTURED_LIST));
+        EXPECT_LE(repaired, WhirConfig::compute_num_queries(100, rate, WhirSoundness::PROVABLE_LIST));
+    }
 }
 
 // The README.md §6 worked example: m = 20, r₀ = 2, k = 4, λ = 100.

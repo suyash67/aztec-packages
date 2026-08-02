@@ -233,6 +233,7 @@ $\rho_i = 2^{-r_i}$ [1, §5; 3]:
 |---|---|---|---|
 | `UNIQUE_DECODING` | $(1-\rho)/2$ | $-\log_2\!\big(\tfrac{1+2^{-r}}{2}\big)$ | $\lceil \lambda / \text{bits} \rceil$ |
 | `PROVABLE_LIST` (Johnson) | $1 - \sqrt\rho$ | $r/2$ | $\lceil 2\lambda / r \rceil$ |
+| `REPAIRED_LIST` | $\delta^*$: $H_q(\delta^*) = 1-\rho$ | $-\log_2(1-\delta^*)$ | $\lceil \lambda / \text{bits} \rceil$ |
 | `CONJECTURED_LIST` (capacity) | $1 - \rho$ | $r$ | $\lceil \lambda / r \rceil$ |
 
 The rate improves every iteration, $r_{i+1} = r_i + (k-1)$, because degree divides by $2^k$
@@ -242,6 +243,29 @@ and the $\gamma$/$\rho$/sumcheck field terms add $O(\text{poly}(2^m)/|\mathbb F|
 negligible at 254 bits for $\lambda \le 128$. Grinding (query-phase proof-of-work) is a
 standard further reduction of $t_i$; it is not implemented, and all benchmark numbers are
 grinding-free.
+
+### The up-to-capacity conjecture is false; the repaired regime
+
+Crites-Stewart ([eprint 2025/2046](https://eprint.iacr.org/2025/2046)) disprove the
+correlated-agreement, mutual-correlated-agreement, and list-decodability up-to-capacity
+conjectures that `CONJECTURED_LIST` rests on (for WHIR specifically, Conjecture 4.12 — the
+mutual correlated agreement adaptation of [BCI+23] Conjecture 8.4). The counterexamples live
+between the list-decoding capacity bound and the code's capacity: they construct words
+$u^{(0)}, u^{(1)}$ with $u^{(1)}$ farther than $\delta$ from the code such that
+$u^{(0)} + \lambda u^{(1)}$ is $\delta$-close for *every* $\lambda$, whenever
+$\delta > 1 - H_q(\rho)$ (with $H_q$ the $q$-ary entropy). Their minimally repaired
+conjectures replace $\delta \le 1-\rho-\eta$ by $H_q(\delta) \le 1-\rho-\eta$.
+
+`REPAIRED_LIST` implements that repair: it tests the largest distance $\delta^*$ with
+$H_q(\delta^*) = 1-\rho$, i.e. per-query error
+$1-\delta^* \approx \rho + h_2(\delta^*)/\log_2 q$. At $\log_2 q \approx 254$ (BN254 Fr) the
+entropy penalty is a fraction of a bit per query: at $r=2$ it costs 51 queries instead of 50,
+at $r=5$ 21 instead of 20, and from $r=8$ the ceiling absorbs it. The schedule solver runs in
+the same deterministic Q192/Q64 fixed-point style as `UNIQUE_DECODING`, with every rounding
+(the $\log_2 q = 253$ floor, the penalty division, a $2^{-32}$ bits-per-query guard) pushed
+toward more queries. The default preset remains `CONJECTURED_LIST` for comparability with
+deployed FRI/STIR systems; the benchmark reports both (`whir_honk_repaired_*`), and the
+measured deltas are ~2% proof size and noise-level verify time.
 
 Worked example (`CONJECTURED_LIST`, $\lambda = 100$, $m = 20$, $r_0 = 2$, $k = 4$,
 $m_{\text{fin}} = 4$, so $M = 4$):
