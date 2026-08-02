@@ -1,6 +1,6 @@
 # UltraHonk PCS backends: implemented set and evaluated candidates
 
-Thirteen backends are implemented and benchmarked against each other on identical circuits through
+Thirteen PCS backends are implemented and benchmarked against each other on identical circuits through
 the shared `TransparentHonk` shell (`transparent_honk.hpp`); the sweep lives in
 `whir/whir_honk.bench.cpp` and its output in `pcs_bench_results.json` / `pcs_report.html`.
 
@@ -224,12 +224,30 @@ LDPC codes, whose large-field variant the paper treats in its §6.2. Neither exi
 implementing one means bringing in a new code family together with certified distance parameters —
 work that is substantial, independent of the PCS layer, and shared between the two schemes.
 
-Recommendation: implement the Brakedown/Spielman expander code as a `linear_code` module first. It
-is the common prerequisite, it independently improves Ligero and SwitchFold (both are parameterized
-over the code), and only then does choosing between Lightning and Bolt become a real question. Of
-the two, Bolt is the better target at BN254 — its advantage is stated directly in the operation
-mix we measured, and it reports better proof size than Brakedown rather than worse, whereas
-Lightning explicitly trades 2.4x proof size for its 2.7x prover win.
+**The prerequisite now exists.** `brakedown/` implements the Spielman-style code of
+[2021/1043](https://eprint.iacr.org/2021/1043) — see that module's README for the construction, the
+Figure 2 parameter validation, and the measurements. Two results from it change the picture above:
+
+- *The encoder is genuinely faster, but only modestly.* Against `rs_encode` at rate 1/4 it wins
+  1.13x at 2^12 widening to 1.22x at 2^16, at 26.9 multiplications per symbol (the paper predicts
+  25.5n), emitting 2.3x fewer symbols. The `Θ(n)` versus `Θ(n log n)` gap is real and widening, but
+  bb's RS encoder is a well-optimized parallel FFT, so the constant factors nearly cancel at the
+  sizes this suite covers. The 40x field-work reduction estimated above is an *operation count*,
+  not a wall-clock speedup.
+- *Distance, not encoding speed, is the binding constraint.* Brakedown's relative distance is 0.07
+  against RS's 0.75 at rate 1/4, so the provable interleaved proximity test needs about 2934
+  queries at λ = 100 against RS's 50 — a 59x increase in openings. This is why Brakedown's own
+  paper opens 6593 columns and reports proofs in the tens of megabytes, and it is why the module
+  ships as a reusable code rather than as another `*Honk` backend: dropping it into Ligero or
+  SwitchFold would trade a ~20% encode win for a ~59x query-side proof blowup.
+
+That reframes the remaining work on Lightning and Bolt. Both exist precisely to keep linear-time
+encoding *while recovering distance* — Lightning by compressing a large-distance base code
+(`C_L(m) = m ‖ C_D(mA)`), Bolt via sketched random LDPCs. The measurements above say that recovery
+is the whole value proposition, not the encoding speed, which is a more demanding bar than the
+earlier operation-count argument suggested. Of the two, Bolt remains the better target at BN254: it
+reports better proof size than Brakedown rather than worse, whereas Lightning explicitly trades
+2.4x proof size for its 2.7x prover win — the wrong direction given that proof size is what binds.
 
 ## 8. Carina (eprint 2026/1438) — not implemented
 
@@ -266,13 +284,15 @@ cannot fill UltraHonk's PCS slot:
 
 ## Remaining candidates, prioritized
 
-1. **A linear-time code module** (Brakedown/Spielman expander codes,
-   [2021/1043](https://eprint.iacr.org/2021/1043)) — the single highest-value addition. It is the
-   shared prerequisite for Lightning and Bolt (§7), and it independently speeds up Ligero and
-   SwitchFold, both of which are parameterized over the code.
+1. **Bolt** ([2026/310](https://eprint.iacr.org/2026/310)) — now unblocked: `brakedown/` supplies
+   the linear-time code layer, and Bolt's sketched LDPCs are the distance-recovering variant of it.
+   Distance is the axis that matters (§7), so the module's `BrakedownParams` presets are the place
+   a Bolt code would slot in.
 2. **Titan** ([2026/908](https://eprint.iacr.org/2026/908)) — designed (§6); needs the group-IOPP
    and compressed-sigma machinery plus a resolution of the constant-factor problem.
-3. **Bolt** ([2026/310](https://eprint.iacr.org/2026/310)) — once (1) exists.
+3. **Distance-aware query counts as a shared helper.** Ligero and SwitchFold both hardcode the RS
+   capacity rule `t = ⌈λ/r⌉`. Any non-RS code needs `t = λ / −log₂(1 − δ/3)` instead. Factoring
+   that out is a precondition for benchmarking *any* alternative code end to end, and it is small.
 4. **Carina** ([2026/1438](https://eprint.iacr.org/2026/1438)) — §8; needs the X-coordinate
    linearization.
 5. **zip proof compression** ([2025/1446](https://eprint.iacr.org/2025/1446)) — not a PCS: a
