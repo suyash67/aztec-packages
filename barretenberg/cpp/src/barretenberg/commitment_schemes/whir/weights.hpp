@@ -60,6 +60,20 @@ class WeightTerm {
         return term;
     }
 
+    /**
+     * @brief Append one further (highest) variable carrying an eq factor at `u`.
+     * @details Lets a `pow_weight` over the low variables be restricted to one segment of a
+     * concatenated vector: an eq factor at a constant 0 or 1 is the point mass on that bit.
+     */
+    void append_eq_variable(const fr& u)
+    {
+        a_.push_back(fr(1) - u);
+        b_.push_back(u + u - fr(1));
+    }
+
+    /** @brief Multiply the term's scalar, e.g. by a batching challenge power. */
+    void scale(const fr& factor) { coeff_ *= factor; }
+
     size_t num_remaining_variables() const { return a_.size() - bound_; }
 
     /** @brief Consume the next variable at value alpha: coeff *= (aⱼ + bⱼ·α). */
@@ -83,9 +97,20 @@ class WeightTerm {
     /** @brief table[b] += W(b) over the remaining-variable hypercube (tensor expansion). */
     void accumulate_table(std::span<fr> table) const
     {
+        std::vector<fr> scratch(table.size());
+        accumulate_table(table, scratch);
+    }
+
+    /**
+     * @brief `accumulate_table` against a caller-owned scratch buffer.
+     * @details Accumulating many terms into one table otherwise allocates a full tensor per term,
+     * which dominates when the term count is large (SwitchFold batches one per query per segment).
+     */
+    void accumulate_table(std::span<fr> table, std::vector<fr>& tensor) const
+    {
         const size_t remaining = num_remaining_variables();
         BB_ASSERT_EQ(table.size(), size_t(1) << remaining, "table size mismatch");
-        std::vector<fr> tensor(table.size());
+        tensor.resize(table.size());
         tensor[0] = coeff_;
         for (size_t j = 0; j < remaining; ++j) {
             const size_t built = size_t(1) << j;
