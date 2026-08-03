@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render pcs_report.html from a google-benchmark JSON dump of whir_honk_bench.
 
-    ./build-arm64/bin/whir_honk_bench --benchmark_min_time=1x \
+    ./build-arm64/bin/whir_honk_bench --benchmark_min_time=1x --benchmark_repetitions=3 \
         --benchmark_format=json --benchmark_out=sweep.json
     python3 pcs_report.py sweep.json pcs_bench_results.json pcs_report.html
 
@@ -48,7 +48,8 @@ METRICS = [
 
 PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"]
 
-NAME_RE = re.compile(r"^([a-z0-9_]+)(?:<([A-Za-z0-9]+)>)?/(\d+)$")
+# Plain rows and the aggregates google-benchmark emits under --benchmark_repetitions.
+NAME_RE = re.compile(r"^([a-z0-9_]+)(?:<([A-Za-z0-9]+)>)?/(\d+)(?:_(mean|median|stddev|cv))?$")
 
 
 def parse(path):
@@ -64,11 +65,22 @@ def parse(path):
         if match and entry.get("log_n"):
             realised[int(match.group(3))] = int(entry["log_n"])
 
+    # A single timed run on a laptop is not a measurement: an unrelated process during one
+    # benchmark's window has produced rows off by more than an order of magnitude. When the dump
+    # carries repetitions, take the median row and ignore the individual ones.
+    has_medians = any(NAME_RE.match(e["name"]) and NAME_RE.match(e["name"]).group(4) == "median"
+                      for e in blob.get("benchmarks", []))
+
     for entry in blob.get("benchmarks", []):
         match = NAME_RE.match(entry["name"])
         if not match:
             continue
-        stem, hasher, target = match.groups()
+        stem, hasher, target, aggregate = match.groups()
+        if has_medians:
+            if aggregate != "median":
+                continue
+        elif aggregate is not None:
+            continue
         for suffix, metric in (("_prove", "prove"), ("_verify", "verify")):
             if stem.endswith(suffix):
                 key = (stem[: -len(suffix)], hasher)
@@ -80,7 +92,7 @@ def parse(path):
                 if metric == "prove" and entry.get("proof_KiB"):
                     series.setdefault("proof", {})[log_n] = entry["proof_KiB"]
                 break
-    return out, blob.get("context", {})
+    return out, blob.get("context", {}), has_medians
 
 
 def nice_ticks(lo, hi):
@@ -176,7 +188,7 @@ def chart(series, title, unit, sizes):
 
 def main():
     sweep_path, json_out, html_out = sys.argv[1], sys.argv[2], sys.argv[3]
-    data, context = parse(sweep_path)
+    data, context, has_medians = parse(sweep_path)
 
     sizes = sorted({n for series in data.values() for pts in series.values() for n in pts})
     resolved = [(key, hasher, label, family, slot) for key, hasher, label, family, slot in BACKENDS
@@ -353,7 +365,9 @@ a few percent as noise.</p>
 """
     with open(html_out, "w") as handle:
         handle.write(html)
-    print(f"{len(resolved)} backends, sizes {sizes} -> {html_out}, {json_out}")
+    print(f"{len(resolved)} backends, sizes {sizes} -> {html_out}, {json_out}"
+          f"{'' if has_medians else '  [WARNING: single-shot dump, no repetitions — rerun with '
+                                    '--benchmark_repetitions=3 before trusting timings]'}")
 
 
 if __name__ == "__main__":
