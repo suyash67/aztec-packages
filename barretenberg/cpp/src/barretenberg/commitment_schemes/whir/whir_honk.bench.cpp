@@ -1,4 +1,5 @@
 #include "barretenberg/commitment_schemes/whir/whir_honk.hpp"
+#include "barretenberg/commitment_schemes/brakedown/brakedown_honk.hpp"
 #include "barretenberg/commitment_schemes/dory/dory_honk.hpp"
 #include "barretenberg/commitment_schemes/hyrax/hyrax_honk.hpp"
 #include "barretenberg/commitment_schemes/kzh/kzh3_honk.hpp"
@@ -178,6 +179,43 @@ template <typename Hasher> void ligero_honk_verify(benchmark::State& state)
     }
     if (!ok) {
         state.SkipWithError("LigeroHonk verification failed");
+    }
+}
+
+template <typename Hasher> void brakedown_honk_prove(benchmark::State& state)
+{
+    using Honk = brakedown::BrakedownHonk<Hasher>;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const auto config = Honk::make_config(log_n, WHIR_SECURITY_BITS, WHIR_LOG_INV_RATE);
+    HonkProof proof;
+    for (auto _ : state) {
+        state.PauseTiming();
+        UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+        auto pk = Honk::create_proving_key(builder, config);
+        state.ResumeTiming();
+        proof = Honk::prove(pk);
+    }
+    state.counters["proof_KiB"] = static_cast<double>(proof.size() * 32) / 1024.0;
+    state.counters["log_n"] = static_cast<double>(log_n);
+}
+
+template <typename Hasher> void brakedown_honk_verify(benchmark::State& state)
+{
+    using Honk = brakedown::BrakedownHonk<Hasher>;
+    const size_t target_log_n = static_cast<size_t>(state.range(0));
+    const size_t log_n = actual_log_n(target_log_n, false);
+    const auto config = Honk::make_config(log_n, WHIR_SECURITY_BITS, WHIR_LOG_INV_RATE);
+    UltraCircuitBuilder builder = build_circuit(target_log_n, false);
+    auto pk = Honk::create_proving_key(builder, config);
+    const auto vk = pk.vk;
+    const HonkProof proof = Honk::prove(pk);
+    bool ok = true;
+    for (auto _ : state) {
+        ok = ok && Honk::verify(vk, config, proof);
+    }
+    if (!ok) {
+        state.SkipWithError("BrakedownHonk verification failed");
     }
 }
 
@@ -576,6 +614,8 @@ BENCHMARK_TEMPLATE(ligero_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2
 BENCHMARK_TEMPLATE(ligero_honk_prove, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(ligero_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(ligero_honk_verify, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(brakedown_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(brakedown_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(switchfold_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(switchfold_honk_prove, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(switchfold_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);

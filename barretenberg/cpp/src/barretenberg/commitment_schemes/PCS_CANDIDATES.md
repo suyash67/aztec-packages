@@ -235,7 +235,7 @@ Figure 2 parameter validation, and the measurements. Two results from it change 
   sizes this suite covers. The 40x field-work reduction estimated above is an *operation count*,
   not a wall-clock speedup.
 - *Distance, not encoding speed, is the binding constraint.* Brakedown's relative distance is 0.07
-  against RS's 0.75 at rate 1/4, so the provable interleaved proximity test needs about 2934
+  against RS's 0.75 at rate 1/4, so the provable interleaved proximity test needs about 2936
   queries at λ = 100 against RS's 50 — a 59x increase in openings. This is why Brakedown's own
   paper opens 6593 columns and reports proofs in the tens of megabytes, and it is why the module
   ships as a reusable code rather than as another `*Honk` backend: dropping it into Ligero or

@@ -108,8 +108,8 @@ template <typename Hasher> class LigeroTest : public ::testing::Test {
     {
         auto transcript = std::make_shared<NativeTranscript>(proof);
         [[maybe_unused]] auto init = transcript->template receive_from_prover<fr>("Init");
-        RSDomains domains;
-        return Verifier::verify(config, claims, u, transcript, domains);
+        const RSCodePolicy code(config);
+        return Verifier::verify(config, claims, u, transcript, code);
     }
 };
 

@@ -66,8 +66,8 @@ template <typename Hasher_> struct LigeroPcs {
                                std::span<const fr> u,
                                const std::shared_ptr<Transcript>& transcript)
     {
-        RSDomains domains;
-        return LigeroVerifier<Hasher>::verify(config, claims, u, transcript, domains);
+        const RSCodePolicy code(config);
+        return LigeroVerifier<Hasher>::verify(config, claims, u, transcript, code);
     }
 };
 

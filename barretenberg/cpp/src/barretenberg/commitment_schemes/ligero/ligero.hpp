@@ -5,6 +5,7 @@
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/common/thread.hpp"
+#include "barretenberg/numeric/bitop/get_msb.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
 
 #include <cmath>
@@ -90,13 +91,80 @@ inline size_t index_from_challenge(const fr& challenge, size_t index_bits)
     return static_cast<size_t>(uint256_t(challenge).data[0] & ((uint64_t(1) << index_bits) - 1));
 }
 
+/**
+ * @brief A column index in [0, bound), for codes whose length is not a power of two.
+ * @details Reed-Solomon codewords live on a power-of-two subgroup so a bitmask suffices, but the
+ * linear-time codes have arbitrary lengths; the modulo bias is below 2^-40 at these sizes.
+ */
+inline size_t index_from_challenge_bounded(const fr& challenge, size_t bound)
+{
+    return static_cast<size_t>(uint256_t(challenge).data[0] % bound);
+}
+
+inline size_t next_power_of_two(size_t value)
+{
+    size_t power = 1;
+    while (power < value) {
+        power <<= 1;
+    }
+    return power;
+}
+
 } // namespace detail
 
-/** @brief Transparent commitment key: parameters plus cached FFT domains for the row code. */
-template <typename Hasher> class LigeroCommitmentKey {
+/**
+ * @brief The Reed-Solomon code policy: what Ligero has always used.
+ *
+ * @details A code policy supplies the encoder and the query count. Only two things about the code
+ * enter the protocol - `encode`, and how many columns must be opened - so parameterizing over this
+ * is enough to run the same tensor PCS over a linear-time code (see `brakedown/`). The tree is
+ * built over `padded_codeword_length()` leaves because `MerkleTree` requires a power of two, while
+ * queries are drawn below `codeword_length()`, so padding is never opened and never enters
+ * soundness.
+ */
+struct RSCodePolicy {
+    explicit RSCodePolicy(const LigeroConfig& config)
+        : config(config)
+    {
+        // `encode` is called from `commit_group`'s worker threads, and `RSDomains::get` inserts into
+        // a map. Build the one domain this code needs up front so that `encode` is read-only and
+        // safe to share; without this the concurrent inserts corrupt the map.
+        domains.get(config.codeword_length());
+    }
+
+    size_t message_length() const { return config.num_cols(); }
+    size_t codeword_length() const { return config.codeword_length(); }
+    size_t padded_codeword_length() const { return config.codeword_length(); }
+
+    std::vector<fr> encode(std::span<const fr> row) const
+    {
+        return rs_encode(row, domains.get(config.codeword_length()), domains.round_roots());
+    }
+
+    /** @brief Under the capacity conjecture the per-query error is the rate, giving t = ceil(λ/r). */
+    static size_t num_queries(const LigeroConfig& config) { return config.num_queries; }
+
+    LigeroConfig config;
+    mutable RSDomains domains;
+};
+
+/**
+ * @brief Transparent commitment key: parameters plus the row code.
+ * @tparam Code the code policy; defaults to Reed-Solomon, which is what `LigeroHonk` uses.
+ */
+template <typename Hasher, typename Code = RSCodePolicy> class LigeroCommitmentKey {
   public:
+    using CodePolicy = Code;
+
     explicit LigeroCommitmentKey(const LigeroConfig& config)
         : config(config)
+        , code(config)
+    {}
+
+    template <typename CodeConfig>
+    LigeroCommitmentKey(const LigeroConfig& config, const CodeConfig& code_config)
+        : config(config)
+        , code(code_config)
     {}
 
     /**
@@ -111,7 +179,7 @@ template <typename Hasher> class LigeroCommitmentKey {
         const size_t n = size_t(1) << config.num_variables;
         const size_t num_rows = config.num_rows();
         const size_t num_cols = config.num_cols();
-        const auto& domain = domains.get(config.codeword_length());
+        const size_t padded = code.padded_codeword_length();
 
         std::vector<std::vector<fr>> dense;
         dense.reserve(payload_columns.size());
@@ -124,8 +192,10 @@ template <typename Hasher> class LigeroCommitmentKey {
         std::vector<std::vector<fr>> row_codewords(dense.size() * num_rows);
         parallel_for_range(row_codewords.size(), [&](size_t start, size_t end) {
             for (size_t i = start; i < end; ++i) {
-                const std::span<const fr> row(dense[i / num_rows].data() + (i % num_rows) * num_cols, num_cols);
-                row_codewords[i] = rs_encode(row, domain, domains.round_roots());
+                const std::span<const fr> row(dense[i / num_rows].data() + ((i % num_rows) * num_cols), num_cols);
+                row_codewords[i] = code.encode(row);
+                // The tree needs a power-of-two leaf count; padded positions are never queried.
+                row_codewords[i].resize(padded, fr::zero());
             }
         });
         MerkleTree<Hasher> tree(std::move(row_codewords), /*log_arity=*/0, /*salted=*/false);
@@ -149,7 +219,7 @@ template <typename Hasher> class LigeroCommitmentKey {
     }
 
     LigeroConfig config;
-    mutable RSDomains domains;
+    Code code;
 };
 
 /**
@@ -167,8 +237,10 @@ template <typename Hasher> class LigeroProver {
         bool send_roots = true;
     };
 
-    template <typename Transcript>
-    static void prove(const LigeroCommitmentKey<Hasher>& ck,
+    /** @tparam CommitmentKey any `LigeroCommitmentKey` instantiation; the code enters only through
+     * its codeword length and query count. */
+    template <typename CommitmentKey, typename Transcript>
+    static void prove(const CommitmentKey& ck,
                       const Claims& claims,
                       std::span<const fr> u,
                       const std::shared_ptr<Transcript>& transcript)
@@ -255,10 +327,10 @@ template <typename Hasher> class LigeroProver {
                                      Hasher::digest_to_fields(Hasher::hash_leaf(combined, std::nullopt)));
 
         // Column queries: open every group's tree at each sampled leaf.
-        const size_t index_bits = config.log_num_cols + config.log_inv_rate;
-        for (size_t s = 0; s < config.num_queries; ++s) {
+        const size_t num_queries = CommitmentKey::CodePolicy::num_queries(config);
+        for (size_t s = 0; s < num_queries; ++s) {
             const fr challenge = transcript->template get_challenge<fr>(detail::ligero_label("col", s));
-            const size_t idx = detail::index_from_challenge(challenge, index_bits);
+            const size_t idx = detail::index_from_challenge_bounded(challenge, ck.code.codeword_length());
             for (const LigeroGroupData<Hasher>* group : claims.groups) {
                 const auto opening = group->tree.open(idx);
                 std::vector<fr> flat = opening.values;
@@ -287,12 +359,12 @@ template <typename Hasher> class LigeroVerifier {
         std::vector<Digest> group_roots; // when non-empty, roots are already transcript-bound
     };
 
-    template <typename Transcript>
+    template <typename Code, typename Transcript>
     static bool verify(const LigeroConfig& config,
                        const Claims& claims,
                        std::span<const fr> u,
                        const std::shared_ptr<Transcript>& transcript,
-                       RSDomains& domains)
+                       const Code& code)
     {
         const size_t num_rows = config.num_rows();
         const size_t num_cols = config.num_cols();
@@ -351,16 +423,17 @@ template <typename Hasher> class LigeroVerifier {
         }
 
         // Encodings of the combined rows, for the per-column consistency checks.
-        const auto& domain = domains.get(config.codeword_length());
-        const std::vector<fr> enc_u = rs_encode(w_u, domain, domains.round_roots());
-        const std::vector<fr> enc_s = rs_encode(w_s, domain, domains.round_roots());
-        const std::vector<fr> enc_s2 = rs_encode(w_s2, domain, domains.round_roots());
+        const std::vector<fr> enc_u = code.encode(w_u);
+        const std::vector<fr> enc_s = code.encode(w_s);
+        const std::vector<fr> enc_s2 = code.encode(w_s2);
 
         // Column checks: authenticate each opened column and test the three linear combinations.
-        const size_t index_bits = config.log_num_cols + config.log_inv_rate;
-        for (size_t s = 0; s < config.num_queries; ++s) {
+        // The path length follows the padded tree; queries stay inside the true codeword.
+        const size_t index_bits = numeric::get_msb(code.padded_codeword_length());
+        const size_t num_queries = Code::num_queries(config);
+        for (size_t s = 0; s < num_queries; ++s) {
             const fr challenge = transcript->template get_challenge<fr>(detail::ligero_label("col", s));
-            const size_t idx = detail::index_from_challenge(challenge, index_bits);
+            const size_t idx = detail::index_from_challenge_bounded(challenge, code.codeword_length());
             fr acc_u = fr::zero();
             fr acc_s = fr::zero();
             fr acc_s2 = fr::zero();

@@ -81,14 +81,34 @@ Reed–Solomon's 0.75 at rate 1/4 under the capacity conjecture. Under the prova
 proximity test, per-query soundness is `1 − δ/3`, so at λ = 100:
 
 - RS at rate 1/4: `⌈100/2⌉` = **50 queries**
-- Brakedown at δ = 0.07: `100 / −log₂(1 − 0.07/3)` ≈ **2934 queries**
+- Brakedown at δ = 0.07: `100 / −log₂(1 − 0.07/3)` ≈ **2936 queries**
 
 Roughly 59x more openings, which is why Brakedown's own paper reports opening 6593 columns and why
-its proofs are measured in tens of megabytes. A modestly faster encoder does not pay for that in
-any setting where proof size matters — which is the honest reason this module ships as a code
-rather than as another `*Honk` backend.
+its proofs are measured in tens of megabytes.
 
-## 5. What it unblocks
+## 5. End to end: `BrakedownHonk`
+
+`brakedown_honk.hpp` runs Ligero's tensor PCS over this code (the protocol is code-agnostic; see
+`ligero/RSCodePolicy`), so `LigeroHonk` and `BrakedownHonk` are a controlled A/B — same trace, same
+tensor protocol, same Merkle hasher, only the row code and the query rule differ. Measured with the
+Blake3s hasher:
+
+| | Ligero (RS) | Brakedown | ratio |
+|---|---|---|---|
+| prove 2^14 | 40.3 ms | 78.0 ms | **1.9x slower** |
+| verify 2^14 | 8.07 ms | 174 ms | **21.6x slower** |
+| proof 2^14 | 833 KiB | 20.2 MiB | **24.8x larger** |
+
+**The faster encoder does not even win the prover.** Opening 2936 Merkle paths costs more than the
+~20% saved on encoding, so Brakedown loses on all three axes at once. The 59x query ratio shows up
+as ~25x proof size (the combined rows and sumcheck do not scale with queries, which dilutes it) and
+~22x verification, since the verifier authenticates every one of those openings.
+
+This is the honest baseline the linear-time-code line has to beat, and it is why the module's value
+is as a reusable encoder rather than as a competitive backend. It also locates the real target
+precisely: not encoding speed, but distance.
+
+## 6. What it unblocks
 
 Lightning ([2026/258](https://eprint.iacr.org/2026/258)) and Bolt
 ([2026/310](https://eprint.iacr.org/2026/310)) both need a constant-relative-distance linear-time
