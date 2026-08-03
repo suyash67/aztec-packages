@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PCS review — correctness, efficiency, and the pluggable-backend question</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface:#fcfcfb; --plane:#f9f9f7; --ink1:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+    --c1:#0e6f77; --c2:#a35a00; --c3:#5f43ad; --c4:#a82a57; --c5:#2b6f3c; --c6:#8a6d00;
+    --c1bg:rgba(14,111,119,.10); --c2bg:rgba(163,90,0,.10); --c3bg:rgba(95,67,173,.10);
+    --c4bg:rgba(168,42,87,.10); --c5bg:rgba(43,111,60,.10); --c6bg:rgba(138,109,0,.10);
+    --ok:#2b6f3c; --warn:#a35a00; --bad:#a82a57;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink1);
+    background:var(--plane); margin:0; padding:28px 20px 60px;
+    font-size:15px; line-height:1.62;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface:#1a1a19; --plane:#0d0d0d; --ink1:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+      --c1:#5ad2da; --c2:#f0a33c; --c3:#ab93f2; --c4:#f47da3; --c5:#72cb84; --c6:#dcc25e;
+      --c1bg:rgba(90,210,218,.13); --c2bg:rgba(240,163,60,.13); --c3bg:rgba(171,147,242,.13);
+      --c4bg:rgba(244,125,163,.13); --c5bg:rgba(114,203,132,.13); --c6bg:rgba(220,194,94,.13);
+      --ok:#72cb84; --warn:#f0a33c; --bad:#f47da3;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface:#1a1a19; --plane:#0d0d0d; --ink1:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --c1:#5ad2da; --c2:#f0a33c; --c3:#ab93f2; --c4:#f47da3; --c5:#72cb84; --c6:#dcc25e;
+    --c1bg:rgba(90,210,218,.13); --c2bg:rgba(240,163,60,.13); --c3bg:rgba(171,147,242,.13);
+    --c4bg:rgba(244,125,163,.13); --c5bg:rgba(114,203,132,.13); --c6bg:rgba(220,194,94,.13);
+    --ok:#72cb84; --warn:#f0a33c; --bad:#f47da3;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 27px; margin: 0 0 8px; line-height:1.25; }
+  h2 { font-size: 20px; margin: 46px 0 6px; padding-top:14px; border-top:1px solid var(--grid); }
+  h3 { font-size: 16px; margin: 28px 0 4px; }
+  h4 { font-size: 14.5px; margin: 20px 0 2px; color:var(--ink2); }
+  p { max-width: 78ch; }
+  .lede { color: var(--ink2); max-width: 78ch; margin-bottom: 22px; }
+  .meta { color: var(--muted); font-size:13px; margin-top:-4px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.88em;
+         background:var(--c1bg); padding:1px 5px; border-radius:4px; }
+  pre { background:var(--surface); border:1px solid var(--ring); border-radius:8px;
+        padding:12px 14px; overflow-x:auto; font-size:12.5px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+
+  /* ---- equation blocks ---- */
+  .eq { background:var(--surface); border:1px solid var(--ring); border-radius:10px;
+        padding:18px 20px; margin:16px 0; overflow-x:auto; }
+  .eq .line { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+              font-size:19px; line-height:2.0; white-space:nowrap; }
+  .eq .line + .line { margin-top:6px; }
+  .v { font-style:italic; }
+  .op { color:var(--ink2); padding:0 .12em; }
+  .big { font-size:1.25em; vertical-align:-.12em; }
+  sub, sup { font-size:.68em; font-style:normal; }
+  .t1,.t2,.t3,.t4,.t5,.t6 { border-radius:4px; padding:2px 4px; }
+  .t1 { color:var(--c1); background:var(--c1bg); }
+  .t2 { color:var(--c2); background:var(--c2bg); }
+  .t3 { color:var(--c3); background:var(--c3bg); }
+  .t4 { color:var(--c4); background:var(--c4bg); }
+  .t5 { color:var(--c5); background:var(--c5bg); }
+  .t6 { color:var(--c6); background:var(--c6bg); }
+  .legend { margin-top:14px; border-top:1px dashed var(--grid); padding-top:12px;
+            display:grid; gap:7px; font-size:13.5px; color:var(--ink2); }
+  .legend div { display:grid; grid-template-columns: 15px 1fr; gap:10px; align-items:start; }
+  .sw { width:11px; height:11px; border-radius:3px; margin-top:6px; }
+  .sw1{background:var(--c1)} .sw2{background:var(--c2)} .sw3{background:var(--c3)}
+  .sw4{background:var(--c4)} .sw5{background:var(--c5)} .sw6{background:var(--c6)}
+  .legend b { color:var(--ink1); font-weight:600; }
+  .eqcap { font-size:13px; color:var(--muted); margin:6px 0 0; }
+
+  /* ---- tiles ---- */
+  .tiles { display:flex; flex-wrap:wrap; gap:12px; margin: 22px 0 10px; }
+  .tile { background:var(--surface); border:1px solid var(--ring); border-radius:10px;
+          padding:14px 18px; min-width:130px; flex:1 1 150px; }
+  .tv { font-size:23px; font-weight:650; letter-spacing:-.01em; }
+  .tl { font-size:12.5px; color:var(--ink2); margin-top:3px; line-height:1.4; }
+  .tv.good { color:var(--ok); } .tv.bad { color:var(--bad); } .tv.warn { color:var(--warn); }
+
+  /* ---- tables ---- */
+  .tablewrap { overflow-x:auto; background:var(--surface); border:1px solid var(--ring);
+               border-radius:10px; padding:6px 8px; margin:14px 0; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th, td { text-align:right; padding:7px 11px; border-bottom:1px solid var(--grid);
+           font-variant-numeric: tabular-nums; }
+  th { color:var(--ink2); font-weight:600; white-space:nowrap; }
+  td:first-child, th:first-child { text-align:left; font-weight:600; white-space:nowrap; }
+  td.l, th.l { text-align:left; font-weight:400; }
+  tr:last-child td { border-bottom:none; }
+  .pill { font-size:11.5px; padding:2px 8px; border-radius:20px; font-weight:600;
+          display:inline-block; white-space:nowrap; }
+  .pill.yes { color:var(--ok); background:var(--c5bg); }
+  .pill.no  { color:var(--bad); background:var(--c4bg); }
+  .pill.test{ color:var(--warn); background:var(--c2bg); }
+
+  /* ---- callouts ---- */
+  .note { border-left:3px solid var(--c1); background:var(--surface); border-radius:0 8px 8px 0;
+          padding:12px 16px; margin:16px 0; font-size:14px; }
+  .note.warn { border-left-color:var(--warn); }
+  .note.bad  { border-left-color:var(--bad); }
+  .note.ok   { border-left-color:var(--ok); }
+  .note p { margin:0; max-width:none; }
+  .note p + p { margin-top:8px; }
+
+  svg { width:100%; height:auto; display:block; overflow:visible; }
+  .gridline { stroke:var(--grid); stroke-width:1; }
+  .tick { fill:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+  .blab { fill:var(--ink1); font-size:12.5px; font-weight:600; }
+  .bval { fill:var(--ink2); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  footer { color:var(--muted); font-size:12.5px; margin-top:44px; padding-top:14px;
+           border-top:1px solid var(--grid); }
+  ul { max-width:78ch; } li { margin:5px 0; }
+</style>
+</head>
+<body>
+<div class="viz-root"><div class="wrap">
+
+<h1>Polynomial commitment schemes in barretenberg</h1>
+<p class="lede">Correctness and efficiency review of all fifteen UltraHonk PCS backends, and an answer to
+one question: <b>can a Noir-like frontend expose the commitment scheme as a user-selectable backend?</b>
+This page is the visual companion to <code>PCS_REVIEW.md</code>, which is the complete record.</p>
+<p class="meta">Apple M4 Pro, arm64, <code>DISABLE_ASM=1</code>. 246 tests passing, 2 pre-existing skips.
+Equations below are colour-annotated term by term.</p>
+
+<div class="tiles">
+  <div class="tile"><div class="tv">15</div><div class="tl">backends behind one shell</div></div>
+  <div class="tile"><div class="tv good">0</div><div class="tl">soundness breaks found in protocol logic</div></div>
+  <div class="tile"><div class="tv bad">13</div><div class="tl">backends with <b>no zero-knowledge</b></div></div>
+  <div class="tile"><div class="tv warn">4</div><div class="tl">backends with test-only setups</div></div>
+  <div class="tile"><div class="tv good">13.3&times;</div><div class="tl">IPA prover speedup from this review</div></div>
+</div>
+
+<h2>1. What a backend actually plugs into</h2>
+
+<p><code>TransparentHonk&lt;Pcs&gt;</code> is the shell. Everything above the commitment layer —
+arithmetization, the Ultra relation set, memory records, log-derivative lookups, the grand product,
+sumcheck, the Fiat–Shamir schedule — is shared verbatim with the production prover. A backend supplies
+only a config, a commitment key, a commitment type, and a prove/verify pair for
+<em>one multilinear opening</em>.</p>
+
+<p>After sumcheck at challenge <span class="v">u&#8407;</span>, the PCS receives <b>41 claims over 36
+committed columns</b>:</p>
+
+<div class="eq">
+  <div class="line">
+    <span class="t1"><span class="v">P<sub>i</sub></span>(<span class="v">u&#8407;</span>) = <span class="v">v<sub>i</sub></span></span>
+    <span class="op">for</span> <span class="v">i</span> = 1&hellip;36
+    <span class="op">&nbsp;&nbsp;and&nbsp;&nbsp;</span>
+    <span class="t2">shift(<span class="v">P<sub>j</sub></span>)(<span class="v">u&#8407;</span>) = <span class="v">w<sub>j</sub></span></span>
+    <span class="op">for</span> <span class="v">j</span> = 1&hellip;5
+  </div>
+  <div class="line" style="font-size:16px">
+    <span class="op">where</span>&nbsp;&nbsp;<span class="t2">shift(<span class="v">P</span>)[<span class="v">i</span>] := <span class="v">P</span>[<span class="v">i</span>+1]</span>
+    <span class="op">&nbsp;&nbsp;and&nbsp;&nbsp;</span> <span class="v">N</span> = 2<sup><span class="v">n</span></sup>
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>Unshifted claims.</b> Ordinary multilinear evaluations of
+      each committed column at the sumcheck challenge.</span></div>
+    <div><span class="sw sw2"></span><span><b>Shifted claims.</b> The by-one shift of five columns. Every
+      backend needs its own way to open these <em>without</em> a second commitment — §1.2 below. This is
+      where new backends most often go wrong.</span></div>
+  </div>
+</div>
+
+<h3>1.1 One array, two bases</h3>
+<p>A polynomial is one dense array of length <span class="v">N</span>, read simultaneously as a
+multilinear evaluation table <em>and</em> as univariate coefficients. The stride-2 Lagrange fold serves
+both readings at once, which is why fifteen schemes can share one data layout:</p>
+
+<div class="eq">
+  <div class="line">
+    <span class="v">a&prime;</span>[<span class="v">j</span>] <span class="op">=</span>
+    <span class="t1">(1 &minus; &alpha;)&thinsp;<span class="v">a</span>[2<span class="v">j</span>]</span>
+    <span class="op">+</span>
+    <span class="t2">&alpha;&thinsp;<span class="v">a</span>[2<span class="v">j</span>+1]</span>
+  </div>
+  <div class="line" style="font-size:16.5px">
+    <span class="t3"><span class="v">A</span>(<span class="v">X</span>) = <span class="v">A<sub>e</sub></span>(<span class="v">X</span><sup>2</sup>) + <span class="v">X&thinsp;A<sub>o</sub></span>(<span class="v">X</span><sup>2</sup>)</span>
+    <span class="op">&#8658;</span>
+    <span class="t4"><span class="v">A&prime;</span>(<span class="v">Y</span>) = (1&minus;&alpha;)<span class="v">A<sub>e</sub></span>(<span class="v">Y</span>) + &alpha;<span class="v">A<sub>o</sub></span>(<span class="v">Y</span>)</span>
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>Even half</b> — as a multilinear, this is the
+      <span class="v">X</span><sub>1</sub> = 0 restriction; as a univariate, the even coefficients.</span></div>
+    <div><span class="sw sw2"></span><span><b>Odd half</b> — the <span class="v">X</span><sub>1</sub> = 1
+      restriction, and the odd coefficients.</span></div>
+    <div><span class="sw sw3"></span><span><b>Univariate split.</b> The same array read as a degree-&lt;<span class="v">N</span>
+      polynomial.</span></div>
+    <div><span class="sw sw4"></span><span><b>The folded univariate.</b> One loop, both readings, no basis
+      conversion — Gemini, WHIR, Mercury, Vela and SwitchFold all rely on this.</span></div>
+  </div>
+</div>
+
+<h3>1.2 Three ways to handle the Honk shift</h3>
+
+<h4>(a) Univariate division — Gemini/Shplemini, WHIR, Mercury, Vela</h4>
+<p>The univariate twin of the shift is exactly <span class="v">P</span>(<span class="v">X</span>)/<span class="v">X</span>,
+an <em>exact</em> division because the shift contract forces <span class="v">P</span>[0] = 0. Mercury
+multiplies its fold identity through by <span class="v">X</span> so the verifier can keep using the
+<em>unshifted</em> commitment:</p>
+
+<div class="eq">
+  <div class="line">
+    <span class="t1"><span class="v">B</span>(<span class="v">X</span>)</span>
+    <span class="op">=</span>
+    <span class="t2"><span class="v">Q</span>(<span class="v">X</span>)</span>
+    (<span class="v">X<sup>b</sup></span> &minus; &alpha;)
+    <span class="op">+</span>
+    <span class="t3"><span class="v">X&thinsp;g<sub>B</sub></span>(<span class="v">X</span>)</span>
+    <span class="op">,</span>&nbsp;&nbsp;
+    <span class="t2"><span class="v">Q</span>(<span class="v">X</span>) := <span class="v">X&thinsp;q<sub>B</sub></span>(<span class="v">X</span>)</span>
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>The unshifted polynomial</b> — the verifier already holds
+      its homomorphic commitment, so nothing new is committed for the shift.</span></div>
+    <div><span class="sw sw2"></span><span><b>The quotient, pre-multiplied by <span class="v">X</span>.</b>
+      This absorption is the trick: it moves the <span class="v">X</span><sup>&minus;1</sup> off the
+      committed side.</span></div>
+    <div><span class="sw sw3"></span><span><b>Remainder, <span class="v">&zeta;</span>-scaled at check
+      time.</b> Precondition: <span class="v">P</span>[0] = 0, asserted at prove time (finding §3.7).</span></div>
+  </div>
+</div>
+
+<h4>(b) Rank-2 tensor decomposition — Ligero, SwitchFold, Hyrax, KZH2, Dory</h4>
+<p>The shifted-eq weight vector is <em>not</em> a tensor, so it cannot be fed to a tensor-query PCS
+directly. But it is a sum of exactly two tensors, which is enough:</p>
+
+<div class="eq">
+  <div class="line">
+    <span class="v">Q&prime;</span>
+    <span class="op">=</span>
+    <span class="t1"><span class="v">b</span> &otimes; shr(<span class="v">a</span>)</span>
+    <span class="op">+</span>
+    <span class="t2">shr(<span class="v">b</span>) &otimes; (<span class="v">a<sub>C&minus;1</sub></span> <span class="v">e</span><sub>0</sub>)</span>
+  </div>
+  <div class="line" style="font-size:16px">
+    <span class="op">index</span> <span class="v">j</span> = <span class="v">rC</span> + <span class="v">c</span><span class="op">,</span>&nbsp;
+    <span class="t1"><span class="v">Q&prime;<sub>r,c</sub></span> = <span class="v">b<sub>r</sub>a<sub>c&minus;1</sub></span> (<span class="v">c</span> &ge; 1)</span><span class="op">,</span>&nbsp;
+    <span class="t2"><span class="v">Q&prime;<sub>r,0</sub></span> = <span class="v">b<sub>r&minus;1</sub>a<sub>C&minus;1</sub></span> (<span class="v">r</span> &ge; 1)</span><span class="op">,</span>&nbsp;
+    <span class="t5"><span class="v">Q&prime;</span><sub>0,0</sub> = 0</span>
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>Main term.</b> Reuses the row direction <span class="v">b</span>
+      unchanged and pairs it with the column shift — one extra combined row.</span></div>
+    <div><span class="sw sw2"></span><span><b>Carry term.</b> Handles the wrap from column 0 to the previous
+      row. It costs a second combined row, of which <em>only entry 0</em> is ever used.</span></div>
+    <div><span class="sw sw5"></span><span><b>The dropped corner.</b> Because this entry is zeroed
+      structurally, contract (b) needs <em>no</em> zero-constant-term precondition — unlike (a).</span></div>
+  </div>
+  <p class="eqcap">KZH3 extends this to rank 3: the shift of the flattened index
+    <span class="v">k</span> = (<span class="v">i</span><sub>1</sub><span class="v">d</span><sub>2</sub>+<span class="v">i</span><sub>2</sub>)<span class="v">d</span><sub>3</sub>+<span class="v">i</span><sub>3</sub>
+    crosses two boundaries, adding a second carry. Verified term by term.</p>
+</div>
+
+<h4>(c) Successor-kernel closed form — Pedersen IPA, Dory's scalar side</h4>
+<p>The IPA fold collapses the whole weight vector to one scalar. For the plain eq tensor that is a
+product; for the <em>shifted</em> eq vector it telescopes, and the derivation is the pretty one in the
+suite — split on the position of the <b>lowest set bit</b> of the index, because that is exactly the bit
+that <span class="v">i</span>&nbsp;&minus;&nbsp;1 clears:</p>
+
+<div class="eq">
+  <div class="line">
+    <span class="big">&sum;</span><sub class="v">k</sub>
+    <span class="t1"><span class="big">&prod;</span><sub><span class="v">j</span>&lt;<span class="v">k</span></sub> <span class="v">u<sub>j</sub></span></span>
+    <span class="op">&middot;</span>
+    <span class="t2">(1 &minus; <span class="v">u<sub>k</sub></span>)</span>
+    <span class="op">&middot;</span>
+    <span class="t3"><span class="v">m<sub>k</sub></span></span>
+    <span class="op">&middot;</span>
+    <span class="t4"><span class="big">&prod;</span><sub><span class="v">j</span>&gt;<span class="v">k</span></sub> ((1 &minus; <span class="v">u<sub>j</sub></span>) + <span class="v">u<sub>j</sub>m<sub>j</sub></span>)</span>
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>Bits below <span class="v">k</span> are all set</b> in
+      <span class="v">i</span>&minus;1 (the borrow filled them), so each contributes its
+      <span class="v">u<sub>j</sub></span> factor.</span></div>
+    <div><span class="sw sw2"></span><span><b>Bit <span class="v">k</span> is cleared</b> in
+      <span class="v">i</span>&minus;1 — one (1&minus;<span class="v">u<sub>k</sub></span>) factor.</span></div>
+    <div><span class="sw sw3"></span><span><b>The IPA fold multiplier</b> for that bit position. In the
+      lo/hi round schedule this is the round challenge inverse <em>in reverse order</em> — the subtlety
+      that §4.2's rewrite had to get right.</span></div>
+    <div><span class="sw sw4"></span><span><b>Bits above <span class="v">k</span> are unconstrained</b>,
+      so they contribute the ordinary eq-fold factor. The verifier never touches a shifted
+      commitment.</span></div>
+  </div>
+</div>
+
+<h2>2. The two most elegant constructions in the suite</h2>
+
+<h3>Mercury's Laurent identity — extracting an inner product from a constant term</h3>
+<p>Mercury has to prove two inner products. Instead of two arguments it batches them into a single
+Laurent-polynomial identity, whose <em>constant term</em> is exactly the quantity of interest:</p>
+
+<div class="eq">
+  <div class="line">
+    <span class="t1"><span class="big">&sum;</span><sub class="v">k</sub> &gamma;<sup class="v">k</sup>
+      (<span class="v">p<sub>k</sub></span>(<span class="v">X</span>)<span class="v">r<sub>k</sub></span>(1/<span class="v">X</span>)
+      + <span class="v">p<sub>k</sub></span>(1/<span class="v">X</span>)<span class="v">r<sub>k</sub></span>(<span class="v">X</span>))</span>
+    <span class="op">=</span>
+    <span class="t2">2<span class="big">&sum;</span><sub class="v">k</sub> &gamma;<sup class="v">k</sup><span class="v">c<sub>k</sub></span></span>
+    <span class="op">+</span>
+    <span class="t3"><span class="v">X&thinsp;S</span>(<span class="v">X</span>) + <span class="v">X</span><sup>&minus;1</sup><span class="v">S</span>(1/<span class="v">X</span>)</span>
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>An inversion-symmetric product.</b> Its coefficient at
+      <span class="v">X<sup>k</sup></span> is
+      &sum;<sub><span class="v">i</span>&ge;<span class="v">k</span></sub>(<span class="v">p<sub>i</sub>r<sub>i&minus;k</sub></span>
+      + <span class="v">p<sub>i&minus;k</sub>r<sub>i</sub></span>) — verified coefficient by coefficient
+      against <code>accumulate_ip_terms</code>.</span></div>
+    <div><span class="sw sw2"></span><span><b>The inner products, doubled.</b> This is the only place the
+      constant term can come from — which is the whole point.</span></div>
+    <div><span class="sw sw3"></span><span><b>The witness polynomial, structurally constant-term-free.</b>
+      For <em>any</em> <span class="v">S</span> whatsoever, this pair contributes nothing at
+      <span class="v">X</span><sup>0</sup>. That is why <b>no degree bound on <span class="v">S</span> is
+      needed</b> — and correspondingly none is implemented. A reviewer looking for a missing degree check
+      here would be wrong.</span></div>
+  </div>
+</div>
+
+<h3>Vela — the evaluation the verifier is never sent</h3>
+<p>Vela reads the multilinear claim as the constant coefficient of a Laurent product, then exploits its
+inversion symmetry to compress the opening into a single auxiliary polynomial. The striking part is the
+last step: one of the four evaluations is <b>never transmitted</b>.</p>
+
+<div class="eq">
+  <div class="line" style="font-size:17px">
+    <span class="t1"><span class="v">H</span>(<span class="v">X</span>) = <span class="v">f<sub>v</sub></span>(<span class="v">X</span>) &middot; <span class="v">T<sub>r&#8407;</sub></span>(1/<span class="v">X</span>)</span>
+    <span class="op">,</span>&nbsp;&nbsp;
+    <span class="t2">[<span class="v">X</span><sup>0</sup>]<span class="v">H</span> = <span class="v">y</span></span>
+    <span class="op">&nbsp;&#8660;&nbsp;</span> the claim holds
+  </div>
+  <div class="line" style="font-size:17px">
+    <span class="t3"><span class="v">D</span>(<span class="v">X</span>) = <span class="v">H</span>(<span class="v">X</span>) + <span class="v">H</span>(1/<span class="v">X</span>) &minus; 2<span class="v">y</span></span>
+    <span class="op">=</span>
+    <span class="t4"><span class="v">X&thinsp;h</span>(<span class="v">X</span>) + <span class="v">X</span><sup>&minus;1</sup><span class="v">h</span>(1/<span class="v">X</span>)</span>
+  </div>
+  <div class="line" style="font-size:17px">
+    <span class="t5"><span class="v">w</span><sub>1</sub></span>
+    <span class="op">=</span>
+    <span class="v">z</span>&thinsp;(
+    <span class="v">g</span>(<span class="v">z</span>)<span class="v">T<sub>r&#8407;</sub></span>(1/<span class="v">z</span>)
+    + <span class="v">g</span>(1/<span class="v">z</span>)<span class="v">T<sub>r&#8407;</sub></span>(<span class="v">z</span>)
+    &minus; 2<span class="v">Y</span> &minus; <span class="v">z&thinsp;w</span><sub>0</sub> )
+  </div>
+  <div class="legend">
+    <div><span class="sw sw1"></span><span><b>The Laurent twin.</b>
+      <span class="v">T<sub>r&#8407;</sub></span>(<span class="v">X</span>) = &prod;<sub class="v">k</sub>((1&minus;<span class="v">r<sub>k</sub></span>)
+      + <span class="v">r<sub>k</sub></span><span class="v">X</span><sup>2<sup class="v">k</sup></sup>); its
+      inverse-variable form has <span class="v">eq<sub>i</sub></span>(<span class="v">r&#8407;</span>) at
+      exponent &minus;<span class="v">i</span>.</span></div>
+    <div><span class="sw sw2"></span><span><b>The claim, encoded as a constant coefficient.</b></span></div>
+    <div><span class="sw sw3"></span><span><b>The residual</b>, whose constant coefficient is
+      2([<span class="v">X</span><sup>0</sup>]<span class="v">H</span> &minus; <span class="v">y</span>) —
+      zero <em>exactly</em> when the claim is true.</span></div>
+    <div><span class="sw sw4"></span><span><b>Symmetry pays off.</b> Because
+      <span class="v">D<sub>k</sub></span> = <span class="v">D</span><sub>&minus;<span class="v">k</span></sub>,
+      the whole residual is carried by <em>one</em> ordinary polynomial
+      <span class="v">h</span>.</span></div>
+    <div><span class="sw sw5"></span><span><b>The evaluation that is never sent.</b> The verifier
+      <em>derives</em> <span class="v">h</span>(1/<span class="v">z</span>) from the identity being proved,
+      then uses it in the two-point opening. A lying prover's <em>recovered</em> value is inconsistent and
+      the opening fails. The constraint is enforced by making the verifier compute, rather than check,
+      the value.</span></div>
+  </div>
+  <p class="eqcap">Deviation from the paper, forced by bb's SRS: the two-point check would need
+    [<span class="v">&tau;</span><sup>2</sup>]<sub>2</sub>, and bb publishes only [1]<sub>2</sub>,
+    [<span class="v">&tau;</span>]<sub>2</sub>. The degree-2 vanishing is therefore linearized at one
+    further challenge — one extra G<sub>1</sub> element. Sound: the linearized check at a random
+    <span class="v">&zeta;</span> drawn after <span class="v">C<sub>q</sub></span> forces the identity.</p>
+</div>
+
+<h2>3. All fifteen backends</h2>
+<p>Prove times are ratios to the KZG baseline measured in the same run (see §5 for why); verify and
+proof size are absolute, at <span class="v">N</span> = 2<sup>18</sup>.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Backend</th><th class="l">Family</th><th class="l">Trust</th><th>Prove</th><th>Verify</th><th>Proof</th><th class="l">zk</th></tr></thead>
+<tbody>
+<tr><td>Gemini+Shplonk+KZG</td><td class="l">pairing</td><td class="l">SRS ceremony</td><td>1.00&times;</td><td>4.7 ms</td><td>13.3 KiB</td><td class="l"><span class="pill yes">yes</span></td></tr>
+<tr><td>Mercury</td><td class="l">pairing, constant-size</td><td class="l">SRS ceremony</td><td>1.14&times;</td><td>4.2 ms</td><td>9.4 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>Vela</td><td class="l">pairing, reciprocal</td><td class="l">SRS ceremony</td><td>1.18&times;</td><td><b>3.5 ms</b></td><td><b>7.8 KiB</b></td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>CHOPIN</td><td class="l">pairing, bivariate KZG</td><td class="l"><span class="pill test">test-only</span></td><td><b>0.81&times;</b></td><td>4.7 ms</td><td>9.2 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>KZH2</td><td class="l">pairing, &radic;N</td><td class="l"><span class="pill test">test-only</span></td><td>~14&times;</td><td>216 ms</td><td>183.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>KZH3</td><td class="l">pairing, &#8731;N</td><td class="l"><span class="pill test">test-only</span></td><td>~46&times;</td><td>79.7 ms</td><td>55.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>Dory</td><td class="l">pairing, two-tier</td><td class="l"><span class="pill test">test-only</span></td><td>~12&times;</td><td>362 ms</td><td>94.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>IPA (Pedersen)</td><td class="l">DL</td><td class="l">transparent</td><td>~5.6&times;</td><td>3596 ms</td><td>16.4 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>Hyrax</td><td class="l">DL, Pedersen rows</td><td class="l">transparent</td><td>~11&times;</td><td>243 ms</td><td>566.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>WHIR</td><td class="l">hash, RS folding</td><td class="l">transparent</td><td>1.08&times;</td><td>13.5 ms</td><td>1219.7 KiB</td><td class="l"><span class="pill yes">yes</span></td></tr>
+<tr><td>SwitchFold</td><td class="l">hash, code switching</td><td class="l">transparent</td><td>2.50&times;</td><td>13.6 ms</td><td>772.9 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>Ligero</td><td class="l">hash, tensor &radic;N</td><td class="l">transparent</td><td><b>0.72&times;</b></td><td>20.6 ms</td><td>2692.6 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>BrakedownHonk</td><td class="l">hash, linear-time code</td><td class="l">transparent</td><td>1.9&times; Ligero</td><td>21.6&times; Ligero</td><td>20.2 MiB @2<sup>14</sup></td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>Bolt</td><td class="l">hash, sketched LDPC</td><td class="l">transparent</td><td colspan="3" class="l" style="color:var(--muted)">landed during this review — see <code>bolt/README.md</code></td><td class="l"><span class="pill no">none</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>4. Correctness findings</h2>
+<p>No soundness break was found in any backend's protocol logic. Every Fiat–Shamir ordering is correct
+(each challenge is drawn strictly after the messages it must bind). Seven findings; the material ones:</p>
+
+<div class="note warn">
+<p><b>§3.1 &mdash; Four backends ship deliberately insecure setups.</b> KZH2 and KZH3 sample their own
+trapdoors in-process; CHOPIN fixes <span class="v">&tau;<sub>Y</sub></span>&nbsp;=&nbsp;2 and publishes
+[<span class="v">&tau;<sub>Y</sub></span>]<sub>2</sub>&nbsp;=&nbsp;2[1]<sub>2</sub>; Dory uses
+&Gamma;<sub>2,<span class="v">i</span></sub>&nbsp;=&nbsp;<span class="v">s<sub>i</sub></span>G<sub>2</sub>
+with public <span class="v">s<sub>i</sub></span>, which destroys AFGHO binding.</p>
+<p>All four are labelled <code>@warning Test-only</code> and the honest-prover cost is unaffected — that
+is the point of the shortcut. But it means <b>those four rows in the table are performance models, not
+security claims.</b> Dory's fix is mechanical (hash-to-G<sub>2</sub>); CHOPIN's needs a
+<em>bivariate</em> ceremony that does not exist.</p>
+</div>
+
+<div class="note warn">
+<p><b>§3.2 &mdash; The Reed–Solomon query count rests on a disproved conjecture.</b>
+<code>RSCodePolicy</code> returns <span class="v">t</span> = &lceil;&lambda;/<span class="v">r</span>&rceil;,
+the up-to-capacity rule. Crites–Stewart (2025/2046) disproved the conjecture it rests on, replacing
+&delta; &le; 1&minus;&rho;&minus;&eta; by <span class="v">H<sub>q</sub></span>(&delta;) &le;
+1&minus;&rho;&minus;&eta;. WHIR ships a repaired preset (+1 query, ~2% proof at BN254); Ligero and
+SwitchFold do not.</p>
+<p><b>Half of this closed while the review was being written.</b> The shared, distance-parameterized
+query hook landed — <code>QuerySegment</code> plus <code>query_plan</code>, with Brakedown using the
+provable rule and Bolt returning <em>two</em> segments for its piecewise-distance code. What remains:
+<code>RSCodePolicy</code> still has no repaired variant, and SwitchFold is not wired to the hook.</p>
+</div>
+
+<div class="note bad">
+<p><b>§3.3 &mdash; The Ligero-family proximity test rides on the opening point being a challenge.</b>
+Ligero, SwitchFold and Hyrax use a <em>single</em> combination for two jobs: the same eq-weighted
+combined rows serve as the proximity test <em>and</em> the evaluation extraction. Classical
+Ligero/Brakedown run a separate test with a uniformly random vector, precisely because the eq tensor is
+not uniform.</p>
+<p>This is sound here — tensor-structured randomness supports proximity gaps (Diamond–Posen, 2023/630) —
+<b>but only when <span class="v">u&#8407;</span> is uniformly random and drawn after the commitments.</b>
+Inside <code>TransparentHonk</code> it is. But the standalone API accepts an arbitrary caller-supplied
+point, and nothing in the signature, doc-comment or README says otherwise. A user of a pluggable-PCS
+product who opens at a <em>public, fixed</em> point gets no proximity guarantee at all.</p>
+</div>
+
+<div class="note">
+<p><b>§3.4 &mdash; Brakedown's base-case code is not MDS.</b> The parity block is a Vandermonde in the
+<em>coefficient</em> basis, so the codewords are (coeffs(<span class="v">f</span>),
+<span class="v">f</span>(<span class="v">p</span><sub>0</sub>), &hellip;) — not a Reed–Solomon code at
+all. A nonzero <span class="v">f</span> of degree &lt;&nbsp;<span class="v">k</span> has at most
+<span class="v">k</span>&minus;1 roots, so the provable distance is only
+1&nbsp;+&nbsp;max(0,&nbsp;parity&nbsp;&minus;&nbsp;(<span class="v">k</span>&minus;1)) — which at
+<span class="v">k</span>&nbsp;=&nbsp;32, parity&nbsp;=&nbsp;24 evaluates to <b>1</b>, against
+<span class="v">d</span>&nbsp;=&nbsp;25 for a true MDS [56,&nbsp;32] code.</p>
+<p>The <em>actual</em> distance is probably fine. But Brakedown's whole value proposition is a distance
+that holds with provable failure probability 2<sup>&minus;100</sup>, and the recursion consumes the base
+case's distance as a hypothesis. <b>Fix:</b> a Cauchy matrix, which is superregular and therefore
+genuinely MDS. One function, no cost change.</p>
+</div>
+
+<h2>5. Efficiency: one defect ran through the whole suite</h2>
+
+<p>Every non-production backend opened by forming the &rho;-combination of the ~41 claims — and every one
+of them wrote it as a <b>serial</b> nested loop, while production Gemini does the identical work through
+the parallel <code>add_scaled_batch</code>:</p>
+
+<pre><code>for (each claim) {
+    for (size_t k = 0; k &lt; n; ++k) { array[k] += rho_power * column[k]; }
+    rho_power *= rho;                    // ~10.7M serial multiply-adds at 2^18
+}</code></pre>
+
+<p>The backends could not reuse <code>add_scaled_batch</code> because it takes <code>Polynomial</code>
+operands and they hold <code>std::vector&lt;fr&gt;</code>. <code>utils/batch_accumulate.hpp</code> now
+supplies the vector-backed counterpart: one parallel pass over the <em>output</em> range with the terms
+looped inside each chunk, so writes stay disjoint and each output cache line is touched once per chunk
+rather than once per term.</p>
+
+<p>Separately, the IPA backend was not using MSMs <em>at all</em> — its round loop performed
+2<span class="v">N</span> individual elliptic-curve scalar multiplications. Switching from even/odd to
+lo/hi halves (the classical Bulletproofs split) makes both cross-term operands contiguous, so each is a
+single Pippenger call.</p>
+
+<h3>Prover cost, ratio to the KZG baseline &mdash; log scale</h3>
+<figure style="background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:18px 16px 10px; margin:16px 0;">
+<svg viewBox="0 0 640 300" role="img" aria-label="Prover ratio to KZG, before and after, log scale">
+  <!-- gridlines -->
+  <line class="gridline" x1="70" y1="18" x2="70" y2="262"/>
+  <line class="gridline" x1="135" y1="18" x2="135" y2="262" stroke-dasharray="3 3"/>
+  <line class="gridline" x1="353" y1="18" x2="353" y2="262"/>
+  <line class="gridline" x1="570" y1="18" x2="570" y2="262"/>
+  <text class="tick" x="70"  y="278" text-anchor="middle">0.5&times;</text>
+  <text class="tick" x="135" y="278" text-anchor="middle">1&times;</text>
+  <text class="tick" x="353" y="278" text-anchor="middle">10&times;</text>
+  <text class="tick" x="570" y="278" text-anchor="middle">100&times;</text>
+
+  <!-- Ligero (control) -->
+  <text class="blab" x="0" y="34">Ligero</text>
+  <text class="bval" x="0" y="47" style="font-size:10.5px">control</text>
+  <rect x="70" y="22" width="31.5" height="9" rx="2" fill="var(--muted)" opacity=".55"/>
+  <rect x="70" y="34" width="34.1" height="9" rx="2" fill="var(--muted)"/>
+  <text class="bval" x="112" y="41">0.70 &rarr; 0.72&times;</text>
+
+  <!-- CHOPIN -->
+  <text class="blab" x="0" y="72">CHOPIN</text>
+  <rect x="70" y="60" width="69.8" height="9" rx="2" fill="var(--c3)" opacity=".38"/>
+  <rect x="70" y="72" width="45.2" height="9" rx="2" fill="var(--c3)"/>
+  <text class="bval" x="150" y="79">1.05 &rarr; 0.81&times; &nbsp;(&minus;23%)</text>
+
+  <!-- Mercury -->
+  <text class="blab" x="0" y="110">Mercury</text>
+  <rect x="70" y="98" width="87.8" height="9" rx="2" fill="var(--c1)" opacity=".38"/>
+  <rect x="70" y="110" width="77.6" height="9" rx="2" fill="var(--c1)"/>
+  <text class="bval" x="168" y="117">1.27 &rarr; 1.14&times; &nbsp;(&minus;10%)</text>
+
+  <!-- Vela -->
+  <text class="blab" x="0" y="148">Vela</text>
+  <rect x="70" y="136" width="115.2" height="9" rx="2" fill="var(--c5)" opacity=".38"/>
+  <rect x="70" y="148" width="80.9" height="9" rx="2" fill="var(--c5)"/>
+  <text class="bval" x="196" y="155">1.70 &rarr; 1.18&times; &nbsp;(&minus;30%)</text>
+
+  <!-- SwitchFold -->
+  <text class="blab" x="0" y="186">SwitchFold</text>
+  <rect x="70" y="174" width="168.0" height="9" rx="2" fill="var(--c2)" opacity=".38"/>
+  <rect x="70" y="186" width="151.7" height="9" rx="2" fill="var(--c2)"/>
+  <text class="bval" x="249" y="193">2.97 &rarr; 2.50&times; &nbsp;(&minus;16%)</text>
+
+  <!-- IPA -->
+  <text class="blab" x="0" y="224">IPA</text>
+  <rect x="70" y="212" width="481.3" height="9" rx="2" fill="var(--c4)" opacity=".38"/>
+  <rect x="70" y="224" width="227.8" height="9" rx="2" fill="var(--c4)"/>
+  <text class="bval" x="308" y="231" style="font-weight:600">82.0 &rarr; 5.6&times; &nbsp;(13.3&times; faster)</text>
+
+  <text class="tick" x="70" y="252" style="font-size:11px">pale = before &nbsp;&middot;&nbsp; solid = after &nbsp;&middot;&nbsp; shorter is better</text>
+</svg>
+</figure>
+
+<div class="note ok">
+<p><b>Two results worth calling out.</b> CHOPIN now proves <em>faster than the KZG baseline</em> while
+producing a 9.2&nbsp;KiB proof against KZG's 13.3, and Vela's prover penalty for the smallest proof in
+the suite drops from 1.70&times; to 1.18&times;. Both were previously read as "pay prover time for proof
+size"; that trade is now much weaker.</p>
+</div>
+
+<div class="note">
+<p><b>Measurement methodology, and its limits.</b> The machine was shared with another build session for
+part of the window, so absolute wall-clock is not comparable across runs. Every figure is a ratio to the
+KZG baseline <em>measured in the same run</em>. <b>Ligero is the control</b> — its code is untouched, so
+its movement (0.70&nbsp;&rarr;&nbsp;0.72&times;, +3%) is the noise floor. A later run under contention
+moved the control by 26% and was discarded rather than reported. Proof bytes and verifier work are
+unchanged by every fix.</p>
+</div>
+
+<h3>Quantified but not implemented</h3>
+<ul>
+<li><b>SwitchFold's weight tables do 4&times; more work than necessary.</b> Two eq factors at the
+<em>constants</em> 0 and 1 zero three quarters of every tensor — and those zeros are still computed, as
+multiplications by zero, then added. Restricting the build to the live quarter is worth ~195&nbsp;ms at
+2<sup>18</sup>.</li>
+<li><b>Dory's verifier lives in G<sub>T</sub> exponentiation</b> — 41 square-and-multiply exponentiations
+of 254 bits. Cyclotomic squaring (~2&times;) plus a bucket-method G<sub>T</sub> multi-exponentiation
+(~4&times;) would move the 362&nbsp;ms verifier a lot. Neither primitive exists in bb's <code>fq12</code>.</li>
+<li><b>IPA can go further still</b> — production <code>ipa.hpp</code> fuses round pairs and uses 127-bit
+short challenges on top of what was applied here.</li>
+<li><b>Ligero's three verifier FFTs are correctly left alone</b> — direct evaluation at the queried
+positions is <em>not</em> a win at the current shape. Recorded so it is not re-investigated.</li>
+</ul>
+
+<h2>6. Zero-knowledge — the decisive gap</h2>
+
+<div class="tiles">
+  <div class="tile"><div class="tv good">2</div><div class="tl">backends with zk<br><span style="color:var(--muted)">Shplemini, WHIR</span></div></div>
+  <div class="tile"><div class="tv bad">13</div><div class="tl">backends that leak the witness outright</div></div>
+  <div class="tile"><div class="tv warn">3</div><div class="tl">distinct masking designs needed — it is not one shared layer</div></div>
+</div>
+
+<p>A user who selects "Mercury" and gets a non-zk proof has a security failure, not a performance trade.
+The work is also not uniform, which matters for scoping:</p>
+
+<ul>
+<li><b>Pairing/KZG family</b> (Mercury, Vela, CHOPIN) — bounded-degree blinders plus SRS degree slack.
+Each paper gives the design, but each opens a different set of auxiliary polynomials, so each needs its
+own argument.</li>
+<li><b>&radic;N / &#8731;N families</b> (KZH2, KZH3, Hyrax, Dory) — the combined rows are sent
+<em>in the clear</em>. Hiding them is a structural change, not a wrapper.</li>
+<li><b>Hash family</b> (Ligero, SwitchFold, Brakedown, Bolt) — WHIR's recipe transfers in shape, but the
+clear-text rows and descent messages each need their own masking design and query-count accounting.</li>
+</ul>
+
+<div class="note ok">
+<p><b>The structural good news.</b> WHIR's zk design lives <em>entirely inside the PCS</em> — extra
+blinding coefficients in a region the claim does not see, salted Merkle leaves, and one batched mask
+polynomial — with no change to <code>TransparentHonk</code> or anything above it. That is evidence that
+"zk-capable" can be a property of the <em>backend</em> rather than of the proof system, which is exactly
+what a pluggable design needs. It just has to be implemented thirteen more times.</p>
+</div>
+
+<h2>7. Can a Noir frontend expose a selectable PCS backend?</h2>
+
+<h3>What the evidence says yes to</h3>
+<p>The architecture question is answered, and answered positively. Fifteen schemes spanning four trust
+models, three commitment types (Merkle digest, vector of G<sub>1</sub>, vector of G<sub>T</sub>) and
+three different shift constructions all sit behind one shell, unmodified above the PCS. The
+Fiat–Shamir schedule, relation parameters and sumcheck are genuinely shared with the production prover,
+so backends do not fork the proof system.</p>
+<p>And the abstraction keeps absorbing new structure rather than fighting it: a linear-time code, a
+code-policy parameterization, and a piecewise-distance query plan for a sketched-LDPC backend all landed
+<em>during</em> this review, and none required a change above the PCS layer. An abstraction that
+survives contact with genuinely different cryptography is the thing you cannot fake.</p>
+
+<h3>What blocks it today</h3>
+<div class="tablewrap">
+<table>
+<thead><tr><th>#</th><th class="l">Blocker</th><th class="l">Shape of the work</th></tr></thead>
+<tbody>
+<tr><td>1</td><td class="l"><b>zk on 13 of 15 backends</b></td><td class="l">~3 distinct designs plus per-scheme arguments. The gating item.</td></tr>
+<tr><td>2</td><td class="l">Four backends have no real setup</td><td class="l">Dory: mechanical. KZH2/KZH3: a ceremony. CHOPIN: a <em>bivariate</em> ceremony that does not exist.</td></tr>
+<tr><td>3</td><td class="l">Recursive verifiers for one family only</td><td class="l">Pairing backends recurse like KZG; hash backends need in-circuit Poseidon2 Merkle; Dory needs in-circuit F<sub>q<sup>12</sup></sub>.</td></tr>
+<tr><td>4</td><td class="l">RS query rule on a disproved conjecture</td><td class="l">Small now — the hook exists. But it is a correctness-of-parameters bug a user cannot audit for themselves.</td></tr>
+<tr><td>5</td><td class="l">Undocumented API preconditions</td><td class="l">"The opening point must be a Fiat–Shamir challenge" belongs in the type system, not the caller.</td></tr>
+<tr><td>6</td><td class="l">Paper parameters do not transfer</td><td class="l">Bolt's LDPC distance collapses 0.094&nbsp;&rarr;&nbsp;0.00006 from 2<sup>32</sup> to BN254. A backend menu must own per-backend derivation at <em>its</em> field.</td></tr>
+<tr><td>7</td><td class="l">Hash proofs need compression</td><td class="l">0.77–2.7&nbsp;MiB. ePrint 2025/1446 (<code>zip</code>) attacks exactly this.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>A roadmap that would make it shippable</h3>
+<ul>
+<li><b>Phase 1 — make the honest set small and real.</b> Productize <em>three</em> backends, not fifteen:
+<b>KZG</b> (has zk, has recursion, is the default), <b>Vela</b> (smallest proof, fastest verifier, and a
+real ceremony already available since it reuses bb's existing KZG key), and <b>WHIR</b> (has zk,
+transparent, recursion designed). Gate the other twelve as research backends. This converts the zk gap
+from "13 backends" to <b>one</b> — Vela — which is a scoped piece of work rather than a programme.</li>
+<li><b>Phase 2 — factor out the cross-cutting concerns.</b> Finish the query rule; add a masking
+interface to the <code>Pcs</code> concept so the shell can <em>require</em> zk; make the opening-point
+precondition unrepresentable by construction; own parameter derivation at BN254.</li>
+<li><b>Phase 3 — widen</b>, only for backends that clear the Phase-2 bar. Best next candidates: CHOPIN
+(now the fastest prover in the pairing corner, <em>if</em> a bivariate ceremony is solvable), SwitchFold,
+Mercury.</li>
+<li><b>Phase 4 — the frontend.</b> Only here does the Noir-side work become the bottleneck rather than
+the cryptography.</li>
+</ul>
+
+<div class="note ok" style="margin-top:26px">
+<p style="font-size:15.5px"><b>The one-sentence answer.</b> Yes, the product is possible — the pluggable
+architecture is already built and validated across fifteen schemes — but what exists today is a research
+bench, not a backend menu: <b>the gap is not architecture</b>, it is that thirteen of the fifteen
+backends have no zero-knowledge, four have no real setup, and fourteen have no recursive verifier.</p>
+</div>
+
+<footer>
+Companion to <code>PCS_REVIEW.md</code> (full record, with derivations) and
+<code>PCS_CANDIDATES.md</code> (the candidate-evaluation log). Benchmark data and its chart:
+<code>pcs_bench_results.json</code> / <code>pcs_report.html</code>.
+</footer>
+
+</div></div>
+</body>
+</html>
