@@ -113,6 +113,22 @@ inline size_t next_power_of_two(size_t value)
 } // namespace detail
 
 /**
+ * @brief One stretch of codeword positions and how many of them to open.
+ *
+ * @details Most codes get a single segment covering the whole codeword. Codes with a *piecewise*
+ * distance guarantee — where a corrupted word must differ substantially inside one specific stretch,
+ * rather than merely somewhere overall — are tested stretch by stretch instead, each with the query
+ * count its own distance warrants. That is strictly stronger than sampling uniformly against the
+ * diluted overall distance: see `brakedown/` for the single-segment case and `bolt/` for the
+ * two-segment one.
+ */
+struct QuerySegment {
+    size_t begin;
+    size_t length;
+    size_t num_queries;
+};
+
+/**
  * @brief The Reed-Solomon code policy: what Ligero has always used.
  *
  * @details A code policy supplies the encoder and the query count. Only two things about the code
@@ -143,6 +159,12 @@ struct RSCodePolicy {
 
     /** @brief Under the capacity conjecture the per-query error is the rate, giving t = ceil(λ/r). */
     static size_t num_queries(const LigeroConfig& config) { return config.num_queries; }
+
+    /** @brief One segment spanning the whole codeword: RS has no piecewise structure to exploit. */
+    std::vector<QuerySegment> query_plan(const LigeroConfig& config) const
+    {
+        return { { 0, codeword_length(), num_queries(config) } };
+    }
 
     LigeroConfig config;
     mutable RSDomains domains;
@@ -326,19 +348,21 @@ template <typename Hasher> class LigeroProver {
         transcript->send_to_verifier(std::string("LIGERO:w_digest"),
                                      Hasher::digest_to_fields(Hasher::hash_leaf(combined, std::nullopt)));
 
-        // Column queries: open every group's tree at each sampled leaf.
-        const size_t num_queries = CommitmentKey::CodePolicy::num_queries(config);
-        for (size_t s = 0; s < num_queries; ++s) {
-            const fr challenge = transcript->template get_challenge<fr>(detail::ligero_label("col", s));
-            const size_t idx = detail::index_from_challenge_bounded(challenge, ck.code.codeword_length());
-            for (const LigeroGroupData<Hasher>* group : claims.groups) {
-                const auto opening = group->tree.open(idx);
-                std::vector<fr> flat = opening.values;
-                for (const auto& digest : opening.path) {
-                    const auto fields = Hasher::digest_to_fields(digest);
-                    flat.insert(flat.end(), fields.begin(), fields.end());
+        // Column queries: open every group's tree at each sampled leaf, segment by segment.
+        size_t query = 0;
+        for (const QuerySegment& segment : ck.code.query_plan(config)) {
+            for (size_t s = 0; s < segment.num_queries; ++s, ++query) {
+                const fr challenge = transcript->template get_challenge<fr>(detail::ligero_label("col", query));
+                const size_t idx = segment.begin + detail::index_from_challenge_bounded(challenge, segment.length);
+                for (const LigeroGroupData<Hasher>* group : claims.groups) {
+                    const auto opening = group->tree.open(idx);
+                    std::vector<fr> flat = opening.values;
+                    for (const auto& digest : opening.path) {
+                        const auto fields = Hasher::digest_to_fields(digest);
+                        flat.insert(flat.end(), fields.begin(), fields.end());
+                    }
+                    transcript->send_unhashed_to_verifier(flat);
                 }
-                transcript->send_unhashed_to_verifier(flat);
             }
         }
     }
@@ -430,10 +454,15 @@ template <typename Hasher> class LigeroVerifier {
         // Column checks: authenticate each opened column and test the three linear combinations.
         // The path length follows the padded tree; queries stay inside the true codeword.
         const size_t index_bits = numeric::get_msb(code.padded_codeword_length());
-        const size_t num_queries = Code::num_queries(config);
-        for (size_t s = 0; s < num_queries; ++s) {
+        std::vector<std::pair<size_t, size_t>> plan; // (begin, length) per query, in transcript order
+        for (const QuerySegment& segment : code.query_plan(config)) {
+            for (size_t s = 0; s < segment.num_queries; ++s) {
+                plan.emplace_back(segment.begin, segment.length);
+            }
+        }
+        for (size_t s = 0; s < plan.size(); ++s) {
             const fr challenge = transcript->template get_challenge<fr>(detail::ligero_label("col", s));
-            const size_t idx = detail::index_from_challenge_bounded(challenge, code.codeword_length());
+            const size_t idx = plan[s].first + detail::index_from_challenge_bounded(challenge, plan[s].second);
             fr acc_u = fr::zero();
             fr acc_s = fr::zero();
             fr acc_s2 = fr::zero();

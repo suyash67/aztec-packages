@@ -54,6 +54,12 @@ struct BrakedownCodePolicy {
         return static_cast<size_t>(std::ceil(static_cast<double>(security_bits) / per_query_bits));
     }
 
+    /** @brief One segment: this code's distance guarantee is a single overall bound, not piecewise. */
+    std::vector<ligero::QuerySegment> query_plan(const LigeroConfig& config) const
+    {
+        return { { 0, codeword_length(), num_queries(config) } };
+    }
+
     BrakedownParams params;
     // Shared so the policy stays copyable: the sampled matrices are large and immutable.
     std::shared_ptr<BrakedownCode> code;
