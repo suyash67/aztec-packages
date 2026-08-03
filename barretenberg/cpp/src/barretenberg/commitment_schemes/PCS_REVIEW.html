@@ -52,12 +52,22 @@
   pre code { background:none; padding:0; }
 
   /* ---- equation blocks ---- */
+  /* Only the equation lines scroll; the legend below must wrap at the card width. */
   .eq { background:var(--surface); border:1px solid var(--ring); border-radius:10px;
-        padding:18px 20px; margin:16px 0; overflow-x:auto; }
+        padding:18px 20px; margin:16px 0; }
   .eq .line { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-              font-size:19px; line-height:2.0; white-space:nowrap; }
+              font-size:19px; line-height:2.0; white-space:nowrap;
+              overflow-x:auto; overflow-y:hidden; padding-bottom:2px; }
   .eq .line + .line { margin-top:6px; }
   .v { font-style:italic; }
+  /* Vector notation. A combining arrow (U+20D7) does not render in most serif faces,
+     so the arrow is drawn as a positioned pseudo-element over the letter instead. */
+  /* line-height:1 makes the box hug the em box, so `top` is measured from a predictable
+     origin and the letter's baseline still aligns with the surrounding text. */
+  .vec { font-style:italic; position:relative; display:inline-block; line-height:1; }
+  .vec::after { content:"\2192"; position:absolute; left:0; right:0; top:-.30em;
+                font-size:.5em; line-height:1; text-align:center; font-style:normal;
+                font-weight:700; pointer-events:none; }
   .op { color:var(--ink2); padding:0 .12em; }
   .big { font-size:1.25em; vertical-align:-.12em; }
   sub, sup { font-size:.68em; font-style:normal; }
@@ -78,9 +88,10 @@
   .eqcap { font-size:13px; color:var(--muted); margin:6px 0 0; }
 
   /* ---- tiles ---- */
-  .tiles { display:flex; flex-wrap:wrap; gap:12px; margin: 22px 0 10px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(155px, 1fr));
+           gap:12px; margin: 22px 0 10px; }
   .tile { background:var(--surface); border:1px solid var(--ring); border-radius:10px;
-          padding:14px 18px; min-width:130px; flex:1 1 150px; }
+          padding:14px 18px; }
   .tv { font-size:23px; font-weight:650; letter-spacing:-.01em; }
   .tl { font-size:12.5px; color:var(--ink2); margin-top:3px; line-height:1.4; }
   .tv.good { color:var(--ok); } .tv.bad { color:var(--bad); } .tv.warn { color:var(--warn); }
@@ -146,15 +157,15 @@ sumcheck, the Fiat–Shamir schedule — is shared verbatim with the production 
 only a config, a commitment key, a commitment type, and a prove/verify pair for
 <em>one multilinear opening</em>.</p>
 
-<p>After sumcheck at challenge <span class="v">u&#8407;</span>, the PCS receives <b>41 claims over 36
+<p>After sumcheck at challenge <span class="vec">u</span>, the PCS receives <b>41 claims over 36
 committed columns</b>:</p>
 
 <div class="eq">
   <div class="line">
-    <span class="t1"><span class="v">P<sub>i</sub></span>(<span class="v">u&#8407;</span>) = <span class="v">v<sub>i</sub></span></span>
+    <span class="t1"><span class="v">P<sub>i</sub></span>(<span class="vec">u</span>) = <span class="v">v<sub>i</sub></span></span>
     <span class="op">for</span> <span class="v">i</span> = 1&hellip;36
     <span class="op">&nbsp;&nbsp;and&nbsp;&nbsp;</span>
-    <span class="t2">shift(<span class="v">P<sub>j</sub></span>)(<span class="v">u&#8407;</span>) = <span class="v">w<sub>j</sub></span></span>
+    <span class="t2">shift(<span class="v">P<sub>j</sub></span>)(<span class="vec">u</span>) = <span class="v">w<sub>j</sub></span></span>
     <span class="op">for</span> <span class="v">j</span> = 1&hellip;5
   </div>
   <div class="line" style="font-size:16px">
@@ -331,7 +342,7 @@ last step: one of the four evaluations is <b>never transmitted</b>.</p>
 
 <div class="eq">
   <div class="line" style="font-size:17px">
-    <span class="t1"><span class="v">H</span>(<span class="v">X</span>) = <span class="v">f<sub>v</sub></span>(<span class="v">X</span>) &middot; <span class="v">T<sub>r&#8407;</sub></span>(1/<span class="v">X</span>)</span>
+    <span class="t1"><span class="v">H</span>(<span class="v">X</span>) = <span class="v">f<sub>v</sub></span>(<span class="v">X</span>) &middot; <span class="v">T<sub><span class="vec">r</span></sub></span>(1/<span class="v">X</span>)</span>
     <span class="op">,</span>&nbsp;&nbsp;
     <span class="t2">[<span class="v">X</span><sup>0</sup>]<span class="v">H</span> = <span class="v">y</span></span>
     <span class="op">&nbsp;&#8660;&nbsp;</span> the claim holds
@@ -345,15 +356,15 @@ last step: one of the four evaluations is <b>never transmitted</b>.</p>
     <span class="t5"><span class="v">w</span><sub>1</sub></span>
     <span class="op">=</span>
     <span class="v">z</span>&thinsp;(
-    <span class="v">g</span>(<span class="v">z</span>)<span class="v">T<sub>r&#8407;</sub></span>(1/<span class="v">z</span>)
-    + <span class="v">g</span>(1/<span class="v">z</span>)<span class="v">T<sub>r&#8407;</sub></span>(<span class="v">z</span>)
+    <span class="v">g</span>(<span class="v">z</span>)<span class="v">T<sub><span class="vec">r</span></sub></span>(1/<span class="v">z</span>)
+    + <span class="v">g</span>(1/<span class="v">z</span>)<span class="v">T<sub><span class="vec">r</span></sub></span>(<span class="v">z</span>)
     &minus; 2<span class="v">Y</span> &minus; <span class="v">z&thinsp;w</span><sub>0</sub> )
   </div>
   <div class="legend">
     <div><span class="sw sw1"></span><span><b>The Laurent twin.</b>
-      <span class="v">T<sub>r&#8407;</sub></span>(<span class="v">X</span>) = &prod;<sub class="v">k</sub>((1&minus;<span class="v">r<sub>k</sub></span>)
+      <span class="v">T<sub><span class="vec">r</span></sub></span>(<span class="v">X</span>) = &prod;<sub class="v">k</sub>((1&minus;<span class="v">r<sub>k</sub></span>)
       + <span class="v">r<sub>k</sub></span><span class="v">X</span><sup>2<sup class="v">k</sup></sup>); its
-      inverse-variable form has <span class="v">eq<sub>i</sub></span>(<span class="v">r&#8407;</span>) at
+      inverse-variable form has <span class="v">eq<sub>i</sub></span>(<span class="vec">r</span>) at
       exponent &minus;<span class="v">i</span>.</span></div>
     <div><span class="sw sw2"></span><span><b>The claim, encoded as a constant coefficient.</b></span></div>
     <div><span class="sw sw3"></span><span><b>The residual</b>, whose constant coefficient is
@@ -389,7 +400,7 @@ proof size are absolute, at <span class="v">N</span> = 2<sup>18</sup>.</p>
 <tr><td>Vela</td><td class="l">pairing, reciprocal</td><td class="l">SRS ceremony</td><td>1.18&times;</td><td><b>3.5 ms</b></td><td><b>7.8 KiB</b></td><td class="l"><span class="pill no">none</span></td></tr>
 <tr><td>CHOPIN</td><td class="l">pairing, bivariate KZG</td><td class="l"><span class="pill test">test-only</span></td><td><b>0.81&times;</b></td><td>4.7 ms</td><td>9.2 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
 <tr><td>KZH2</td><td class="l">pairing, &radic;N</td><td class="l"><span class="pill test">test-only</span></td><td>~14&times;</td><td>216 ms</td><td>183.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
-<tr><td>KZH3</td><td class="l">pairing, &#8731;N</td><td class="l"><span class="pill test">test-only</span></td><td>~46&times;</td><td>79.7 ms</td><td>55.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
+<tr><td>KZH3</td><td class="l">pairing, <span class="v">N</span><sup>1/3</sup></td><td class="l"><span class="pill test">test-only</span></td><td>~46&times;</td><td>79.7 ms</td><td>55.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
 <tr><td>Dory</td><td class="l">pairing, two-tier</td><td class="l"><span class="pill test">test-only</span></td><td>~12&times;</td><td>362 ms</td><td>94.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
 <tr><td>IPA (Pedersen)</td><td class="l">DL</td><td class="l">transparent</td><td>~5.6&times;</td><td>3596 ms</td><td>16.4 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
 <tr><td>Hyrax</td><td class="l">DL, Pedersen rows</td><td class="l">transparent</td><td>~11&times;</td><td>243 ms</td><td>566.3 KiB</td><td class="l"><span class="pill no">none</span></td></tr>
@@ -438,7 +449,7 @@ combined rows serve as the proximity test <em>and</em> the evaluation extraction
 Ligero/Brakedown run a separate test with a uniformly random vector, precisely because the eq tensor is
 not uniform.</p>
 <p>This is sound here — tensor-structured randomness supports proximity gaps (Diamond–Posen, 2023/630) —
-<b>but only when <span class="v">u&#8407;</span> is uniformly random and drawn after the commitments.</b>
+<b>but only when <span class="vec">u</span> is uniformly random and drawn after the commitments.</b>
 Inside <code>TransparentHonk</code> it is. But the standalone API accepts an arbitrary caller-supplied
 point, and nothing in the signature, doc-comment or README says otherwise. A user of a pluggable-PCS
 product who opens at a <em>public, fixed</em> point gets no proximity guarantee at all.</p>
@@ -483,55 +494,56 @@ single Pippenger call.</p>
 
 <h3>Prover cost, ratio to the KZG baseline &mdash; log scale</h3>
 <figure style="background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:18px 16px 10px; margin:16px 0;">
-<svg viewBox="0 0 640 300" role="img" aria-label="Prover ratio to KZG, before and after, log scale">
-  <!-- gridlines -->
-  <line class="gridline" x1="70" y1="18" x2="70" y2="262"/>
-  <line class="gridline" x1="135" y1="18" x2="135" y2="262" stroke-dasharray="3 3"/>
-  <line class="gridline" x1="353" y1="18" x2="353" y2="262"/>
-  <line class="gridline" x1="570" y1="18" x2="570" y2="262"/>
-  <text class="tick" x="70"  y="278" text-anchor="middle">0.5&times;</text>
-  <text class="tick" x="135" y="278" text-anchor="middle">1&times;</text>
-  <text class="tick" x="353" y="278" text-anchor="middle">10&times;</text>
-  <text class="tick" x="570" y="278" text-anchor="middle">100&times;</text>
+<svg viewBox="0 0 790 306" role="img" aria-label="Prover ratio to KZG, before and after, log scale">
+  <!-- log-scale gridlines: x(v) = 95 + (log10(v)+0.3)/2.3 * 500 -->
+  <line class="gridline" x1="95"  y1="16" x2="95"  y2="248"/>
+  <line class="gridline" x1="160" y1="16" x2="160" y2="248" stroke-dasharray="3 3"/>
+  <line class="gridline" x1="378" y1="16" x2="378" y2="248"/>
+  <line class="gridline" x1="595" y1="16" x2="595" y2="248"/>
+  <text class="tick" x="95"  y="264" text-anchor="middle">0.5&times;</text>
+  <text class="tick" x="160" y="264" text-anchor="middle">1&times;</text>
+  <text class="tick" x="378" y="264" text-anchor="middle">10&times;</text>
+  <text class="tick" x="595" y="264" text-anchor="middle">100&times;</text>
 
   <!-- Ligero (control) -->
-  <text class="blab" x="0" y="34">Ligero</text>
-  <text class="bval" x="0" y="47" style="font-size:10.5px">control</text>
-  <rect x="70" y="22" width="31.5" height="9" rx="2" fill="var(--muted)" opacity=".55"/>
-  <rect x="70" y="34" width="34.1" height="9" rx="2" fill="var(--muted)"/>
-  <text class="bval" x="112" y="41">0.70 &rarr; 0.72&times;</text>
+  <text class="blab" x="86" y="32"  text-anchor="end">Ligero</text>
+  <text class="bval" x="86" y="45"  text-anchor="end" style="font-size:10.5px">control</text>
+  <rect x="95" y="20" width="31.5"  height="9" rx="2" fill="var(--muted)" opacity=".55"/>
+  <rect x="95" y="32" width="34.1"  height="9" rx="2" fill="var(--muted)"/>
+  <text class="bval" x="610" y="39">0.70 &rarr; 0.72&times;</text>
 
   <!-- CHOPIN -->
-  <text class="blab" x="0" y="72">CHOPIN</text>
-  <rect x="70" y="60" width="69.8" height="9" rx="2" fill="var(--c3)" opacity=".38"/>
-  <rect x="70" y="72" width="45.2" height="9" rx="2" fill="var(--c3)"/>
-  <text class="bval" x="150" y="79">1.05 &rarr; 0.81&times; &nbsp;(&minus;23%)</text>
+  <text class="blab" x="86" y="70"  text-anchor="end">CHOPIN</text>
+  <rect x="95" y="58" width="69.8"  height="9" rx="2" fill="var(--c3)" opacity=".38"/>
+  <rect x="95" y="70" width="45.2"  height="9" rx="2" fill="var(--c3)"/>
+  <text class="bval" x="610" y="77">1.05 &rarr; 0.81&times; &nbsp;(&minus;23%)</text>
 
   <!-- Mercury -->
-  <text class="blab" x="0" y="110">Mercury</text>
-  <rect x="70" y="98" width="87.8" height="9" rx="2" fill="var(--c1)" opacity=".38"/>
-  <rect x="70" y="110" width="77.6" height="9" rx="2" fill="var(--c1)"/>
-  <text class="bval" x="168" y="117">1.27 &rarr; 1.14&times; &nbsp;(&minus;10%)</text>
+  <text class="blab" x="86" y="108" text-anchor="end">Mercury</text>
+  <rect x="95" y="96"  width="87.8" height="9" rx="2" fill="var(--c1)" opacity=".38"/>
+  <rect x="95" y="108" width="77.6" height="9" rx="2" fill="var(--c1)"/>
+  <text class="bval" x="610" y="115">1.27 &rarr; 1.14&times; &nbsp;(&minus;10%)</text>
 
   <!-- Vela -->
-  <text class="blab" x="0" y="148">Vela</text>
-  <rect x="70" y="136" width="115.2" height="9" rx="2" fill="var(--c5)" opacity=".38"/>
-  <rect x="70" y="148" width="80.9" height="9" rx="2" fill="var(--c5)"/>
-  <text class="bval" x="196" y="155">1.70 &rarr; 1.18&times; &nbsp;(&minus;30%)</text>
+  <text class="blab" x="86" y="146" text-anchor="end">Vela</text>
+  <rect x="95" y="134" width="115.2" height="9" rx="2" fill="var(--c5)" opacity=".38"/>
+  <rect x="95" y="146" width="80.9"  height="9" rx="2" fill="var(--c5)"/>
+  <text class="bval" x="610" y="153">1.70 &rarr; 1.18&times; &nbsp;(&minus;30%)</text>
 
   <!-- SwitchFold -->
-  <text class="blab" x="0" y="186">SwitchFold</text>
-  <rect x="70" y="174" width="168.0" height="9" rx="2" fill="var(--c2)" opacity=".38"/>
-  <rect x="70" y="186" width="151.7" height="9" rx="2" fill="var(--c2)"/>
-  <text class="bval" x="249" y="193">2.97 &rarr; 2.50&times; &nbsp;(&minus;16%)</text>
+  <text class="blab" x="86" y="184" text-anchor="end">SwitchFold</text>
+  <rect x="95" y="172" width="168.0" height="9" rx="2" fill="var(--c2)" opacity=".38"/>
+  <rect x="95" y="184" width="151.7" height="9" rx="2" fill="var(--c2)"/>
+  <text class="bval" x="610" y="191">2.97 &rarr; 2.50&times; &nbsp;(&minus;16%)</text>
 
   <!-- IPA -->
-  <text class="blab" x="0" y="224">IPA</text>
-  <rect x="70" y="212" width="481.3" height="9" rx="2" fill="var(--c4)" opacity=".38"/>
-  <rect x="70" y="224" width="227.8" height="9" rx="2" fill="var(--c4)"/>
-  <text class="bval" x="308" y="231" style="font-weight:600">82.0 &rarr; 5.6&times; &nbsp;(13.3&times; faster)</text>
+  <text class="blab" x="86" y="222" text-anchor="end">IPA</text>
+  <rect x="95" y="210" width="481.3" height="9" rx="2" fill="var(--c4)" opacity=".38"/>
+  <rect x="95" y="222" width="227.8" height="9" rx="2" fill="var(--c4)"/>
+  <text class="bval" x="610" y="229" style="font-weight:700">82.0 &rarr; 5.6&times;</text>
+  <text class="bval" x="610" y="242" style="font-size:10.5px">13.3&times; faster</text>
 
-  <text class="tick" x="70" y="252" style="font-size:11px">pale = before &nbsp;&middot;&nbsp; solid = after &nbsp;&middot;&nbsp; shorter is better</text>
+  <text class="tick" x="95" y="292" style="font-size:11px">pale = before &nbsp;&middot;&nbsp; solid = after &nbsp;&middot;&nbsp; shorter is better</text>
 </svg>
 </figure>
 
@@ -581,7 +593,7 @@ The work is also not uniform, which matters for scoping:</p>
 <li><b>Pairing/KZG family</b> (Mercury, Vela, CHOPIN) — bounded-degree blinders plus SRS degree slack.
 Each paper gives the design, but each opens a different set of auxiliary polynomials, so each needs its
 own argument.</li>
-<li><b>&radic;N / &#8731;N families</b> (KZH2, KZH3, Hyrax, Dory) — the combined rows are sent
+<li><b>&radic;N / <span class="v">N</span><sup>1/3</sup> families</b> (KZH2, KZH3, Hyrax, Dory) — the combined rows are sent
 <em>in the clear</em>. Hiding them is a structural change, not a wrapper.</li>
 <li><b>Hash family</b> (Ligero, SwitchFold, Brakedown, Bolt) — WHIR's recipe transfers in shape, but the
 clear-text rows and descent messages each need their own masking design and query-count accounting.</li>
