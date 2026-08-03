@@ -3,7 +3,9 @@
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
 #include "barretenberg/commitment_schemes/mercury/mercury.hpp"
 #include "barretenberg/commitment_schemes/pairing_points.hpp"
+#include "barretenberg/commitment_schemes/utils/batch_accumulate.hpp"
 #include "barretenberg/common/assert.hpp"
+#include "barretenberg/common/thread.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
 #include "barretenberg/polynomials/polynomial_arithmetic.hpp"
@@ -54,6 +56,9 @@ inline std::string vela_label(const std::string& name)
  * so the product is mu shift-and-add passes rather than a convolution: O(N log N) field operations
  * and no FFT (paper §2.1). The returned table is indexed by `exponent + offset` where
  * `offset = shift_low + N - 1`, covering exponents [-offset, N-1-shift_low].
+ *
+ * Each pass writes into a fresh buffer rather than updating in place: `table[e]` reads `table[e+2^k]`,
+ * so a parallel in-place pass would race (one thread's writes overlap another's reads).
  */
 inline std::vector<fr> laurent_product(std::span<const fr> g, size_t shift_low, std::span<const fr> r)
 {
@@ -65,14 +70,18 @@ inline std::vector<fr> laurent_product(std::span<const fr> g, size_t shift_low, 
     for (size_t i = 0; i < g.size(); ++i) {
         table[offset - shift_low + i] = g[i];
     }
+    std::vector<fr> next(table_size);
     // Multiply by (1 - r_k) + r_k X^{-2^k}: new[e] = (1-r_k) cur[e] + r_k cur[e + 2^k].
     for (size_t k = 0; k < r.size(); ++k) {
         const size_t step = size_t(1) << k;
         const fr one_minus = fr::one() - r[k];
-        for (size_t e = 0; e < table_size; ++e) {
-            const fr high = (e + step < table_size) ? table[e + step] : fr::zero();
-            table[e] = one_minus * table[e] + r[k] * high;
-        }
+        parallel_for_range(table_size, [&](size_t start, size_t end) {
+            for (size_t e = start; e < end; ++e) {
+                const fr high = (e + step < table_size) ? table[e + step] : fr::zero();
+                next[e] = one_minus * table[e] + r[k] * high;
+            }
+        });
+        table.swap(next);
     }
     return table;
 }
@@ -144,11 +153,11 @@ class VelaProver {
         std::vector<fr> f_b(n, fr::zero());
         fr y_combined = fr::zero();
         fr rho_power = fr::one();
+        std::vector<pcs_utils::ScaledTerm> terms_a;
+        std::vector<pcs_utils::ScaledTerm> terms_b;
         for (size_t i = 0; i < claims.unshifted.size(); ++i) {
             const auto& column = claims.groups[claims.unshifted[i].group]->coefficients[claims.unshifted[i].column];
-            for (size_t k = 0; k < n; ++k) {
-                f_a[k] += rho_power * column[k];
-            }
+            terms_a.push_back({ column.data(), rho_power, false });
             y_combined += rho_power * claims.unshifted_evaluations[i];
             rho_power *= rho;
         }
@@ -156,12 +165,12 @@ class VelaProver {
             const auto& column =
                 claims.groups[claims.to_be_shifted[l].group]->coefficients[claims.to_be_shifted[l].column];
             BB_ASSERT_EQ(column[0], fr::zero(), "to-be-shifted polynomial must have zero constant term");
-            for (size_t k = 0; k < n; ++k) {
-                f_b[k] += rho_power * column[k];
-            }
+            terms_b.push_back({ column.data(), rho_power, false });
             y_combined += lambda * rho_power * claims.shifted_evaluations[l];
             rho_power *= rho;
         }
+        pcs_utils::accumulate_scaled(f_a, terms_a);
+        pcs_utils::accumulate_scaled(f_b, terms_b);
 
         // g(X) = f_A(X) + lambda X^{-1} f_B(X), stored over exponents [-1, N-1].
         std::vector<fr> g(n + 1, fr::zero());
@@ -219,19 +228,17 @@ class VelaProver {
         // alpha-batch {f_A, f_B, h} and open the combination at {z, 1/z}.
         const fr alpha = transcript->template get_challenge<fr>("VELA:alpha");
         std::vector<fr> batched(n, fr::zero());
-        fr alpha_power = fr::one();
-        for (size_t k = 0; k < n; ++k) {
-            batched[k] += alpha_power * f_a[k];
-        }
-        alpha_power *= alpha;
-        if (has_shifted) {
-            for (size_t k = 0; k < n; ++k) {
-                batched[k] += alpha_power * f_b[k];
+        {
+            std::vector<pcs_utils::ScaledTerm> batch_terms;
+            fr alpha_power = fr::one();
+            batch_terms.push_back({ f_a.data(), alpha_power, false });
+            alpha_power *= alpha;
+            if (has_shifted) {
+                batch_terms.push_back({ f_b.data(), alpha_power, false });
             }
-        }
-        alpha_power *= alpha;
-        for (size_t k = 0; k < n; ++k) {
-            batched[k] += alpha_power * h[k];
+            alpha_power *= alpha;
+            batch_terms.push_back({ h.data(), alpha_power, false });
+            pcs_utils::accumulate_scaled(batched, batch_terms);
         }
 
         const auto [r0, r1] = interpolant(z,

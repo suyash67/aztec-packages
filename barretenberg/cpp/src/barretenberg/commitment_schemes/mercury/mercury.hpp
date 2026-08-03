@@ -2,6 +2,7 @@
 
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
 #include "barretenberg/commitment_schemes/pairing_points.hpp"
+#include "barretenberg/commitment_schemes/utils/batch_accumulate.hpp"
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
@@ -87,15 +88,22 @@ inline void accumulate_ip_terms(std::span<const fr> p, std::span<const fr> r, co
 {
     BB_ASSERT_EQ(p.size(), r.size());
     const size_t len = p.size();
-    for (size_t shift = 1; shift < len; ++shift) {
-        fr sum = fr::zero();
-        for (size_t i = shift; i < len; ++i) {
-            sum += p[i] * r[i - shift] + p[i - shift] * r[i];
-        }
-        // p(X)r(1/X) contributes sum at X^{+shift} and (by symmetry of the added mirror term)
-        // the same value at X^{-shift}; both land in S per the identity.
-        s[shift - 1] += scale * sum;
+    if (len < 2) {
+        return;
     }
+    // Each shift writes only s[shift-1], so the shifts are independent. The work per shift falls as
+    // len-shift, so index-ordered chunks are unbalanced by under 2x — cheap enough to leave alone.
+    parallel_for_range(len - 1, [&](size_t start, size_t end) {
+        for (size_t shift = start + 1; shift < end + 1; ++shift) {
+            fr sum = fr::zero();
+            for (size_t i = shift; i < len; ++i) {
+                sum += p[i] * r[i - shift] + p[i - shift] * r[i];
+            }
+            // p(X)r(1/X) contributes sum at X^{+shift} and (by symmetry of the added mirror term)
+            // the same value at X^{-shift}; both land in S per the identity.
+            s[shift - 1] += scale * sum;
+        }
+    });
 }
 
 /** @brief Lagrange interpolation value at z through up to three points. */
@@ -215,30 +223,30 @@ class MercuryProver {
         {
             MercuryChain chain_a;
             chain_a.array.assign(n, fr::zero());
+            std::vector<pcs_utils::ScaledTerm> terms_a;
             fr rho_power = fr::one();
             for (size_t i = 0; i < claims.unshifted.size(); ++i) {
                 const auto& column = claims.groups[claims.unshifted[i].group]->coefficients[claims.unshifted[i].column];
-                for (size_t k = 0; k < n; ++k) {
-                    chain_a.array[k] += rho_power * column[k];
-                }
+                terms_a.push_back({ column.data(), rho_power, false });
                 chain_a.claimed_evaluation += rho_power * claims.unshifted_evaluations[i];
                 rho_power *= rho;
             }
+            pcs_utils::accumulate_scaled(chain_a.array, terms_a);
             chains.push_back(std::move(chain_a));
             if (!claims.to_be_shifted.empty()) {
                 MercuryChain chain_b;
                 chain_b.is_shifted = true;
                 chain_b.raw.assign(n, fr::zero());
+                std::vector<pcs_utils::ScaledTerm> terms_b;
                 for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
                     const auto& column =
                         claims.groups[claims.to_be_shifted[l].group]->coefficients[claims.to_be_shifted[l].column];
                     BB_ASSERT_EQ(column[0], fr::zero(), "to-be-shifted polynomial must have zero constant term");
-                    for (size_t k = 0; k < n; ++k) {
-                        chain_b.raw[k] += rho_power * column[k];
-                    }
+                    terms_b.push_back({ column.data(), rho_power, false });
                     chain_b.claimed_evaluation += rho_power * claims.shifted_evaluations[l];
                     rho_power *= rho;
                 }
+                pcs_utils::accumulate_scaled(chain_b.raw, terms_b);
                 chain_b.array.assign(n, fr::zero());
                 for (size_t k = 0; k + 1 < n; ++k) {
                     chain_b.array[k] = chain_b.raw[k + 1];
@@ -252,14 +260,16 @@ class MercuryProver {
         for (size_t c = 0; c < chains.size(); ++c) {
             MercuryChain& chain = chains[c];
             chain.h.assign(rows, fr::zero());
-            for (size_t row = 0; row < rows; ++row) {
-                fr acc = fr::zero();
-                const fr* slice = chain.array.data() + row * b;
-                for (size_t j = 0; j < b; ++j) {
-                    acc += eq_lo[j] * slice[j];
+            parallel_for_range(rows, [&](size_t start, size_t end) {
+                for (size_t row = start; row < end; ++row) {
+                    fr acc = fr::zero();
+                    const fr* slice = chain.array.data() + row * b;
+                    for (size_t j = 0; j < b; ++j) {
+                        acc += eq_lo[j] * slice[j];
+                    }
+                    chain.h[row] = acc;
                 }
-                chain.h[row] = acc;
-            }
+            });
             transcript->send_to_verifier(detail::mercury_label("h", c), commit(ck, chain.h));
         }
 

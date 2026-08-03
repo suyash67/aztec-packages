@@ -146,14 +146,22 @@ inline std::pair<fr, fr> inner_product_round(std::span<const fr> m, std::span<co
     const size_t half = m.size() / 2;
     fr h0 = fr::zero();
     fr h2 = fr::zero();
-    for (size_t b = 0; b < half; ++b) {
-        const fr& m_even = m[2 * b];
-        const fr& m_odd = m[(2 * b) + 1];
-        const fr& w_even = w[2 * b];
-        const fr& w_odd = w[(2 * b) + 1];
-        h0 += m_even * w_even;
-        h2 += (m_odd + m_odd - m_even) * (w_odd + w_odd - w_even);
-    }
+    std::mutex accumulator_mutex;
+    parallel_for_range(half, [&](size_t start, size_t end) {
+        fr local0 = fr::zero();
+        fr local2 = fr::zero();
+        for (size_t b = start; b < end; ++b) {
+            const fr& m_even = m[2 * b];
+            const fr& m_odd = m[(2 * b) + 1];
+            const fr& w_even = w[2 * b];
+            const fr& w_odd = w[(2 * b) + 1];
+            local0 += m_even * w_even;
+            local2 += (m_odd + m_odd - m_even) * (w_odd + w_odd - w_even);
+        }
+        const std::scoped_lock lock(accumulator_mutex);
+        h0 += local0;
+        h2 += local2;
+    });
     return { h0, h2 };
 }
 
@@ -302,20 +310,36 @@ template <typename Hasher> class SwitchFoldProver {
         const auto scalars = detail::chain_scalars(claims.unshifted, claims.to_be_shifted, rho);
 
         // Descent input M = [w_u | w_s | w_s2 | 0]; the segment index is the top two variables.
+        // Threads split the *column* range, so each owns a disjoint slice of all three segments and
+        // no accumulator merge is needed.
         std::vector<fr> message(4 * num_cols, fr::zero());
-        for (const auto& [key, chain] : scalars) {
-            const std::vector<fr>& dense = claims.groups[key.first]->coefficients[key.second];
-            for (size_t r = 0; r < num_rows; ++r) {
-                const fr* row = dense.data() + (r * num_cols);
-                const fr cu = chain.scalar_u * b[r];
-                const fr cs = chain.scalar_s * b[r];
-                const fr cs2 = (r > 0) ? chain.scalar_s * b[r - 1] : fr::zero();
-                for (size_t c = 0; c < num_cols; ++c) {
-                    message[c] += cu * row[c];
-                    message[num_cols + c] += cs * row[c];
-                    message[(2 * num_cols) + c] += cs2 * row[c];
-                }
+        {
+            struct RowSource {
+                const fr* dense;
+                fr scalar_u;
+                fr scalar_s;
+            };
+            std::vector<RowSource> sources;
+            sources.reserve(scalars.size());
+            for (const auto& [key, chain] : scalars) {
+                sources.push_back(
+                    { claims.groups[key.first]->coefficients[key.second].data(), chain.scalar_u, chain.scalar_s });
             }
+            parallel_for_range(num_cols, [&](size_t start, size_t end) {
+                for (const RowSource& source : sources) {
+                    for (size_t r = 0; r < num_rows; ++r) {
+                        const fr* row = source.dense + (r * num_cols);
+                        const fr cu = source.scalar_u * b[r];
+                        const fr cs = source.scalar_s * b[r];
+                        const fr cs2 = (r > 0) ? source.scalar_s * b[r - 1] : fr::zero();
+                        for (size_t c = start; c < end; ++c) {
+                            message[c] += cu * row[c];
+                            message[num_cols + c] += cs * row[c];
+                            message[(2 * num_cols) + c] += cs2 * row[c];
+                        }
+                    }
+                }
+            });
         }
 
         fr expected = fr::zero();

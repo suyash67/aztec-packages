@@ -1,5 +1,6 @@
 #pragma once
 
+#include "barretenberg/commitment_schemes/utils/batch_accumulate.hpp"
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
@@ -272,35 +273,35 @@ class DoryProver {
             Chain chain_a;
             chain_a.array.assign(n, fr::zero());
             chain_a.rows.assign(num_rows, GroupElement::infinity());
+            std::vector<pcs_utils::ScaledTerm> terms_a;
             fr rho_power = fr::one();
             for (size_t i = 0; i < claims.unshifted.size(); ++i) {
                 const auto& group = *claims.groups[claims.unshifted[i].group];
                 const size_t column = claims.unshifted[i].column;
-                for (size_t k = 0; k < n; ++k) {
-                    chain_a.array[k] += rho_power * group.coefficients[column][k];
-                }
+                terms_a.push_back({ group.coefficients[column].data(), rho_power, false });
                 for (size_t r = 0; r < num_rows; ++r) {
                     chain_a.rows[r] += GroupElement(group.row_commitments[column][r]) * rho_power;
                 }
                 rho_power *= rho;
             }
+            pcs_utils::accumulate_scaled(chain_a.array, terms_a);
             chains.push_back(std::move(chain_a));
             if (!claims.to_be_shifted.empty()) {
                 Chain chain_b;
                 chain_b.num_q_claims = 2;
                 chain_b.array.assign(n, fr::zero());
                 chain_b.rows.assign(num_rows, GroupElement::infinity());
+                std::vector<pcs_utils::ScaledTerm> terms_b;
                 for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
                     const auto& group = *claims.groups[claims.to_be_shifted[l].group];
                     const size_t column = claims.to_be_shifted[l].column;
-                    for (size_t k = 0; k < n; ++k) {
-                        chain_b.array[k] += rho_power * group.coefficients[column][k];
-                    }
+                    terms_b.push_back({ group.coefficients[column].data(), rho_power, false });
                     for (size_t r = 0; r < num_rows; ++r) {
                         chain_b.rows[r] += GroupElement(group.row_commitments[column][r]) * rho_power;
                     }
                     rho_power *= rho;
                 }
+                pcs_utils::accumulate_scaled(chain_b.array, terms_b);
                 chains.push_back(std::move(chain_b));
             }
         }
@@ -449,9 +450,9 @@ class DoryVerifier {
         if (chains.size() > 1) {
             chains[1].num_q_claims = 2;
             for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
-                chains[1].commitment *= detail::gt_pow(
-                    group_commitments[claims.to_be_shifted[l].group][claims.to_be_shifted[l].column],
-                    uint256_t(rho_power));
+                chains[1].commitment *=
+                    detail::gt_pow(group_commitments[claims.to_be_shifted[l].group][claims.to_be_shifted[l].column],
+                                   uint256_t(rho_power));
                 chains[1].claimed_evaluation += rho_power * claims.shifted_evaluations[l];
                 rho_power *= rho;
             }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "barretenberg/commitment_schemes/utils/batch_accumulate.hpp"
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
@@ -188,12 +189,12 @@ class KzhProver {
         // Combined arrays for the two chains.
         std::vector<std::vector<fr>> chains;
         chains.emplace_back(n, fr::zero());
+        std::vector<pcs_utils::ScaledTerm> terms_a;
+        std::vector<pcs_utils::ScaledTerm> terms_b;
         fr rho_power = fr::one();
         for (size_t i = 0; i < claims.unshifted.size(); ++i) {
             const auto& column = claims.groups[claims.unshifted[i].group]->coefficients[claims.unshifted[i].column];
-            for (size_t k = 0; k < n; ++k) {
-                chains[0][k] += rho_power * column[k];
-            }
+            terms_a.push_back({ column.data(), rho_power, false });
             rho_power *= rho;
         }
         if (!claims.to_be_shifted.empty()) {
@@ -201,11 +202,13 @@ class KzhProver {
             for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
                 const auto& column =
                     claims.groups[claims.to_be_shifted[l].group]->coefficients[claims.to_be_shifted[l].column];
-                for (size_t k = 0; k < n; ++k) {
-                    chains[1][k] += rho_power * column[k];
-                }
+                terms_b.push_back({ column.data(), rho_power, false });
                 rho_power *= rho;
             }
+        }
+        pcs_utils::accumulate_scaled(chains[0], terms_a);
+        if (chains.size() > 1) {
+            pcs_utils::accumulate_scaled(chains[1], terms_b);
         }
 
         const std::vector<fr> b = whir::eq_tensor(u.subspan(config.log_num_cols));

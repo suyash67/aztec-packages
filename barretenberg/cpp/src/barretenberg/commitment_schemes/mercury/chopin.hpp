@@ -2,6 +2,7 @@
 
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
 #include "barretenberg/commitment_schemes/mercury/mercury.hpp"
+#include "barretenberg/commitment_schemes/utils/batch_accumulate.hpp"
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
@@ -260,29 +261,29 @@ class ChopinProver {
         {
             ChopinChain chain_a;
             chain_a.array.assign(n, fr::zero());
+            std::vector<pcs_utils::ScaledTerm> terms_a;
             fr rho_power = fr::one();
             for (size_t i = 0; i < claims.unshifted.size(); ++i) {
                 const auto& column = claims.groups[claims.unshifted[i].group]->coefficients[claims.unshifted[i].column];
-                for (size_t k = 0; k < n; ++k) {
-                    chain_a.array[k] += rho_power * column[k];
-                }
+                terms_a.push_back({ column.data(), rho_power, false });
                 chain_a.claimed_evaluation += rho_power * claims.unshifted_evaluations[i];
                 rho_power *= rho;
             }
+            pcs_utils::accumulate_scaled(chain_a.array, terms_a);
             chains.push_back(std::move(chain_a));
             if (!claims.to_be_shifted.empty()) {
                 ChopinChain chain_b;
                 chain_b.is_shifted = true;
                 chain_b.array.assign(n, fr::zero());
+                std::vector<pcs_utils::ScaledTerm> terms_b;
                 for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
                     const auto& column =
                         claims.groups[claims.to_be_shifted[l].group]->coefficients[claims.to_be_shifted[l].column];
-                    for (size_t k = 0; k < n; ++k) {
-                        chain_b.array[k] += rho_power * column[k];
-                    }
+                    terms_b.push_back({ column.data(), rho_power, false });
                     chain_b.claimed_evaluation += rho_power * claims.shifted_evaluations[l];
                     rho_power *= rho;
                 }
+                pcs_utils::accumulate_scaled(chain_b.array, terms_b);
                 chains.push_back(std::move(chain_b));
             }
         }

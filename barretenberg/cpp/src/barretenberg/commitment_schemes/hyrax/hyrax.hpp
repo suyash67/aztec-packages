@@ -2,6 +2,7 @@
 
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/common/assert.hpp"
+#include "barretenberg/common/thread.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
 
@@ -174,19 +175,27 @@ class HyraxProver {
         std::vector<fr> w_u(num_cols, fr::zero());
         std::vector<fr> w_s(num_cols, fr::zero());
         std::vector<fr> w_s2(num_cols, fr::zero());
+        // Threads split the column range, so each owns a disjoint slice of all three combined rows.
+        std::vector<RowTask> task_list;
+        task_list.reserve(tasks.size());
         for (const auto& [key, task] : tasks) {
-            for (size_t r = 0; r < num_rows; ++r) {
-                const fr* row = task.dense->data() + r * num_cols;
-                const fr cu = task.scalar_u * b[r];
-                const fr cs = task.scalar_s * b[r];
-                const fr cs2 = (r > 0) ? task.scalar_s * b[r - 1] : fr::zero();
-                for (size_t c = 0; c < num_cols; ++c) {
-                    w_u[c] += cu * row[c];
-                    w_s[c] += cs * row[c];
-                    w_s2[c] += cs2 * row[c];
+            task_list.push_back(task);
+        }
+        parallel_for_range(num_cols, [&](size_t start, size_t end) {
+            for (const RowTask& task : task_list) {
+                for (size_t r = 0; r < num_rows; ++r) {
+                    const fr* row = task.dense->data() + r * num_cols;
+                    const fr cu = task.scalar_u * b[r];
+                    const fr cs = task.scalar_s * b[r];
+                    const fr cs2 = (r > 0) ? task.scalar_s * b[r - 1] : fr::zero();
+                    for (size_t c = start; c < end; ++c) {
+                        w_u[c] += cu * row[c];
+                        w_s[c] += cs * row[c];
+                        w_s2[c] += cs2 * row[c];
+                    }
                 }
             }
-        }
+        });
         for (size_t c = 0; c < num_cols; ++c) {
             transcript->send_to_verifier(detail::hyrax_label("w_u", c), w_u[c]);
             transcript->send_to_verifier(detail::hyrax_label("w_s", c), w_s[c]);
