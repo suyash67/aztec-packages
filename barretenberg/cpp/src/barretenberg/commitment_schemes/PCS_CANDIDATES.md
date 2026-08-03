@@ -1,6 +1,6 @@
 # UltraHonk PCS backends: implemented set and evaluated candidates
 
-Thirteen PCS backends are implemented and benchmarked against each other on identical circuits through
+Fifteen PCS backends are implemented and benchmarked against each other on identical circuits through
 the shared `TransparentHonk` shell (`transparent_honk.hpp`); the sweep lives in
 `whir/whir_honk.bench.cpp` and its output in `pcs_bench_results.json` / `pcs_report.html`.
 
@@ -22,6 +22,12 @@ a few percent as noise.
 | **SwitchFold** | hash, code switching | transparent | 1619 ms | 13.6 ms | 772.9 KiB |
 | WHIR | hash, RS folding | transparent | 591 ms | 13.5 ms | 1219.7 KiB |
 | Ligero | hash, tensor √N | transparent | **382 ms** | 20.6 ms | 2692.6 KiB |
+| Bolt | hash, sketched code | transparent | see §7 | see §7 | see §7 |
+| Brakedown | hash, Spielman code | transparent | see §7 | see §7 | see §7 |
+
+The two linear-time-code backends are compared against Ligero at 2^14 in §7 rather than here: their
+query counts are one to two orders of magnitude larger, so a 2^18 row would be dominated by that
+single parameter and would invite the wrong comparison.
 
 Reading the table: **Vela is the smallest proof and the fastest verifier in the suite**, KZG is the
 fastest pairing prover and Ligero the fastest prover overall, and SwitchFold now occupies the
@@ -241,13 +247,46 @@ Figure 2 parameter validation, and the measurements. Two results from it change 
   ships as a reusable code rather than as another `*Honk` backend: dropping it into Ligero or
   SwitchFold would trade a ~20% encode win for a ~59x query-side proof blowup.
 
-That reframes the remaining work on Lightning and Bolt. Both exist precisely to keep linear-time
-encoding *while recovering distance* — Lightning by compressing a large-distance base code
-(`C_L(m) = m ‖ C_D(mA)`), Bolt via sketched random LDPCs. The measurements above say that recovery
-is the whole value proposition, not the encoding speed, which is a more demanding bar than the
-earlier operation-count argument suggested. Of the two, Bolt remains the better target at BN254: it
-reports better proof size than Brakedown rather than worse, whereas Lightning explicitly trades
-2.4x proof size for its 2.7x prover win — the wrong direction given that proof size is what binds.
+**Bolt is now implemented too** (`bolt/`), and it settles the question the original hypothesis posed.
+
+Bolt's code is `C_H(x) = (x, C(Hx))` — a sparse LDPC sketch fed to a base code — and its real
+contribution is a *piecewise* distance guarantee: distinct codewords differ either in more than `γ`
+of the systematic stretch or more than `δ` of the sketch stretch. `BoltHonk` tests the two stretches
+independently rather than sampling uniformly against the diluted average, which is what
+`ligero/QuerySegment` exists for.
+
+**The additions-vs-multiplications trade does not survive at BN254 — but not for the reason
+expected.** `γ` is the root of the paper's `ω_{q,j,k}`; the implementation reproduces the paper's own
+reference point (`q = 2^32, j = 16, k = 128 → 0.094114`). The identical parameters at BN254 give
+`γ = 0.00006`. The cause is structural: `ω`'s leading term is `x·ln(q−1)`, so a fixed column degree
+certifies less distance as the field grows and the degree must scale with `ln q ≈ 176`. Recovering
+`γ = 0.15` needs `j = 64`, i.e. **64 multiplications per message symbol**. Bolt's advertised
+`(3+ε)N` field *additions* is the Boolean-`H` instantiation of its §6.1, valid over bits; it does not
+carry to a 254-bit prime. So the earlier conclusion — that the operation mix left Bolt viable — was
+right about the arithmetic and wrong about the parameters.
+
+**What survives is the distance, and that is the half worth having.** At 2^14, the same tensor
+protocol over three codes:
+
+| | code | distance | queries | prove | verify | proof |
+|---|---|---|---|---|---|---|
+| Ligero | RS, rate 1/4 | 0.75 (conj.) | 50 | **41.2 ms** | **9.4 ms** | **833 KiB** |
+| Bolt | sketched, piecewise | 0.15 / 0.75 | 428 + 50 | 86.3 ms | 96.3 ms | 3.94 MiB |
+| Brakedown | Spielman | 0.07 | 2936 | 78.9 ms | 156 ms | 20.2 MiB |
+
+Bolt's proof is **5.1x smaller than Brakedown's** with a 1.6x faster verifier — the piecewise test
+doing exactly what it should — but still 4.7x Ligero's. The ordering on the binding axis is
+`Ligero < Bolt < Brakedown`.
+
+**Conclusion for the whole linear-time-code line at BN254.** It is not yet competitive with a tuned
+Reed–Solomon encoder, and the obstacle is the certified distance these codes can offer at a 254-bit
+field — not their encoding speed, which was the original hypothesis and which the measurements
+retire. Lightning would not change this: it explicitly trades 2.4x proof size for its 2.7x prover
+win, the wrong direction when proof size binds. The levers that would change the answer are a
+tighter distance analysis (RS gets its 0.75 from a *conjecture*; these codes are held to
+union-bound-style proofs), a smaller sketch ratio at fixed `γ`, or composing a sketched code with
+the `switchfold/` descent so the transmitted-row and query terms are attacked together. See
+`bolt/README.md` §5.
 
 ## 8. Carina (eprint 2026/1438) — not implemented
 
@@ -284,20 +323,24 @@ cannot fill UltraHonk's PCS slot:
 
 ## Remaining candidates, prioritized
 
-1. **Bolt** ([2026/310](https://eprint.iacr.org/2026/310)) — now unblocked: `brakedown/` supplies
-   the linear-time code layer, and Bolt's sketched LDPCs are the distance-recovering variant of it.
-   Distance is the axis that matters (§7), so the module's `BrakedownParams` presets are the place
-   a Bolt code would slot in.
+1. **A sketched code under the code-switching descent.** `switchfold/` removes Ligero's
+   transmitted-row term but does nothing for the query term, which is exactly what dominates Bolt and
+   Brakedown (§7). Running the descent over `bolt/`'s code attacks both at once, and all three pieces
+   now exist, so this is the cheapest remaining experiment with a real chance of moving the
+   transparent frontier.
 2. **Titan** ([2026/908](https://eprint.iacr.org/2026/908)) — designed (§6); needs the group-IOPP
    and compressed-sigma machinery plus a resolution of the constant-factor problem.
-3. **Distance-aware query counts as a shared helper.** Ligero and SwitchFold both hardcode the RS
-   capacity rule `t = ⌈λ/r⌉`. Any non-RS code needs `t = λ / −log₂(1 − δ/3)` instead. Factoring
-   that out is a precondition for benchmarking *any* alternative code end to end, and it is small.
-4. **Carina** ([2026/1438](https://eprint.iacr.org/2026/1438)) — §8; needs the X-coordinate
+3. **zip proof compression** ([2025/1446](https://eprint.iacr.org/2025/1446)) — not a PCS: a
+   compression layer for hash-based proofs. It attacks the MiB-scale proofs of WHIR, Ligero,
+   SwitchFold, Bolt and Brakedown simultaneously, which given §7's conclusion is arguably better
+   leverage than any further code.
+4. **Orion** ([2022/1010](https://eprint.iacr.org/2022/1010)) — the one construction with both a
+   linear prover and polylog proof and verify. Its expander testing targets precisely the
+   small-distance problem §7 identifies, and its proof composition the query term. Needs a careful
+   read of the current version first: the original expander-testing soundness argument had a gap that
+   was later patched.
+5. **Carina** ([2026/1438](https://eprint.iacr.org/2026/1438)) — §8; needs the X-coordinate
    linearization.
-5. **zip proof compression** ([2025/1446](https://eprint.iacr.org/2025/1446)) — not a PCS: a
-   compression layer for hash-based proofs that directly attacks the MiB-scale proofs of WHIR,
-   Ligero and SwitchFold.
 6. **Samaritan** ([2025/419](https://eprint.iacr.org/2025/419)) — intra-corner A/B against Mercury
    and Vela; low marginal insight now that Vela and CHOPIN occupy that corner.
 

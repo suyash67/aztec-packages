@@ -652,10 +652,10 @@ BENCHMARK_TEMPLATE(ligero_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2
 BENCHMARK_TEMPLATE(ligero_honk_prove, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(ligero_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(ligero_honk_verify, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(bolt_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(bolt_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(brakedown_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
-BENCHMARK_TEMPLATE(brakedown_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(bolt_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 16, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(bolt_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 16, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(brakedown_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 16, 2)->Unit(benchmark::kMillisecond);
+BENCHMARK_TEMPLATE(brakedown_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 16, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(switchfold_honk_prove, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(switchfold_honk_prove, Poseidon2MerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);
 BENCHMARK_TEMPLATE(switchfold_honk_verify, Blake3sMerkleHasher)->DenseRange(12, 20, 2)->Unit(benchmark::kMillisecond);

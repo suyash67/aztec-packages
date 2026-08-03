@@ -25,6 +25,9 @@ BACKENDS = [
     ("whir_honk_repaired", "Blake3sMerkleHasher", "WHIR (repaired)", "hash", 1),
     ("ligero_honk", "Blake3sMerkleHasher", "Ligero", "hash", 2),
     ("switchfold_honk", "Blake3sMerkleHasher", "SwitchFold", "hash", 3),
+    ("bolt_honk", "Blake3sMerkleHasher", "Bolt", "code", 0),
+    ("brakedown_honk", "Blake3sMerkleHasher", "Brakedown", "code", 1),
+    ("ligero_honk", "Blake3sMerkleHasher", "Ligero (RS)", "code", 2),
     ("ipa_honk", None, "IPA", "dl", 0),
     ("hyrax_honk", None, "Hyrax", "dl", 1),
     ("dory_honk", None, "Dory", "dl", 2),
@@ -34,6 +37,7 @@ FAMILIES = [
     ("pairing", "Pairing-based (structured setup)"),
     ("hash", "Hash-based (transparent)"),
     ("dl", "Discrete-log (transparent)"),
+    ("code", "Linear-time codes vs Reed-Solomon"),
 ]
 
 METRICS = [
