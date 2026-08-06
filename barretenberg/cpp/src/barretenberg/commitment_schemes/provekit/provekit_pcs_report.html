@@ -23,6 +23,7 @@
     --kzh2:    #008300;
     --ipa:     #4a3aa7;
     --dory:    #e34948;
+    --provekit: #898781;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -43,6 +44,7 @@
       --kzh2:    #008300;
       --ipa:     #9085e9;
       --dory:    #e66767;
+      --provekit: #898781;
     }
   }
   :root[data-theme="dark"] {
@@ -63,6 +65,7 @@
     --kzh2:    #008300;
     --ipa:     #9085e9;
     --dory:    #e66767;
+    --provekit: #898781;
   }
   * { box-sizing: border-box; margin: 0; }
   body {
@@ -138,9 +141,10 @@
   <div class="tiles" id="tiles"></div>
 
   <section>
-    <h2>One application, eight polynomial commitment schemes</h2>
-    <p class="note">Identical UltraHonk arithmetization and sumcheck for every row; only the commitment scheme and its
-      batched opening differ. Medians of <span id="reps-inline"></span> fresh-process runs; ×KZG is the ratio to the
+    <h2>One application, eight polynomial commitment schemes — and ProveKit's own prover</h2>
+    <p class="note">Identical UltraHonk arithmetization and sumcheck for every barretenberg row; only the commitment
+      scheme and its batched opening differ. The gray ProveKit row is that project's own Spartan+WHIR prover on the
+      same circuit and machine. Medians of <span id="reps-inline"></span> fresh-process runs; ×KZG is the ratio to the
       same sweep's KZG median (bold marks the best column entry).</p>
     <div class="card"><table id="results-table"></table></div>
   </section>
@@ -156,7 +160,7 @@
 
 <script>
 const RESULTS = /*RESULTS_JSON_START*/
-{"circuit": {"name": "ProveKit complete_age_check (World ID RSA ePassport age check)", "source": "github.com/worldfnd/ProveKit noir-examples/noir-passport-monolithic", "log_n": 19, "num_gates": 524288}, "machine": "Apple M4 Pro arm64 (DISABLE_ASM build; compare ratios, not absolutes)", "commit": "65940c7a8e", "generated_utc": "2026-08-06T14:44:52+00:00", "reps": 5, "backends": {"kzg": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1482.82, "verify_ms": 5.40787, "proof_bytes": 13216, "peak_rss_bytes": 1222377472, "pk_ms": 545.088, "circuit_ms": 457.418, "ratio_prove_ms": 1.0, "ratio_verify_ms": 1.0, "ratio_proof_bytes": 1.0, "ratio_peak_rss_bytes": 1.0}, "mercury": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1647.21, "verify_ms": 6.29733, "proof_bytes": 9696, "peak_rss_bytes": 2330624000, "pk_ms": 714.638, "circuit_ms": 481.007, "ratio_prove_ms": 1.1108630852025196, "ratio_verify_ms": 1.1644751075747013, "ratio_proof_bytes": 0.7336561743341404, "ratio_peak_rss_bytes": 1.9066319965687326}, "whir": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1784.81, "verify_ms": 20.1378, "proof_bytes": 1269888, "peak_rss_bytes": 4826890240, "pk_ms": 4140.89, "circuit_ms": 458.054, "ratio_prove_ms": 1.2036592438731606, "ratio_verify_ms": 3.7237951356079195, "ratio_proof_bytes": 96.08716707021792, "ratio_peak_rss_bytes": 3.9487722496247053}, "ligero": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1170.69, "verify_ms": 38.2355, "proof_bytes": 3678944, "peak_rss_bytes": 4613767168, "pk_ms": 2685.75, "circuit_ms": 472.059, "ratio_prove_ms": 0.7895024345503838, "ratio_verify_ms": 7.070343776754989, "ratio_proof_bytes": 278.37046004842614, "ratio_peak_rss_bytes": 3.7744209736221315}, "hyrax": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 4765.98, "verify_ms": 269.9, "proof_bytes": 629152, "peak_rss_bytes": 2153283584, "pk_ms": 5809.96, "circuit_ms": 461.487, "ratio_prove_ms": 3.214132531258008, "ratio_verify_ms": 49.9087441081239, "ratio_proof_bytes": 47.60532687651332, "ratio_peak_rss_bytes": 1.7615537207806133}, "kzh2": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 7932.67, "verify_ms": 249.691, "proof_bytes": 236960, "peak_rss_bytes": 2165866496, "pk_ms": 5720.39, "circuit_ms": 466.707, "ratio_prove_ms": 5.349718779083099, "ratio_verify_ms": 46.1717829755523, "ratio_proof_bytes": 17.929782082324454, "ratio_peak_rss_bytes": 1.771847523053828}, "ipa": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 7613.53, "verify_ms": 7207.9, "proof_bytes": 17376, "peak_rss_bytes": 2336833536, "pk_ms": 7674.39, "circuit_ms": 457.313, "ratio_prove_ms": 5.134493734910508, "ratio_verify_ms": 1332.853785316585, "ratio_proof_bytes": 1.314769975786925, "ratio_peak_rss_bytes": 1.911711880763457}, "dory": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 5685.07, "verify_ms": 367.898, "proof_bytes": 145824, "peak_rss_bytes": 2166325248, "pk_ms": 6081.48, "circuit_ms": 461.099, "ratio_prove_ms": 3.8339582687042255, "ratio_verify_ms": 68.0301116705838, "ratio_proof_bytes": 11.033898305084746, "ratio_peak_rss_bytes": 1.7722228179283723}}}
+{"circuit": {"name": "ProveKit complete_age_check (World ID RSA ePassport age check)", "source": "github.com/worldfnd/ProveKit noir-examples/noir-passport-monolithic", "log_n": 19, "num_gates": 524288}, "machine": "Apple M4 Pro arm64 (DISABLE_ASM build; compare ratios, not absolutes)", "commit": "eff705656e", "generated_utc": "2026-08-06T15:20:08+00:00", "reps": 5, "backends": {"kzg": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1482.82, "verify_ms": 5.40787, "proof_bytes": 13216, "peak_rss_bytes": 1222377472, "pk_ms": 545.088, "circuit_ms": 457.418, "ratio_prove_ms": 1.0, "ratio_verify_ms": 1.0, "ratio_proof_bytes": 1.0, "ratio_peak_rss_bytes": 1.0}, "mercury": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1647.21, "verify_ms": 6.29733, "proof_bytes": 9696, "peak_rss_bytes": 2330624000, "pk_ms": 714.638, "circuit_ms": 481.007, "ratio_prove_ms": 1.1108630852025196, "ratio_verify_ms": 1.1644751075747013, "ratio_proof_bytes": 0.7336561743341404, "ratio_peak_rss_bytes": 1.9066319965687326}, "whir": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1784.81, "verify_ms": 20.1378, "proof_bytes": 1269888, "peak_rss_bytes": 4826890240, "pk_ms": 4140.89, "circuit_ms": 458.054, "ratio_prove_ms": 1.2036592438731606, "ratio_verify_ms": 3.7237951356079195, "ratio_proof_bytes": 96.08716707021792, "ratio_peak_rss_bytes": 3.9487722496247053}, "ligero": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1170.69, "verify_ms": 38.2355, "proof_bytes": 3678944, "peak_rss_bytes": 4613767168, "pk_ms": 2685.75, "circuit_ms": 472.059, "ratio_prove_ms": 0.7895024345503838, "ratio_verify_ms": 7.070343776754989, "ratio_proof_bytes": 278.37046004842614, "ratio_peak_rss_bytes": 3.7744209736221315}, "hyrax": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 4765.98, "verify_ms": 269.9, "proof_bytes": 629152, "peak_rss_bytes": 2153283584, "pk_ms": 5809.96, "circuit_ms": 461.487, "ratio_prove_ms": 3.214132531258008, "ratio_verify_ms": 49.9087441081239, "ratio_proof_bytes": 47.60532687651332, "ratio_peak_rss_bytes": 1.7615537207806133}, "kzh2": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 7932.67, "verify_ms": 249.691, "proof_bytes": 236960, "peak_rss_bytes": 2165866496, "pk_ms": 5720.39, "circuit_ms": 466.707, "ratio_prove_ms": 5.349718779083099, "ratio_verify_ms": 46.1717829755523, "ratio_proof_bytes": 17.929782082324454, "ratio_peak_rss_bytes": 1.771847523053828}, "ipa": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 7613.53, "verify_ms": 7207.9, "proof_bytes": 17376, "peak_rss_bytes": 2336833536, "pk_ms": 7674.39, "circuit_ms": 457.313, "ratio_prove_ms": 5.134493734910508, "ratio_verify_ms": 1332.853785316585, "ratio_proof_bytes": 1.314769975786925, "ratio_peak_rss_bytes": 1.911711880763457}, "dory": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 5685.07, "verify_ms": 367.898, "proof_bytes": 145824, "peak_rss_bytes": 2166325248, "pk_ms": 6081.48, "circuit_ms": 461.099, "ratio_prove_ms": 3.8339582687042255, "ratio_verify_ms": 68.0301116705838, "ratio_proof_bytes": 11.033898305084746, "ratio_peak_rss_bytes": 1.7722228179283723}, "provekit": {"reps": 5, "log_n": 0, "num_gates": 0, "prove_ms": 5830.0, "verify_ms": 371.0, "proof_bytes": 367603, "peak_rss_bytes": 1282637824, "pk_ms": 0, "circuit_ms": 0, "ratio_prove_ms": 3.931697711118005, "ratio_verify_ms": 68.603720133805, "ratio_proof_bytes": 27.814996973365616, "ratio_peak_rss_bytes": 1.049297662449067}}}
 /*RESULTS_JSON_END*/;
 
 const BACKENDS = [
@@ -168,6 +172,7 @@ const BACKENDS = [
   { key: "kzh2",    name: "KZH2",     family: "pairing √N (test-only setup)" },
   { key: "ipa",     name: "IPA",      family: "Bulletproofs-style, transparent" },
   { key: "dory",    name: "Dory",     family: "AFGHO/GT (test-only G2 setup)" },
+  { key: "provekit", name: "ProveKit", family: "external system: Spartan+WHIR over R1CS, Skyscraper hash — same machine, not UltraHonk" },
 ];
 
 const METRICS = [
@@ -241,7 +246,10 @@ function render() {
     ` sessions — compare the ×KZG ratios, all measured in one sweep.</p>` +
     `<p><strong>Caveats.</strong> Hash-based and √N backends run at conjectured λ=100 (WHIR: up-to-capacity` +
     ` conjecture, rate ¼); KZH2 and Dory use deliberately test-only trapdoor setups; only KZG is production code.` +
-    ` The KZG rows require the BN254 structured reference string; the transparent rows need no trusted setup.</p>` +
+    ` The KZG rows require the BN254 structured reference string; the transparent rows need no trusted setup.` +
+    ` The ProveKit row (when present) is a different proof system run on the same machine and circuit — ProveKit's own` +
+    ` Spartan+WHIR prover over R1CS with the Skyscraper hash — and its prove time includes witness generation,` +
+    ` which the UltraHonk rows exclude.</p>` +
     `<p>Generated ${RESULTS.generated_utc} · regenerate with <code>provekit/driver.sh</code>.</p>`;
 }
 

@@ -6,8 +6,8 @@
   "num_gates": 524288
  },
  "machine": "Apple M4 Pro arm64 (DISABLE_ASM build; compare ratios, not absolutes)",
- "commit": "65940c7a8e",
- "generated_utc": "2026-08-06T14:44:52+00:00",
+ "commit": "eff705656e",
+ "generated_utc": "2026-08-06T15:20:08+00:00",
  "reps": 5,
  "backends": {
   "kzg": {
@@ -129,6 +129,21 @@
    "ratio_verify_ms": 68.0301116705838,
    "ratio_proof_bytes": 11.033898305084746,
    "ratio_peak_rss_bytes": 1.7722228179283723
+  },
+  "provekit": {
+   "reps": 5,
+   "log_n": 0,
+   "num_gates": 0,
+   "prove_ms": 5830.0,
+   "verify_ms": 371.0,
+   "proof_bytes": 367603,
+   "peak_rss_bytes": 1282637824,
+   "pk_ms": 0,
+   "circuit_ms": 0,
+   "ratio_prove_ms": 3.931697711118005,
+   "ratio_verify_ms": 68.603720133805,
+   "ratio_proof_bytes": 27.814996973365616,
+   "ratio_peak_rss_bytes": 1.049297662449067
   }
  }
 }

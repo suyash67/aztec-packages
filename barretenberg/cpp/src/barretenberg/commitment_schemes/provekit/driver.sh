@@ -63,5 +63,26 @@ for rep in $(seq 1 "$REPS"); do
     done
 done
 
+# Optional comparison row: ProveKit's own prover (Spartan+WHIR over R1CS, Skyscraper hash) on the
+# same Noir package. Point PROVEKIT_CLI at a release build of provekit-cli from
+# github.com/worldfnd/ProveKit (cargo build --release --bin provekit-cli); skipped when unset.
+PROVEKIT_CLI="${PROVEKIT_CLI:-}"
+if [[ -x "$PROVEKIT_CLI" ]]; then
+    PKG_DIR="$(dirname "$CIRCUIT_DIR")" # the Noir package holding Nargo.toml + Prover.toml
+    PK_KEYS="$WORK_DIR/provekit-keys"
+    mkdir -p "$PK_KEYS"
+    if [[ ! -f "$PK_KEYS/scheme.pkp" ]]; then
+        echo "--- provekit prepare (one-time key generation)"
+        (cd "$PKG_DIR" && "$PROVEKIT_CLI" prepare --pkp "$PK_KEYS/scheme.pkp" --pkv "$PK_KEYS/scheme.pkv")
+    fi
+    for rep in $(seq 1 "$REPS"); do
+        echo "--- rep $rep/$REPS  pcs=provekit (native)"
+        python3 measure_provekit.py "$PROVEKIT_CLI" "$PKG_DIR" "$PK_KEYS/scheme.pkp" "$PK_KEYS/scheme.pkv" >> "$RAW"
+        tail -1 "$RAW"
+    done
+else
+    echo "PROVEKIT_CLI not set/executable; skipping the ProveKit native comparison row"
+fi
+
 python3 aggregate.py "$RAW" results.json provekit_pcs_report.html
 echo "wrote results.json and provekit_pcs_report.html"
