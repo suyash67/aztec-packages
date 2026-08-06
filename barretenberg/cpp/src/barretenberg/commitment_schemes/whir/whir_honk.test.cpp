@@ -74,6 +74,25 @@ TYPED_TEST(WhirHonkTest, TamperedProofRejected)
     }
 }
 
+TYPED_TEST(WhirHonkTest, VirtualColumnsOmittedFromCommitment)
+{
+    const auto setup = TestFixture::prove_test_circuit();
+    const uint32_t mask = setup.vk.virtual_mask;
+
+    // The lagrange point indicators are always virtual (entities 8, 9), and the test circuit uses
+    // no elliptic (23), nnf (25), or poseidon2 (26, 27) gates, so those selectors are zero columns.
+    for (const size_t entity : { 8U, 9U, 23U, 25U, 26U, 27U }) {
+        EXPECT_TRUE(((mask >> entity) & 1) == 1) << "entity " << entity;
+    }
+    EXPECT_LE(setup.vk.num_committed_precomputed(), 22U);
+    EXPECT_TRUE(TestFixture::Honk::verify(setup.vk, setup.config, setup.proof));
+
+    // The indicator rows are part of the statement: a wrong row must be rejected.
+    auto bad_vk = setup.vk;
+    bad_vk.lagrange_last_row ^= 1;
+    EXPECT_FALSE(TestFixture::Honk::verify(bad_vk, setup.config, setup.proof));
+}
+
 TYPED_TEST(WhirHonkTest, WrongVkRejected)
 {
     const auto setup = TestFixture::prove_test_circuit();
