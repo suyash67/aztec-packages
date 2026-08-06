@@ -6,8 +6,8 @@
   "num_gates": 524288
  },
  "machine": "Apple M4 Pro arm64 (DISABLE_ASM build; compare ratios, not absolutes)",
- "commit": "eff705656e",
- "generated_utc": "2026-08-06T15:20:08+00:00",
+ "commit": "641ad2fb5f",
+ "generated_utc": "2026-08-06T16:48:05+00:00",
  "reps": 5,
  "backends": {
   "kzg": {
@@ -144,6 +144,36 @@
    "ratio_verify_ms": 68.603720133805,
    "ratio_proof_bytes": 27.814996973365616,
    "ratio_peak_rss_bytes": 1.049297662449067
+  },
+  "whir-sky": {
+   "reps": 5,
+   "log_n": 19,
+   "num_gates": 524288,
+   "prove_ms": 3728.54,
+   "verify_ms": 51.8351,
+   "proof_bytes": 1112704,
+   "peak_rss_bytes": 4825841664,
+   "pk_ms": 10492.6,
+   "circuit_ms": 506.703,
+   "ratio_prove_ms": 2.5144926558854075,
+   "ratio_verify_ms": 9.585123163093787,
+   "ratio_proof_bytes": 84.19370460048427,
+   "ratio_peak_rss_bytes": 3.947914432768604
+  },
+  "whir-p2": {
+   "reps": 5,
+   "log_n": 19,
+   "num_gates": 524288,
+   "prove_ms": 10083.5,
+   "verify_ms": 146.661,
+   "proof_bytes": 1112704,
+   "peak_rss_bytes": 4825563136,
+   "pk_ms": 25265,
+   "circuit_ms": 524.952,
+   "ratio_prove_ms": 6.800218502582917,
+   "ratio_verify_ms": 27.11991967262527,
+   "ratio_proof_bytes": 84.19370460048427,
+   "ratio_peak_rss_bytes": 3.947686575166202
   }
  }
 }

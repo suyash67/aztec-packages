@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 REPS="${1:-5}"
-BACKENDS=(kzg mercury whir ligero hyrax kzh2 ipa dory)
+BACKENDS=(kzg mercury whir whir-p2 whir-sky ligero hyrax kzh2 ipa dory)
 BUILD_DIR="${BUILD_DIR:-$(cd ../../../.. && pwd)/build-arm64}"
 BENCH_BIN="$BUILD_DIR/bin/pcs_acir_bench"
 WORK_DIR="$PWD/workdir"
@@ -68,7 +68,14 @@ done
 # github.com/worldfnd/ProveKit (cargo build --release --bin provekit-cli); skipped when unset.
 PROVEKIT_CLI="${PROVEKIT_CLI:-}"
 if [[ -x "$PROVEKIT_CLI" ]]; then
-    PKG_DIR="$(dirname "$CIRCUIT_DIR")" # the Noir package holding Nargo.toml + Prover.toml
+    # provekit-cli `prepare` recompiles the package with ProveKit's own Noir frontend and
+    # overwrites target/, clobbering the nargo artifact bb consumes — run it in a package copy.
+    SRC_PKG="$(dirname "$CIRCUIT_DIR")" # the Noir package holding Nargo.toml + Prover.toml
+    PKG_DIR="$WORK_DIR/provekit-pkg"
+    if [[ ! -d "$PKG_DIR" ]]; then
+        cp -R "$SRC_PKG" "$PKG_DIR"
+        rm -rf "$PKG_DIR/target"
+    fi
     PK_KEYS="$WORK_DIR/provekit-keys"
     mkdir -p "$PK_KEYS"
     if [[ ! -f "$PK_KEYS/scheme.pkp" ]]; then

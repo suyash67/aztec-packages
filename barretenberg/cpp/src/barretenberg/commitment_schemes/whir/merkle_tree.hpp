@@ -4,6 +4,7 @@
 #include "barretenberg/common/thread.hpp"
 #include "barretenberg/crypto/blake3s/blake3s.hpp"
 #include "barretenberg/crypto/poseidon2/poseidon2.hpp"
+#include "barretenberg/crypto/skyscraper/skyscraper.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
 #include "barretenberg/numeric/uint256/uint256.hpp"
 
@@ -38,6 +39,37 @@ struct Poseidon2MerkleHasher {
         return Poseidon2::hash(input);
     }
     static Digest hash_node(const Digest& left, const Digest& right) { return Poseidon2::hash({ fr(1), left, right }); }
+    static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest) { return { digest }; }
+    static Digest digest_from_fields(std::span<const fr> fields) { return fields[0]; }
+};
+
+/**
+ * @brief Merkle hasher over BN254 Fr with the Skyscraper-v1 compression (ePrint 2025/058).
+ * @details Follows ProveKit's Merkle conventions exactly for apples-to-apples comparison: a leaf is
+ * the left-fold of the two-to-one compression over its values (a single value hashes to itself), a
+ * node is one compression, and there is no leaf/node domain separation. A salt, when present, is
+ * folded in before the values. Like Poseidon2 this is an algebraic hash with an Fr digest, but each
+ * compression is 9 double-rounds of squarings/byte S-boxes instead of a full Poseidon2 sponge.
+ */
+struct SkyscraperMerkleHasher {
+    using Digest = fr;
+    static constexpr size_t DIGEST_NUM_FIELDS = 1;
+
+    static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
+    {
+        if (!salt) {
+            return crypto::skyscraper::fold_compress(values);
+        }
+        fr acc = *salt;
+        for (const fr& value : values) {
+            acc = crypto::skyscraper::compress(acc, value);
+        }
+        return acc;
+    }
+    static Digest hash_node(const Digest& left, const Digest& right)
+    {
+        return crypto::skyscraper::compress(left, right);
+    }
     static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest) { return { digest }; }
     static Digest digest_from_fields(std::span<const fr> fields) { return fields[0]; }
 };
