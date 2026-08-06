@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProveKit workload × PCS backends — UltraHonk benchmark</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:      #f9f9f7;
+    --surface:   #fcfcfb;
+    --ink:       #0b0b0b;
+    --ink-2:     #52514e;
+    --muted:     #898781;
+    --grid:      #e1e0d9;
+    --baseline:  #c3c2b7;
+    --border:    rgba(11,11,11,0.10);
+    --kzg:     #2a78d6;
+    --mercury: #eb6834;
+    --whir:    #1baf7a;
+    --ligero:  #eda100;
+    --hyrax:   #e87ba4;
+    --kzh2:    #008300;
+    --ipa:     #4a3aa7;
+    --dory:    #e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:      #0d0d0d;
+      --surface:   #1a1a19;
+      --ink:       #ffffff;
+      --ink-2:     #c3c2b7;
+      --muted:     #898781;
+      --grid:      #2c2c2a;
+      --baseline:  #383835;
+      --border:    rgba(255,255,255,0.10);
+      --kzg:     #3987e5;
+      --mercury: #d95926;
+      --whir:    #199e70;
+      --ligero:  #c98500;
+      --hyrax:   #d55181;
+      --kzh2:    #008300;
+      --ipa:     #9085e9;
+      --dory:    #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:      #0d0d0d;
+    --surface:   #1a1a19;
+    --ink:       #ffffff;
+    --ink-2:     #c3c2b7;
+    --muted:     #898781;
+    --grid:      #2c2c2a;
+    --baseline:  #383835;
+    --border:    rgba(255,255,255,0.10);
+    --kzg:     #3987e5;
+    --mercury: #d95926;
+    --whir:    #199e70;
+    --ligero:  #c98500;
+    --hyrax:   #d55181;
+    --kzh2:    #008300;
+    --ipa:     #9085e9;
+    --dory:    #e66767;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 32px 20px 48px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  h1 { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-2); margin-top: 4px; max-width: 760px; }
+  .sub code { font-size: 13px; }
+  #theme-toggle {
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px;
+    flex: none;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 24px 0; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .v { font-size: 22px; font-weight: 650; }
+  .tile .k { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  section { margin-top: 32px; }
+  h2 { font-size: 17px; font-weight: 650; margin-bottom: 4px; }
+  .note { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 6px 0; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 780px; }
+  th, td { text-align: right; padding: 9px 14px; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--grid); }
+  tbody tr + tr td { border-top: 1px solid var(--grid); }
+  tbody tr:hover td { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+  td { font-variant-numeric: tabular-nums; }
+  .backend { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .family { color: var(--muted); font-size: 12px; font-weight: 400; }
+  .ratio { display: block; color: var(--ink-2); font-size: 12px; }
+  .ratio.best { color: var(--ink); font-weight: 600; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; }
+  @media (max-width: 500px) { .charts { grid-template-columns: 1fr; } }
+  .chart { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px 10px; }
+  .chart h3 { font-size: 14px; font-weight: 650; }
+  .chart .axis-note { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .plot { position: relative; }
+  .ticks { position: absolute; inset: 0 0 22px 108px; }
+  .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--grid); }
+  .tick span { position: absolute; bottom: -20px; left: 0; transform: translateX(-50%); color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .rows { position: relative; padding-bottom: 22px; }
+  .row { display: flex; align-items: center; height: 30px; }
+  .row .lbl { width: 100px; flex: none; font-size: 13px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; padding-right: 8px; text-align: right; }
+  .track { position: relative; flex: 1; height: 100%; }
+  .mark {
+    position: absolute; top: 50%; transform: translate(-50%, -50%);
+    width: 11px; height: 11px; border-radius: 50%;
+    box-shadow: 0 0 0 2px var(--surface);
+  }
+  .val { position: absolute; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  footer { margin-top: 36px; color: var(--muted); font-size: 13px; }
+  footer p + p { margin-top: 6px; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>ProveKit workload × PCS backends</h1>
+      <p class="sub" id="subtitle"></p>
+    </div>
+    <button id="theme-toggle" aria-label="Toggle color theme">◐ Theme</button>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <h2>One application, eight polynomial commitment schemes</h2>
+    <p class="note">Identical UltraHonk arithmetization and sumcheck for every row; only the commitment scheme and its
+      batched opening differ. Medians of <span id="reps-inline"></span> fresh-process runs; ×KZG is the ratio to the
+      same sweep's KZG median (bold marks the best column entry).</p>
+    <div class="card"><table id="results-table"></table></div>
+  </section>
+
+  <section>
+    <h2>Metric detail</h2>
+    <p class="note">Dot position on a log axis — ranges span orders of magnitude, so lengths are not comparable, positions are.</p>
+    <div class="charts" id="charts"></div>
+  </section>
+
+  <footer id="footer"></footer>
+</div>
+
+<script>
+const RESULTS = /*RESULTS_JSON_START*/
+{"circuit": {"name": "ProveKit complete_age_check (World ID RSA ePassport age check)", "source": "github.com/worldfnd/ProveKit noir-examples/noir-passport-monolithic", "log_n": 19, "num_gates": 524288}, "machine": "Apple M4 Pro arm64 (DISABLE_ASM build; compare ratios, not absolutes)", "commit": "65940c7a8e", "generated_utc": "2026-08-06T14:44:52+00:00", "reps": 5, "backends": {"kzg": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1482.82, "verify_ms": 5.40787, "proof_bytes": 13216, "peak_rss_bytes": 1222377472, "pk_ms": 545.088, "circuit_ms": 457.418, "ratio_prove_ms": 1.0, "ratio_verify_ms": 1.0, "ratio_proof_bytes": 1.0, "ratio_peak_rss_bytes": 1.0}, "mercury": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1647.21, "verify_ms": 6.29733, "proof_bytes": 9696, "peak_rss_bytes": 2330624000, "pk_ms": 714.638, "circuit_ms": 481.007, "ratio_prove_ms": 1.1108630852025196, "ratio_verify_ms": 1.1644751075747013, "ratio_proof_bytes": 0.7336561743341404, "ratio_peak_rss_bytes": 1.9066319965687326}, "whir": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1784.81, "verify_ms": 20.1378, "proof_bytes": 1269888, "peak_rss_bytes": 4826890240, "pk_ms": 4140.89, "circuit_ms": 458.054, "ratio_prove_ms": 1.2036592438731606, "ratio_verify_ms": 3.7237951356079195, "ratio_proof_bytes": 96.08716707021792, "ratio_peak_rss_bytes": 3.9487722496247053}, "ligero": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 1170.69, "verify_ms": 38.2355, "proof_bytes": 3678944, "peak_rss_bytes": 4613767168, "pk_ms": 2685.75, "circuit_ms": 472.059, "ratio_prove_ms": 0.7895024345503838, "ratio_verify_ms": 7.070343776754989, "ratio_proof_bytes": 278.37046004842614, "ratio_peak_rss_bytes": 3.7744209736221315}, "hyrax": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 4765.98, "verify_ms": 269.9, "proof_bytes": 629152, "peak_rss_bytes": 2153283584, "pk_ms": 5809.96, "circuit_ms": 461.487, "ratio_prove_ms": 3.214132531258008, "ratio_verify_ms": 49.9087441081239, "ratio_proof_bytes": 47.60532687651332, "ratio_peak_rss_bytes": 1.7615537207806133}, "kzh2": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 7932.67, "verify_ms": 249.691, "proof_bytes": 236960, "peak_rss_bytes": 2165866496, "pk_ms": 5720.39, "circuit_ms": 466.707, "ratio_prove_ms": 5.349718779083099, "ratio_verify_ms": 46.1717829755523, "ratio_proof_bytes": 17.929782082324454, "ratio_peak_rss_bytes": 1.771847523053828}, "ipa": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 7613.53, "verify_ms": 7207.9, "proof_bytes": 17376, "peak_rss_bytes": 2336833536, "pk_ms": 7674.39, "circuit_ms": 457.313, "ratio_prove_ms": 5.134493734910508, "ratio_verify_ms": 1332.853785316585, "ratio_proof_bytes": 1.314769975786925, "ratio_peak_rss_bytes": 1.911711880763457}, "dory": {"reps": 5, "log_n": 19, "num_gates": 524288, "prove_ms": 5685.07, "verify_ms": 367.898, "proof_bytes": 145824, "peak_rss_bytes": 2166325248, "pk_ms": 6081.48, "circuit_ms": 461.099, "ratio_prove_ms": 3.8339582687042255, "ratio_verify_ms": 68.0301116705838, "ratio_proof_bytes": 11.033898305084746, "ratio_peak_rss_bytes": 1.7722228179283723}}}
+/*RESULTS_JSON_END*/;
+
+const BACKENDS = [
+  { key: "kzg",     name: "KZG",      family: "Gemini+Shplonk+KZG (production baseline)" },
+  { key: "mercury", name: "Mercury",  family: "pairing, constant-size (ePrint 2025/385)" },
+  { key: "whir",    name: "WHIR",     family: "hash-based FRI-family, Blake3 (ePrint 2024/1586)" },
+  { key: "ligero",  name: "Ligero",   family: "hash-based tensor √N, Blake3" },
+  { key: "hyrax",   name: "Hyrax",    family: "Pedersen √N, transparent" },
+  { key: "kzh2",    name: "KZH2",     family: "pairing √N (test-only setup)" },
+  { key: "ipa",     name: "IPA",      family: "Bulletproofs-style, transparent" },
+  { key: "dory",    name: "Dory",     family: "AFGHO/GT (test-only G2 setup)" },
+];
+
+const METRICS = [
+  { key: "prove_ms",       label: "Prove",     fmt: fmtMs,    unit: "wall clock" },
+  { key: "verify_ms",      label: "Verify",    fmt: fmtMs,    unit: "wall clock" },
+  { key: "proof_bytes",    label: "Proof size", fmt: fmtBytes, unit: "bytes on the wire" },
+  { key: "peak_rss_bytes", label: "Peak RAM",  fmt: fmtBytes, unit: "prover process peak RSS" },
+];
+
+function fmtMs(ms) {
+  if (ms >= 10000) return (ms / 1000).toFixed(1) + " s";
+  if (ms >= 1000) return (ms / 1000).toFixed(2) + " s";
+  return ms.toFixed(ms < 10 ? 1 : 0) + " ms";
+}
+function fmtBytes(b) {
+  if (b >= 1 << 30) return (b / (1 << 30)).toFixed(2) + " GiB";
+  if (b >= 1 << 20) return (b / (1 << 20)).toFixed(2) + " MiB";
+  return (b / 1024).toFixed(1) + " KiB";
+}
+function fmtRatio(r) {
+  if (r >= 100) return "×" + r.toFixed(0);
+  if (r >= 10) return "×" + r.toFixed(1);
+  return "×" + r.toFixed(2);
+}
+const color = (key) => getComputedStyle(document.documentElement).getPropertyValue("--" + key).trim();
+const present = BACKENDS.filter((b) => RESULTS.backends[b.key]);
+
+function render() {
+  const c = RESULTS.circuit;
+  document.getElementById("subtitle").innerHTML =
+    `<code>${c.name}</code> — ${c.source}. One proof of the same circuit per backend, through barretenberg's ` +
+    `<code>TransparentHonk&lt;Pcs&gt;</code> shell (KZG runs the production UltraHonk prover).`;
+
+  const tiles = [
+    ["2<sup>" + c.log_n + "</sup>", "dyadic trace size (" + c.num_gates.toLocaleString() + " rows)"],
+    [present.length, "PCS backends"],
+    [RESULTS.reps, "fresh-process reps (median)"],
+    [RESULTS.commit, "barretenberg commit"],
+  ];
+  document.getElementById("tiles").innerHTML = tiles
+    .map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`)
+    .join("");
+  document.getElementById("reps-inline").textContent = RESULTS.reps;
+
+  // table
+  const best = {};
+  for (const m of METRICS) best[m.key] = Math.min(...present.map((b) => RESULTS.backends[b.key][m.key]));
+  const head =
+    "<thead><tr><th>Backend</th>" + METRICS.map((m) => `<th>${m.label}</th>`).join("") + "</tr></thead>";
+  const body = present
+    .map((b) => {
+      const e = RESULTS.backends[b.key];
+      const cells = METRICS.map((m) => {
+        const isBest = e[m.key] === best[m.key];
+        return `<td>${m.fmt(e[m.key])}<span class="ratio${isBest ? " best" : ""}">${fmtRatio(e["ratio_" + m.key])} KZG</span></td>`;
+      }).join("");
+      return `<tr><td><span class="backend"><span class="dot" style="background:${color(b.key)}"></span>` +
+        `<span>${b.name}<br><span class="family">${b.family}</span></span></span></td>${cells}</tr>`;
+    })
+    .join("");
+  document.getElementById("results-table").innerHTML = head + "<tbody>" + body + "</tbody>";
+
+  // dot plots
+  document.getElementById("charts").innerHTML = METRICS.map(chartHtml).join("");
+
+  document.getElementById("footer").innerHTML =
+    `<p><strong>Methodology.</strong> Each (backend, rep) pair is one fresh <code>pcs_acir_bench</code> process:` +
+    ` build circuit from ACIR + witness, create the proving key, one prove, one verify (all proofs verified).` +
+    ` prove/verify exclude circuit construction and key setup; peak RAM is the process-wide maximum RSS, which is` +
+    ` dominated by proving. Machine: ${RESULTS.machine}. Absolute times on this machine are not comparable across` +
+    ` sessions — compare the ×KZG ratios, all measured in one sweep.</p>` +
+    `<p><strong>Caveats.</strong> Hash-based and √N backends run at conjectured λ=100 (WHIR: up-to-capacity` +
+    ` conjecture, rate ¼); KZH2 and Dory use deliberately test-only trapdoor setups; only KZG is production code.` +
+    ` The KZG rows require the BN254 structured reference string; the transparent rows need no trusted setup.</p>` +
+    `<p>Generated ${RESULTS.generated_utc} · regenerate with <code>provekit/driver.sh</code>.</p>`;
+}
+
+function chartHtml(m) {
+  const entries = present
+    .map((b) => ({ b, v: RESULTS.backends[b.key][m.key] }))
+    .sort((x, y) => x.v - y.v);
+  const lo = Math.log10(entries[0].v);
+  const hi = Math.log10(entries[entries.length - 1].v);
+  const pad = (hi - lo) * 0.08 + 0.05;
+  const min = lo - pad;
+  const max = hi + pad * 3.5; // room for the value label to the right of the last dot
+  const pos = (v) => ((Math.log10(v) - min) / (max - min)) * 100;
+
+  let ticks = "";
+  for (let d = Math.ceil(min); d <= Math.floor(max); d++) {
+    const x = ((d - min) / (max - min)) * 100;
+    ticks += `<div class="tick" style="left:${x}%"><span>${m.fmt(Math.pow(10, d))}</span></div>`;
+  }
+  const rows = entries
+    .map(({ b, v }) => {
+      const x = pos(v);
+      return `<div class="row"><span class="lbl">${b.name}</span><span class="track">` +
+        `<span class="mark" style="left:${x}%;background:${color(b.key)}" title="${b.name}: ${m.fmt(v)} (${fmtRatio(RESULTS.backends[b.key]["ratio_" + m.key])} KZG)"></span>` +
+        `<span class="val" style="left:calc(${x}% + 12px)">${m.fmt(v)}</span></span></div>`;
+    })
+    .join("");
+  return `<div class="chart"><h3>${m.label}</h3><div class="axis-note">${m.unit} · log scale</div>` +
+    `<div class="plot"><div class="ticks">${ticks}</div><div class="rows" style="padding-left:8px">${rows}</div></div></div>`;
+}
+
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme
+    ? root.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  render(); // re-resolve series colors for the new theme
+});
+
+render();
+</script>
+</body>
+</html>
