@@ -28,7 +28,8 @@
 // stdout so a driver can aggregate medians across fresh-process repetitions (peak_rss_bytes is
 // only meaningful when each run is its own process).
 //
-// Usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs <kzg|mercury|whir|whir-p2|whir-sky|ligero|hyrax|kzh2|ipa|dory>
+// Usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs
+// <kzg|mercury|whir|whir-p2|whir-sky|ligero|hyrax|kzh2|ipa|dory>
 
 namespace {
 
@@ -60,6 +61,24 @@ UltraCircuitBuilder build_circuit(const std::string& bytecode_path, const std::s
     };
     program.witness = acir_format::witness_buf_to_witness_vector(get_bytecode(witness_path));
     return acir_format::create_circuit<UltraCircuitBuilder>(program);
+}
+
+// With PCS_ACIR_BENCH_BLOCKS=1, report per-gate-kind trace block sizes on stderr (after
+// finalization, so memory records and ROM/RAM consistency gates are included).
+void report_block_usage(UltraCircuitBuilder builder)
+{
+    if (std::getenv("PCS_ACIR_BENCH_BLOCKS") == nullptr) {
+        return;
+    }
+    builder.finalize_circuit();
+    const std::array<const char*, 9> names = { "pub_inputs",        "lookup", "arithmetic", "delta_range",
+                                               "elliptic",          "memory", "nnf",        "poseidon2_external",
+                                               "poseidon2_internal" };
+    size_t i = 0;
+    for (const auto& block : builder.blocks.get()) {
+        std::cerr << "block " << names[i++] << ": " << block.size() << " rows\n";
+    }
+    std::cerr << "lookup tables: " << builder.get_tables_size() << " rows\n";
 }
 
 Timings run_kzg(UltraCircuitBuilder& builder, Timings timings)
@@ -143,6 +162,7 @@ int main(int argc, char** argv)
     bb::UltraCircuitBuilder builder = build_circuit(bytecode_path, witness_path);
     Timings timings;
     timings.circuit_ms = ms_since(start);
+    report_block_usage(builder);
 
     if (pcs == "kzg") {
         timings = run_kzg(builder, timings);
