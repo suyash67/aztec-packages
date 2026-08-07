@@ -56,19 +56,38 @@ post-quantum security story.
 | $\mathbb F$ | BN254 scalar field (2-adicity 28, $\lvert\mathbb F\rvert \approx 2^{254}$) | — |
 | $m$ | number of multilinear variables; polynomial size $n = 2^m$ | 12–20 |
 | $r_0$ | initial log-inverse-rate; codeword length $N_0 = 2^{m + r_0}$ | 1–3 |
-| $k$ | folding factor per iteration (`folding_factor_bits`) | 4 |
-| $\lambda$ | target security level (`security_level_bits`) | 100 |
-| $M$ | number of fold-and-commit iterations | $\lfloor (m - m_{\text{fin}})/k \rfloor$ |
-| $m_i$ | variables remaining at iteration $i$: $m_i = m - ik$ | — |
+| $k$ | folding factor per iteration after the first (`folding_factor_bits`) | 3–4 |
+| $k_0$ | folding factor of iteration 0 (`initial_folding_factor_bits`) | 1–$k$ |
+| $\lambda$ | target security level (`security_level_bits`) | 100–128 |
+| $p$ | bits of per-round proof of work (`pow_bits`) | 0–20 |
+| $M$ | number of fold-and-commit iterations | $1 + \lfloor (m - k_0 - m_{\text{fin}})/k \rfloor$ |
+| $m_i$ | variables remaining at iteration $i$: $m_i = m - k_0 - (i-1)k$ for $i \ge 1$ | — |
 | $N_i$ | oracle domain size at iteration $i$: $N_i = N_0 / 2^i$ | — |
-| $r_i$ | log-inverse-rate at iteration $i$: $r_i = r_0 + i(k-1)$ | — |
+| $r_i$ | log-inverse-rate at iteration $i$: $r_0 + (k_0-1) + (i-1)(k-1)$ for $i \ge 1$ | — |
 | $t_i$ | number of in-domain queries at iteration $i$ (§6) | 8–100 |
 | $m_{\text{fin}}$ | variables of the final clear polynomial (`final_poly_bits`) | 4–6 |
 | $L_i$ | evaluation domain: the order-$N_i$ subgroup $\langle \omega_i \rangle$, $\omega_{i+1} = \omega_i^2$ | — |
 | $\gamma, \rho$ | claim-combination / polynomial-batching challenges | — |
 
 Parameters live in `WhirConfig`; the derived per-iteration schedule (rates, query counts,
-domain sizes) is computed by `WhirConfig::create` and asserted against the field's 2-adicity.
+domain sizes, per-round folding factors) is computed by `WhirConfig::create` and asserted against
+the field's 2-adicity.
+
+**Why $k_0$ is separate from $k$.** Iteration 0 is the only one that queries the *committed*
+oracles, and on a wide commitment those hold one codeword per column: a round-0 query reveals
+$k_0$-coset values of all $C$ columns, $C \cdot 2^{k_0}$ field elements, against $2^{k}$ for every
+later round. With transparent UltraHonk's $C = 30$ that term alone was two thirds of the proof at
+$k_0 = k = 3$. Folding the first iteration by 2 quarters it; the rate then does not improve across
+iteration 0 (it improves by $k_i - 1$ bits), so iteration 1 repeats iteration 0's query count, but
+those queries run against a single-column oracle and are ~30x cheaper. The reference implementation
+exposes the same split as `initial_folding_factor`.
+
+**Proof of work.** With $p > 0$ the prover must, before each round's query indices are drawn, find a
+nonce whose Blake3 digest against the round's challenge has $p$ leading zero bits. Forging a round
+means redoing that search, so the work substitutes for query soundness one bit for one bit and the
+query counts are derived at $\lambda - p$. One field element per round carries the nonce. The
+reference implementation and ProveKit both take $p = 10$; `WhirCompactHonk` takes 20, which is still
+milliseconds of Blake3.
 
 ## 3. The basis convention
 
@@ -235,12 +254,22 @@ dominate verifier hashing.
 | ″ | `WHIR:alpha_<i>_<j>` | V→P | fold/sumcheck challenge |
 | ″ | `WHIR:root_g<i+1>` | P→V | folded-oracle root |
 | ″ | `WHIR:z_ood_<i>` / `WHIR:y_ood_<i>` | V→P / P→V | OOD point / answer |
+| ″ | `WHIR:pow_<i>` / `WHIR:nonce_<i>` | V→P / P→V | proof-of-work challenge / nonce ($p > 0$) |
 | ″ | `WHIR:query_<i>_<s>` | V→P | index challenges |
-| ″ | `WHIR:answers_<i>` | P→V | opened leaves + Merkle paths |
+| ″ | `WHIR:answers_<i>` | P→V | one batched opening per queried tree |
 | ″ | `WHIR:gamma_<i>` | V→P | combination challenge |
 | end | `WHIR:final_poly` | P→V | $2^{m_{\text{fin}}}$ coefficients |
+| ″ | `WHIR:fpow` / `WHIR:fnonce` | V→P / P→V | final-round proof of work ($p > 0$) |
 | ″ | `WHIR:final_query_<s>` | V→P | final index challenges |
-| ″ | `WHIR:final_answers` | P→V | opened leaves + paths |
+| ″ | `WHIR:final_answers` | P→V | one batched opening per queried tree |
+
+**Batched openings.** A round authenticates its whole query set against each tree at once. The
+distinct queried leaves, ascending, come first, then only those sibling digests the verifier cannot
+already derive from leaves it holds — about $t(d - \log_2 t)$ instead of $t \cdot d$ for $t$ random
+leaves of a depth-$d$ tree, since independent paths repeat every node above their branch points.
+Both parties derive the leaf set from the query indices, so none of the addressing is transmitted.
+One consequence: a proof's length depends on which leaves its rounds happen to draw, so two proofs
+of the same statement need not be the same size.
 
 ## 5. Correctness
 
@@ -419,12 +448,23 @@ root, and the opening phase is one batched WHIR run.
   roots already transcript-bound (`Claims::send_roots = false`). The verifier replaces the
   Shplemini batch-mul + pairing with `WhirVerifier` (no `PairingPoints`, no SRS anywhere).
 - **Per-round tree groups.** Polynomials committed in the same Honk round share one tree
-  (five groups: the committed precomputed columns, wires, counts+w_4, lookup_inverses,
-  z_perm), so a round-0 query opens one path per commitment round rather than per
-  polynomial, and a shifted claim reuses its group's opened values with $x^{-1}$ scaling
-  instead of a second opening. RECURSION.md §2 quantifies the effect.
+  (four groups: the committed precomputed columns, wires, counts+w_4, and lookup_inverses
+  together with z_perm — both of the last two come from the beta/gamma challenges with
+  nothing drawn between them), so a round-0 query opens one path per commitment round rather
+  than per polynomial, and a shifted claim reuses its group's opened values with $x^{-1}$
+  scaling instead of a second opening. RECURSION.md §2 quantifies the effect.
 - **Layout choice.** `WhirHonk` uses the interleaved layout; `WhirStackedHonk` stacks each
   group per §4.1, cutting the proof to roughly a third at several times the prover cost.
+- **Proof size is dominated by round 0.** Every round-0 query opens the wide commitment, so
+  it costs $C \cdot 2^{k_0}$ leaf values plus one authentication path per group, against
+  $2^k$ values and one path for every later round. At $m = 19$, $\lambda = 128$ under the
+  Johnson bound at rate $\tfrac14$, with $C = 30$ opened columns, that was 91% of the proof.
+  `WhirNarrowHonk` takes $k_0 = 1$ with ProveKit's $k = 3$; `WhirCompactHonk` adds $p = 20$
+  bits of grinding. Together with batched openings (§4.5) and the four-group layout these cut
+  the ProveKit passport proof from 1,574 KiB to 544 KiB, at ~1.34x the prover time and 1.76x
+  faster verification. The remaining gap to ProveKit's own 359 KiB is structural: its WHIR
+  runs at `batch_size: 1` because Spartan reduces the statement to a single committed vector,
+  where Honk opens 30 columns.
 - **Virtual precomputed columns.** `TransparentHonk` does not commit identically-zero
   precomputed columns (the gate selectors of unused block types) or the two lagrange point
   indicators; the verification key records them and the verifier checks sumcheck's claimed
