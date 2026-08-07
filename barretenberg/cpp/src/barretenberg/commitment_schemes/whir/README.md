@@ -338,6 +338,16 @@ hashes; the corresponding Shplemini+KZG proof is $\approx 4$ KiB with a pairing-
 verifier. Measured numbers live in `whir.bench.cpp` results (see the benchmark section of
 the PR).
 
+The $d$ in that table is where the choice of Merkle hash shows up in proof size, and it is
+currently a 2x penalty on the byte-digest hashers: `Poseidon2`/`Skyscraper` produce an Fr digest
+and cost $d = 1$, while `Blake3s`/`Sha256` produce 32 bytes that cross the transcript as two
+128-bit halves, $d = 2$. Authentication paths are most of the proof, so at $m = 19$, $k = 3$ this
+is a measured 482 KiB — 1574 KiB against 2055 KiB. Splitting a digest in half is not forced:
+`HonkProof` is a vector of Fr, but 32-byte digests pack densely at $32/31 \approx 1.03$ elements
+each rather than 2, which would recover ~466 KiB of that. Truncating a digest to 248 bits to fit
+one Fr instead would drop collision resistance to 124 bits, below $\lambda = 128$, so packing —
+not truncation — is the way to close it.
+
 ## 8. Zero-knowledge mode
 
 zk mode makes (C3) hold with three mechanisms, following the standard RS-IOP recipe
@@ -378,6 +388,20 @@ Shplemini+KZG on identical claim sets (same polynomial count and sizes as an Ult
 Native numbers on this machine carry a caveat: the arm64 build disables the x86 field
 assembly, which slows field ops (and thus KZG MSMs) more than it slows Blake3 hashing;
 relative conclusions should be re-checked on the remote benchmark machine.
+
+`commitment_schemes/provekit/hash_driver.sh` sweeps the four Merkle hashers against ProveKit's
+own prover on the same circuit at matched WHIR parameters. Two asymmetries make the *cross-side*
+absolute times incomparable, while leaving the per-side hash ranking meaningful:
+
+- The hasher here selects only the Merkle tree compression; Fiat-Shamir is always `NativeTranscript`
+  (Poseidon2). ProveKit's `HashConfig` additionally selects its sponge and public-input binding.
+  Merkle hashing dominates either way — a round-0 tree at $m = 19$ hashes $2^{18}$ leaves of 240
+  field elements each, against a few thousand transcript absorptions.
+- The transparent Honk opening commits ~30 columns; ProveKit's Spartan front-end reduces to one
+  committed vector, so its leaves are $2^k$ values wide against ~$30\cdot 2^k$ here.
+
+Only `SkyscraperMerkleHasher` deliberately reproduces ProveKit's leaf/node convention exactly
+(left-fold leaves, no domain tags); the other three use this module's own tagged construction.
 
 ## 10. UltraHonk integration
 
