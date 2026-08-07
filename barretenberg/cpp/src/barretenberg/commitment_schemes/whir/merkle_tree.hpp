@@ -4,6 +4,7 @@
 #include "barretenberg/common/thread.hpp"
 #include "barretenberg/crypto/blake3s/blake3s.hpp"
 #include "barretenberg/crypto/poseidon2/poseidon2.hpp"
+#include "barretenberg/crypto/sha256/sha256.hpp"
 #include "barretenberg/crypto/skyscraper/skyscraper.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
 #include "barretenberg/numeric/uint256/uint256.hpp"
@@ -74,6 +75,81 @@ struct SkyscraperMerkleHasher {
     static Digest digest_from_fields(std::span<const fr> fields) { return fields[0]; }
 };
 
+namespace detail {
+
+/** @brief Append an Fr as its canonical 4x64-bit little-endian limbs. */
+inline void append_fr_bytes(std::vector<uint8_t>& buffer, const fr& value)
+{
+    const uint256_t canonical(value);
+    const size_t offset = buffer.size();
+    buffer.resize(offset + 32);
+    std::memcpy(&buffer[offset], canonical.data, 32);
+}
+
+/**
+ * @brief A 32-byte digest as two 128-bit field elements.
+ * @details Each half is < 2^128 < r, so the mapping digest -> fields is injective.
+ */
+inline std::array<fr, 2> byte_digest_to_fields(const std::array<uint8_t, 32>& digest)
+{
+    uint256_t lo(0);
+    uint256_t hi(0);
+    std::memcpy(lo.data, digest.data(), 16);
+    std::memcpy(hi.data, digest.data() + 16, 16);
+    return { fr(lo), fr(hi) };
+}
+
+inline std::array<uint8_t, 32> byte_digest_from_fields(std::span<const fr> fields)
+{
+    std::array<uint8_t, 32> digest{};
+    const uint256_t lo(fields[0]);
+    const uint256_t hi(fields[1]);
+    std::memcpy(digest.data(), lo.data, 16);
+    std::memcpy(digest.data() + 16, hi.data, 16);
+    return digest;
+}
+
+} // namespace detail
+
+/**
+ * @brief Merkle hasher with 32-byte SHA-256 digests; the conservative, universally-available choice.
+ * @details Structurally identical to `Blake3sMerkleHasher` — the same leaf/node domain tags and the
+ * same two-128-bit-halves transcript encoding — so a benchmark against it isolates the compression
+ * function. Unlike bb's blake3s there is no input-length cap, so a leaf is one hash of its whole
+ * buffer rather than a chain of chunks.
+ */
+struct Sha256MerkleHasher {
+    using Digest = std::array<uint8_t, 32>;
+    static constexpr size_t DIGEST_NUM_FIELDS = 2;
+
+    static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
+    {
+        std::vector<uint8_t> buffer;
+        buffer.reserve(33 + 32 * values.size());
+        buffer.push_back(uint8_t(0)); // leaf tag
+        if (salt) {
+            detail::append_fr_bytes(buffer, *salt);
+        }
+        for (const fr& value : values) {
+            detail::append_fr_bytes(buffer, value);
+        }
+        return crypto::sha256(buffer);
+    }
+    static Digest hash_node(const Digest& left, const Digest& right)
+    {
+        std::vector<uint8_t> input(65);
+        input[0] = uint8_t(1); // node tag
+        std::memcpy(input.data() + 1, left.data(), 32);
+        std::memcpy(input.data() + 33, right.data(), 32);
+        return crypto::sha256(input);
+    }
+    static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest)
+    {
+        return detail::byte_digest_to_fields(digest);
+    }
+    static Digest digest_from_fields(std::span<const fr> fields) { return detail::byte_digest_from_fields(fields); }
+};
+
 /**
  * @brief Merkle hasher with 32-byte Blake3s digests; the fast-native-proving choice.
  * @details Fr values are absorbed as their canonical 4x64-bit little-endian limbs. bb's blake3s is
@@ -87,28 +163,20 @@ struct Blake3sMerkleHasher {
     static constexpr size_t DIGEST_NUM_FIELDS = 2;
     static constexpr size_t LEAF_CHUNK_VALUES = 24;
 
-    static void append_fr_bytes(std::vector<uint8_t>& buffer, const fr& value)
-    {
-        const uint256_t canonical(value);
-        const size_t offset = buffer.size();
-        buffer.resize(offset + 32);
-        std::memcpy(&buffer[offset], canonical.data, 32);
-    }
-
     static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
     {
         std::vector<uint8_t> buffer;
         buffer.reserve(33 + 32 * (LEAF_CHUNK_VALUES + 1));
         buffer.push_back(uint8_t(0)); // leaf tag
         if (salt) {
-            append_fr_bytes(buffer, *salt);
+            detail::append_fr_bytes(buffer, *salt);
         }
         Digest digest{};
         size_t absorbed = 0;
         while (absorbed < values.size()) {
             const size_t chunk = std::min(LEAF_CHUNK_VALUES, values.size() - absorbed);
             for (size_t t = 0; t < chunk; ++t) {
-                append_fr_bytes(buffer, values[absorbed + t]);
+                detail::append_fr_bytes(buffer, values[absorbed + t]);
             }
             absorbed += chunk;
             digest = to_digest(blake3::blake3s(buffer));
@@ -126,22 +194,9 @@ struct Blake3sMerkleHasher {
     }
     static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest)
     {
-        // Two 128-bit halves; each is < 2^128 < r so the mapping digest -> fields is injective.
-        uint256_t lo(0);
-        uint256_t hi(0);
-        std::memcpy(lo.data, digest.data(), 16);
-        std::memcpy(hi.data, digest.data() + 16, 16);
-        return { fr(lo), fr(hi) };
+        return detail::byte_digest_to_fields(digest);
     }
-    static Digest digest_from_fields(std::span<const fr> fields)
-    {
-        Digest digest;
-        const uint256_t lo(fields[0]);
-        const uint256_t hi(fields[1]);
-        std::memcpy(digest.data(), lo.data, 16);
-        std::memcpy(digest.data() + 16, hi.data, 16);
-        return digest;
-    }
+    static Digest digest_from_fields(std::span<const fr> fields) { return detail::byte_digest_from_fields(fields); }
 
   private:
     static Digest to_digest(const std::vector<uint8_t>& bytes)

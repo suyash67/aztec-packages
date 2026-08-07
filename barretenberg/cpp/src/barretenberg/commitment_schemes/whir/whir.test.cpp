@@ -132,9 +132,11 @@ template <typename Variant> class WhirTest : public ::testing::Test {
     }
 };
 
-// Both Merkle hashers against both commitment layouts (interleaved columns, and stacked).
+// Every Merkle hasher against the interleaved layout, and the two most-used against the stacked one.
 using WhirVariants = ::testing::Types<WhirVariant<Poseidon2MerkleHasher, 0>,
                                       WhirVariant<Blake3sMerkleHasher, 0>,
+                                      WhirVariant<Sha256MerkleHasher, 0>,
+                                      WhirVariant<SkyscraperMerkleHasher, 0>,
                                       WhirVariant<Poseidon2MerkleHasher, 2>,
                                       WhirVariant<Blake3sMerkleHasher, 2>>;
 TYPED_TEST_SUITE(WhirTest, WhirVariants);

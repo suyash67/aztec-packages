@@ -5,7 +5,8 @@
 namespace bb::whir {
 
 template <typename Hasher> class WhirMerkleTreeTest : public ::testing::Test {};
-using HasherTypes = ::testing::Types<Poseidon2MerkleHasher, Blake3sMerkleHasher>;
+using HasherTypes =
+    ::testing::Types<Poseidon2MerkleHasher, Blake3sMerkleHasher, Sha256MerkleHasher, SkyscraperMerkleHasher>;
 TYPED_TEST_SUITE(WhirMerkleTreeTest, HasherTypes);
 
 namespace {

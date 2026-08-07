@@ -33,14 +33,15 @@
 // relations a ProveKit-style circuit never exercises. The KZG baseline is always UltraFlavor: it
 // is the production prover, and that is the point of comparing against it.
 //
-// The WHIR backends default to the unconditional Johnson bound with k = 4. `whir-provekit` is
-// ProveKit's own schedule (Johnson, k = 3, meant to be run at PCS_ACIR_BENCH_SECURITY_BITS=128);
-// `whir-conjectured` assumes list decoding up to capacity, which eprint 2025/2046 disproves, and
-// exists only to reproduce figures published under that assumption.
+// The WHIR backends default to the unconditional Johnson bound with k = 4. The `whir-provekit-*`
+// family runs ProveKit's own schedule (Johnson, k = 3, meant to be run at
+// PCS_ACIR_BENCH_SECURITY_BITS=128) over each Merkle hash, for hash-to-hash comparison against
+// ProveKit at matched parameters. `whir-conjectured` assumes list decoding up to capacity, which
+// eprint 2025/2046 disproves, and exists only to reproduce figures published under that assumption.
 //
 // Usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs
-// <kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-provekit|whir-conjectured|
-//  ligero|hyrax|kzh2|ipa|dory> [--flavor <ultra|provekit>]
+// <kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-conjectured|
+//  whir-provekit-<sky|p2|b3|sha256>|ligero|hyrax|kzh2|ipa|dory> [--flavor <ultra|provekit>]
 // Env: PCS_ACIR_BENCH_SECURITY_BITS (default 100), PCS_ACIR_BENCH_LOG_INV_RATE (default 2).
 
 namespace {
@@ -171,9 +172,17 @@ bool run_backend(const std::string& pcs, UltraCircuitBuilder& builder, Timings& 
     } else if (pcs == "whir-sky-stacked") {
         timings =
             run_transparent<Flavored<bb::whir::WhirStackedHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
-    } else if (pcs == "whir-provekit") {
+    } else if (pcs == "whir-provekit-sky") {
         timings =
             run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-provekit-p2") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::Poseidon2MerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-provekit-b3") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-provekit-sha256") {
+        timings = run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::Sha256MerkleHasher>>>(builder, timings);
     } else if (pcs == "whir-conjectured") {
         timings =
             run_transparent<Flavored<bb::whir::WhirConjecturedHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
@@ -218,8 +227,9 @@ int main(int argc, char** argv)
     }
     if (bytecode_path.empty() || witness_path.empty() || pcs.empty()) {
         std::cerr << "usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs "
-                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-provekit|whir-conjectured|"
-                     "ligero|hyrax|kzh2|ipa|dory> [--flavor <ultra|provekit>]\n";
+                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-conjectured|"
+                     "whir-provekit-<sky|p2|b3|sha256>|ligero|hyrax|kzh2|ipa|dory> "
+                     "[--flavor <ultra|provekit>]\n";
         return 1;
     }
     if (flavor != "ultra" && flavor != "provekit") {
