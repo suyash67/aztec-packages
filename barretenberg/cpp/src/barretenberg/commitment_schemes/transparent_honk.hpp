@@ -58,7 +58,8 @@ namespace bb::honk_transparent {
  * `prove` consumes the proving key's instance (memory records are appended to w_4, derived
  * polynomials are computed in place): create a fresh proving key per proof.
  */
-template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
+template <typename Pcs_, typename Flavor_ = UltraFlavor, typename Transcript_ = NativeTranscript>
+class TransparentHonk {
   public:
     using Pcs = Pcs_;
     using Flavor = Flavor_;
@@ -70,7 +71,9 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
     using CommitmentKey = typename Pcs::CommitmentKey;
     using GroupData = typename Pcs::GroupData;
     using GroupCommitment = typename Pcs::GroupCommitment;
-    using Transcript = NativeTranscript;
+    // Poseidon2 Fiat-Shamir by default; `KeccakTranscript` makes the same proof verifiable by an
+    // EVM contract, where a Poseidon2 sponge would cost thousands of gas per permutation.
+    using Transcript = Transcript_;
 
     static constexpr size_t NUM_PRECOMPUTED = Flavor::NUM_PRECOMPUTED_ENTITIES;
     static constexpr size_t NUM_WITNESS = Flavor::NUM_WITNESS_ENTITIES;
@@ -160,7 +163,7 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         return pk;
     }
 
-    static HonkProof prove(ProvingKey& pk)
+    static typename Transcript::Proof prove(ProvingKey& pk)
     {
         auto transcript = Transcript::test_prover_init_empty();
         ProverInstance& instance = *pk.instance;
@@ -241,7 +244,7 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         return transcript->export_proof();
     }
 
-    static bool verify(const VerificationKey& vk, const Config& config, const HonkProof& proof)
+    static bool verify(const VerificationKey& vk, const Config& config, const typename Transcript::Proof& proof)
     {
         auto transcript = std::make_shared<Transcript>(proof);
         [[maybe_unused]] auto init = transcript->template receive_from_prover<FF>("Init");
@@ -297,10 +300,9 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         }
 
         typename Pcs::VerifierClaims claims;
-        claims.group_num_columns = { vk.num_committed_precomputed(),
-                                     WITNESS_GROUP_COLUMNS[0],
-                                     WITNESS_GROUP_COLUMNS[1],
-                                     WITNESS_GROUP_COLUMNS[2] };
+        claims.group_num_columns = {
+            vk.num_committed_precomputed(), WITNESS_GROUP_COLUMNS[0], WITNESS_GROUP_COLUMNS[1], WITNESS_GROUP_COLUMNS[2]
+        };
         Pcs::set_group_commitments(claims, { vk.precomputed_commitment, wires, counts_w4, inverses_z_perm });
         append_unshifted_refs(claims.unshifted, vk.virtual_mask);
         append_unshifted_evaluations(claims.unshifted_evaluations, unshifted_evaluations, vk.virtual_mask);

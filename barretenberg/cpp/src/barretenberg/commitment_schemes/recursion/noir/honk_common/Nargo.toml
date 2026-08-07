@@ -1,0 +1,4 @@
+[package]
+name = "honk_common"
+type = "lib"
+authors = [""]

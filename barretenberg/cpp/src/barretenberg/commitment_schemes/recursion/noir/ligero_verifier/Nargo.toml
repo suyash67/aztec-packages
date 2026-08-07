@@ -1,0 +1,7 @@
+[package]
+name = "ligero_verifier"
+type = "bin"
+authors = [""]
+
+[dependencies]
+honk_common = { path = "../honk_common" }

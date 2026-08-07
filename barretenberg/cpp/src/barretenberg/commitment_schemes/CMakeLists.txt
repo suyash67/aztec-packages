@@ -7,6 +7,18 @@ if(TARGET pcs_acir_bench)
     target_link_libraries(pcs_acir_bench PRIVATE dsl ultra_honk stdlib_honk_verifier vm2_stub)
 endif()
 
+# pcs_noir_export_bench (from recursion/pcs_noir_export.bench.cpp) writes the inputs of the Noir
+# recursive verifiers in recursion/noir/; it drives the transparent Honk prover directly.
+if(TARGET pcs_noir_export_bench)
+    target_link_libraries(pcs_noir_export_bench PRIVATE ultra_honk)
+endif()
+
+# vela_evm_export_bench proves a Noir circuit with UltraHonk + Vela under a Keccak transcript and
+# writes the opening argument for the Solidity gas harness; it loads ACIR, so it needs the frontend.
+if(TARGET vela_evm_export_bench)
+    target_link_libraries(vela_evm_export_bench PRIVATE dsl ultra_honk vm2_stub)
+endif()
+
 # whir_differential_bench compares barretenberg's WHIR against the reference Rust implementation
 # ProveKit builds on, through the C ABI in whir/rust/. That library is not part of the C++ build:
 # build it with `cargo build --release` in whir/rust/, then reconfigure. Without it the target is

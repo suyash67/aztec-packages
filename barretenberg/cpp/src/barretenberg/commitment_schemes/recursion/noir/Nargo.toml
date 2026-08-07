@@ -1,0 +1,2 @@
+[workspace]
+members = ["honk_common", "ligero_verifier", "whir_verifier"]
