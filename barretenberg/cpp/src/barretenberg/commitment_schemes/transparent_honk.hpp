@@ -35,8 +35,7 @@ namespace bb::honk_transparent {
  * | 0 (verification key) | the committed precomputed polynomials | - |
  * | 1 `HONK:wires` | w_l, w_r, w_o | all |
  * | 2 `HONK:counts_w4` | lookup_read_counts, lookup_read_tags, w_4 | w_4 |
- * | 3 `HONK:lookup_inverses` | lookup_inverses | - |
- * | 4 `HONK:z_perm` | z_perm | z_perm |
+ * | 3 `HONK:inverses_z_perm` | lookup_inverses, z_perm | z_perm |
  *
  * Not every precomputed polynomial is committed. Two kinds are "virtual" — recorded in the
  * verification key and evaluated by the verifier instead of being committed and opened:
@@ -87,8 +86,10 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
     static_assert(LAGRANGE_FIRST_IDX < NUM_PRECOMPUTED && LAGRANGE_LAST_IDX < NUM_PRECOMPUTED,
                   "the lagrange indicators must be precomputed entities");
 
-    // Column counts of the witness commitment groups 1..4.
-    static constexpr std::array<size_t, 4> WITNESS_GROUP_COLUMNS = { 3, 3, 1, 1 };
+    // Column counts of the witness commitment groups 1..3. The log-derivative inverses and the
+    // grand product both come from the beta/gamma challenges with nothing drawn between them, so
+    // they share one commitment round - and one round-0 Merkle path per query instead of two.
+    static constexpr std::array<size_t, 3> WITNESS_GROUP_COLUMNS = { 3, 3, 2 };
 
     /**
      * @brief Transparent verification key: circuit metadata plus the precomputed-group root.
@@ -203,13 +204,14 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         instance.relation_parameters.beta_cube = instance.relation_parameters.beta_sqr * beta;
         instance.relation_parameters.gamma = gamma;
         Oink::compute_logderivative_inverses(instance);
-        auto lookup_inverses =
-            commit_and_send(ck, transcript, { &instance.polynomials.lookup_inverses() }, { false }, "lookup_inverses");
-
-        // Oink round 4: permutation grand product (also sets public_input_delta).
         uint32_t z_perm_dup_count = 0;
         Oink::compute_grand_product_polynomial(instance, z_perm_dup_count);
-        auto z_perm = commit_and_send(ck, transcript, { &instance.polynomials.z_perm() }, { true }, "z_perm");
+        auto inverses_z_perm =
+            commit_and_send(ck,
+                            transcript,
+                            { &instance.polynomials.lookup_inverses(), &instance.polynomials.z_perm() },
+                            { false, true },
+                            "inverses_z_perm");
 
         instance.alpha = transcript->template get_challenge<FF>("alpha");
         instance.gate_challenges =
@@ -227,7 +229,7 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         // Batched opening of every unshifted and to-be-shifted claim at the sumcheck challenge.
         typename Pcs::ProverClaims claims;
         claims.send_roots = false; // all roots are already bound to the transcript above
-        claims.groups = { &*pk.precomputed, &wires, &counts_w4, &lookup_inverses, &z_perm };
+        claims.groups = { &*pk.precomputed, &wires, &counts_w4, &inverses_z_perm };
         append_unshifted_refs(claims.unshifted, pk.vk.virtual_mask);
         const auto unshifted_evaluations = sumcheck_output.claimed_evaluations.get_unshifted();
         append_unshifted_evaluations(claims.unshifted_evaluations, unshifted_evaluations, pk.vk.virtual_mask);
@@ -271,10 +273,8 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         relation_parameters.gamma = gamma;
         relation_parameters.public_input_delta =
             compute_public_input_delta<Flavor>(public_inputs, beta, gamma, FF(vk.pub_inputs_offset));
-        const GroupCommitment lookup_inverses =
-            Pcs::receive_group_commitment(transcript, "HONK:lookup_inverses", WITNESS_GROUP_COLUMNS[2], config);
-        const GroupCommitment z_perm =
-            Pcs::receive_group_commitment(transcript, "HONK:z_perm", WITNESS_GROUP_COLUMNS[3], config);
+        const GroupCommitment inverses_z_perm =
+            Pcs::receive_group_commitment(transcript, "HONK:inverses_z_perm", WITNESS_GROUP_COLUMNS[2], config);
 
         const FF alpha = transcript->template get_challenge<FF>("alpha");
         const std::vector<FF> gate_challenges =
@@ -300,9 +300,8 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         claims.group_num_columns = { vk.num_committed_precomputed(),
                                      WITNESS_GROUP_COLUMNS[0],
                                      WITNESS_GROUP_COLUMNS[1],
-                                     WITNESS_GROUP_COLUMNS[2],
-                                     WITNESS_GROUP_COLUMNS[3] };
-        Pcs::set_group_commitments(claims, { vk.precomputed_commitment, wires, counts_w4, lookup_inverses, z_perm });
+                                     WITNESS_GROUP_COLUMNS[2] };
+        Pcs::set_group_commitments(claims, { vk.precomputed_commitment, wires, counts_w4, inverses_z_perm });
         append_unshifted_refs(claims.unshifted, vk.virtual_mask);
         append_unshifted_evaluations(claims.unshifted_evaluations, unshifted_evaluations, vk.virtual_mask);
         append_shifted_refs(claims.to_be_shifted);
@@ -330,7 +329,7 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         refs.push_back({ 1, 1 }); // w_r
         refs.push_back({ 1, 2 }); // w_o
         refs.push_back({ 2, 2 }); // w_4
-        refs.push_back({ 4, 0 }); // z_perm
+        refs.push_back({ 3, 1 }); // z_perm
         refs.push_back({ 3, 0 }); // lookup_inverses
         refs.push_back({ 2, 0 }); // lookup_read_counts
         refs.push_back({ 2, 1 }); // lookup_read_tags
@@ -386,7 +385,7 @@ template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
         refs.push_back({ 1, 1 }); // w_r
         refs.push_back({ 1, 2 }); // w_o
         refs.push_back({ 2, 2 }); // w_4
-        refs.push_back({ 4, 0 }); // z_perm
+        refs.push_back({ 3, 1 }); // z_perm
     }
 
     static void absorb_vk(const std::shared_ptr<Transcript>& transcript, const VerificationKey& vk)
