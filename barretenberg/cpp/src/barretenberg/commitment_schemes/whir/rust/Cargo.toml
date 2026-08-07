@@ -1,0 +1,22 @@
+[package]
+name = "whir-rs-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI over the reference WHIR implementation that ProveKit builds on, for differential testing against barretenberg's WHIR"
+
+[lib]
+name = "whir_rs_ffi"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# The exact revision ProveKit pins in its own Cargo.toml.
+whir = { git = "https://github.com/WizardOfMenlo/whir/", rev = "0aeaa7f337c743d9ddfcb9d909628d6491e3355c", features = ["tracing", "rs_in_order"] }
+ark-ff = { version = "0.5", features = ["asm", "std"] }
+ark-bn254 = "0.5"
+ark-std = { version = "0.5", features = ["std"] }
+# blake3 1.8.4+ moves to digest 0.11 while whir's blake3 engine is built against digest 0.10;
+# ProveKit pins the same version for the same reason.
+blake3 = "=1.8.3"
+
+[profile.release]
+debug-assertions = false

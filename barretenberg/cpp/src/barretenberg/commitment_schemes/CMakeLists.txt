@@ -6,3 +6,22 @@ barretenberg_module(commitment_schemes common transcript polynomials ecc numeric
 if(TARGET pcs_acir_bench)
     target_link_libraries(pcs_acir_bench PRIVATE dsl ultra_honk stdlib_honk_verifier vm2_stub)
 endif()
+
+# whir_differential_bench compares barretenberg's WHIR against the reference Rust implementation
+# ProveKit builds on, through the C ABI in whir/rust/. That library is not part of the C++ build:
+# build it with `cargo build --release` in whir/rust/, then reconfigure. Without it the target is
+# skipped rather than failing the build, since cargo is not a barretenberg build dependency.
+set(WHIR_RS_FFI_LIB
+    ${CMAKE_CURRENT_SOURCE_DIR}/whir/rust/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}whir_rs_ffi${CMAKE_STATIC_LIBRARY_SUFFIX})
+if(TARGET whir_differential_bench)
+    if(EXISTS ${WHIR_RS_FFI_LIB})
+        target_link_libraries(whir_differential_bench PRIVATE ${WHIR_RS_FFI_LIB})
+        if(APPLE)
+            # Rust's std pulls these in on macOS.
+            target_link_libraries(whir_differential_bench PRIVATE "-framework CoreFoundation" "-framework Security")
+        endif()
+    else()
+        message(STATUS "whir_rs_ffi not built; excluding whir_differential_bench")
+        set_target_properties(whir_differential_bench PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
+endif()
