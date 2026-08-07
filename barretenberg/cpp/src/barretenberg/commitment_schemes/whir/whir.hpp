@@ -9,8 +9,10 @@
 #include "barretenberg/polynomials/polynomial.hpp"
 #include "barretenberg/polynomials/polynomial_arithmetic.hpp"
 
+#include <bit>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -19,14 +21,17 @@ namespace bb::whir {
 
 /**
  * @brief Prover-side result of committing a group of polynomials ("columns") into one shared Merkle
- * tree (README.md §4.1, §10): the dense coefficient arrays and the tree over their codewords with
- * column-major interleaved leaves. The commitment sent to the verifier is the single `tree.root()`.
+ * tree (README.md §4.1, §10). The columns are stacked into one taller array — column j occupies
+ * entries [j·2^m, (j+1)·2^m) — encoded as a single codeword and committed as one tree with narrow
+ * (single-column) leaves. The commitment sent to the verifier is the single `tree.root()`.
  */
 template <typename Hasher> struct WhirGroupData {
-    std::vector<std::vector<fr>> coefficients;
+    std::vector<fr> stacked; // the committed array: stacked payload columns (+ zk blinding half)
+    size_t columns = 0;      // payload columns before power-of-two padding
     MerkleTree<Hasher> tree;
 
-    size_t num_columns() const { return coefficients.size(); }
+    size_t num_columns() const { return columns; }
+    size_t num_variables() const { return static_cast<size_t>(std::countr_zero(stacked.size())); }
 };
 
 /** @brief Reference to one column of one committed group, shared by prover and verifier claims. */
@@ -34,6 +39,19 @@ struct WhirColumnRef {
     size_t group;
     size_t column;
 };
+
+namespace detail {
+
+inline size_t ceil_log2(size_t n)
+{
+    size_t bits = 0;
+    while ((size_t(1) << bits) < n) {
+        ++bits;
+    }
+    return bits;
+}
+
+} // namespace detail
 
 /**
  * @brief Transparent commitment key: the parameter schedule plus cached FFT domains. Replaces the
@@ -46,11 +64,13 @@ template <typename Hasher> class WhirCommitmentKey {
     {}
 
     /**
-     * @brief Commit a group of payload columns (each of length <= 2^m, zero-padded) into one tree.
-     * @details In zk mode each column's array doubles: the payload occupies the low half and
-     * `config.num_blinding_coefficients` fresh random coefficients occupy the high half (offset 2^m,
-     * or 2^m + 1 for a to-be-shifted column so the shift contract's zero slot is preserved), and the
-     * leaves are salted. See README.md §8.
+     * @brief Commit a group of payload columns (each of length <= 2^m) stacked into one tree:
+     * column j occupies entries [j·2^m, (j+1)·2^m) of a single array of 2^{m+s} entries,
+     * s = ⌈log₂ columns⌉ (missing columns are zero padding).
+     * @details In zk mode the committed array doubles: the stacked payload occupies the low half
+     * and `config.num_blinding_coefficients` fresh random coefficients occupy the high half
+     * (offset 2^{m+s}, or 2^{m+s} + 1 when the group holds to-be-shifted columns so the shift
+     * contract's zero slot is preserved), and the leaves are salted. See README.md §8.
      *
      * @param payload_columns payload coefficient arrays; consumed
      * @param to_be_shifted per-column flag; empty means all false
@@ -61,16 +81,34 @@ template <typename Hasher> class WhirCommitmentKey {
         BB_ASSERT(to_be_shifted.empty() || to_be_shifted.size() == payload_columns.size(),
                   "per-column shift flags must match the column count");
         const size_t payload_size = size_t(1) << config.num_payload_variables;
-        std::vector<std::vector<fr>> dense;
-        dense.reserve(payload_columns.size());
-        for (size_t c = 0; c < payload_columns.size(); ++c) {
+        const size_t num_columns = payload_columns.size();
+        const size_t stack_bits = detail::ceil_log2(num_columns);
+        const size_t stacked_payload_bits = config.num_payload_variables + stack_bits;
+        BB_ASSERT_LTE(stacked_payload_bits + (config.zk ? 1 : 0),
+                      config.num_variables,
+                      "group too wide for the configured stacking headroom");
+
+        std::vector<fr> stacked(size_t(1) << (stacked_payload_bits + (config.zk ? 1 : 0)), fr::zero());
+        bool any_shifted = false;
+        for (size_t c = 0; c < num_columns; ++c) {
             BB_ASSERT_LTE(payload_columns[c].size(), payload_size, "polynomial too large for the configured size");
-            std::vector<fr> column = std::move(payload_columns[c]);
-            column.resize(size_t(1) << config.num_variables, fr::zero());
-            add_blinding(column, !to_be_shifted.empty() && to_be_shifted[c]);
-            dense.push_back(std::move(column));
+            std::copy(payload_columns[c].begin(),
+                      payload_columns[c].end(),
+                      stacked.begin() + static_cast<std::ptrdiff_t>(c * payload_size));
+            any_shifted = any_shifted || (!to_be_shifted.empty() && to_be_shifted[c]);
         }
-        return commit_dense_group(std::move(dense));
+        if (any_shifted) {
+            // The shifted virtual oracle is the stacked codeword scaled by x^{-1}, which represents
+            // the coefficient-shifted array only when the constant coefficient vanishes.
+            BB_ASSERT_EQ(stacked[0], fr::zero(), "to-be-shifted group must have a zero constant term");
+        }
+        if (config.zk) {
+            const size_t offset = (size_t(1) << stacked_payload_bits) + (any_shifted ? 1 : 0);
+            for (size_t i = 0; i < config.num_blinding_coefficients; ++i) {
+                stacked[offset + i] = fr::random_element();
+            }
+        }
+        return commit_stacked(std::move(stacked), num_columns);
     }
 
     /** @brief Commit a group of Honk polynomials (virtual zeros outside their spans are honored). */
@@ -107,38 +145,22 @@ template <typename Hasher> class WhirCommitmentKey {
         for (fr& value : mask) {
             value = fr::random_element();
         }
-        std::vector<std::vector<fr>> columns;
-        columns.push_back(std::move(mask));
-        return commit_dense_group(std::move(columns));
+        return commit_stacked(std::move(mask), 1);
     }
 
     WhirConfig config;
     mutable RSDomains domains;
 
   private:
-    WhirGroupData<Hasher> commit_dense_group(std::vector<std::vector<fr>> dense) const
+    /** @brief Encode a committed array on its own domain (rate `config.log_inv_rate`) and build
+     * its tree. Smaller-than-protocol arrays live on the correspondingly smaller domain. */
+    WhirGroupData<Hasher> commit_stacked(std::vector<fr> stacked, size_t num_columns) const
     {
-        const size_t n = size_t(1) << config.num_variables;
-        const auto& domain = domains.get(n << config.log_inv_rate);
-        std::vector<std::vector<fr>> codewords;
-        codewords.reserve(dense.size());
-        for (const auto& column : dense) {
-            BB_ASSERT_EQ(column.size(), n);
-            codewords.push_back(rs_encode(column, domain, domains.round_roots()));
-        }
-        MerkleTree<Hasher> tree(std::move(codewords), config.folding_factor_bits, /*salted=*/config.zk);
-        return { std::move(dense), std::move(tree) };
-    }
-
-    void add_blinding(std::vector<fr>& dense, bool to_be_shifted) const
-    {
-        if (!config.zk) {
-            return;
-        }
-        const size_t offset = (size_t(1) << config.num_payload_variables) + (to_be_shifted ? 1 : 0);
-        for (size_t i = 0; i < config.num_blinding_coefficients; ++i) {
-            dense[offset + i] = fr::random_element();
-        }
+        BB_ASSERT_EQ(stacked.size() & (stacked.size() - 1), size_t(0), "committed array must be a power of two");
+        const auto& domain = domains.get(stacked.size() << config.log_inv_rate);
+        std::vector<fr> codeword = rs_encode(stacked, domain, domains.round_roots());
+        MerkleTree<Hasher> tree(std::move(codeword), config.folding_factor_bits, /*salted=*/config.zk);
+        return { std::move(stacked), num_columns, std::move(tree) };
     }
 };
 
@@ -206,6 +228,170 @@ template <typename Hasher> size_t opening_num_fields(size_t num_columns, size_t 
     return num_columns * arity + (salted ? 1 : 0) + depth * Hasher::DIGEST_NUM_FIELDS;
 }
 
+/** @brief MLE of an array (evaluation form, LSB variable first) at `point`; O(size). */
+inline fr mle_of_span(std::span<const fr> values, std::span<const fr> point)
+{
+    BB_ASSERT_EQ(values.size(), size_t(1) << point.size(), "array/point size mismatch");
+    std::vector<fr> current(values.begin(), values.end());
+    for (const fr& x : point) {
+        fold_array_in_place(current, x);
+    }
+    return current[0];
+}
+
+/** @brief eq(bits(index), tau) with bit 0 of `index` matched against tau[0]. */
+inline fr eq_at_corner(size_t index, std::span<const fr> tau)
+{
+    fr eq = fr::one();
+    for (size_t i = 0; i < tau.size(); ++i) {
+        eq *= ((index >> i) & 1) == 1 ? tau[i] : fr::one() - tau[i];
+    }
+    return eq;
+}
+
+/**
+ * @brief The deterministic reduction of per-column claims to per-constituent point claims on the
+ * stacked arrays; derived identically by prover and verifier (README.md §10).
+ *
+ * Each commitment group contributes up to two "constituents" of the batched round-0 oracle: its
+ * stacked array S, and — when the group carries to-be-shifted claims — the coefficient-shifted
+ * array T whose codeword is S's scaled by x^{-1}. A constituent of 2^s columns whose every stack
+ * corner is claimed or known-zero carries one claim at the τ-reduced point (0^d, u, τ[0..s)); a
+ * constituent with unclaimed non-zero corners carries one claim per claimed corner at
+ * (0^d, u, bits(j)). The d leading zeros place the array's stride-2^d spread into the protocol's
+ * 2^P-size oracle: spread(A)(x) = eq(0, x_{1..d})·A(x_{d+1..P}).
+ */
+struct StackedPlan {
+    struct Claim {
+        size_t point; // index into `points`
+        fr value;     // the claimed evaluation of this constituent at that point
+    };
+    struct Constituent {
+        size_t tree; // round-0 tree index: the groups in order, then the zk mask
+        bool shifted;
+        size_t stride_bits; // d = P - (committed variables of the tree)
+        std::vector<Claim> claims;
+    };
+
+    std::vector<std::vector<fr>> points; // full P-coordinate opening points, deduplicated
+    std::vector<Constituent> constituents;
+
+    size_t add_point(std::vector<fr> coords)
+    {
+        for (size_t t = 0; t < points.size(); ++t) {
+            if (points[t] == coords) {
+                return t;
+            }
+        }
+        points.push_back(std::move(coords));
+        return points.size() - 1;
+    }
+
+    bool is_diagonal(size_t point, size_t constituent) const
+    {
+        for (const Claim& claim : constituents[constituent].claims) {
+            if (claim.point == point) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+/**
+ * @brief Build the claim plan from the shared claim shape. `mask_evaluation` appends the zk mask
+ * as a final full-width constituent claimed at (u, τ, 0); pass its value (prover computes it,
+ * verifier reads it from the proof stream).
+ */
+inline StackedPlan build_stacked_plan(const WhirConfig& config,
+                                      std::span<const size_t> group_num_columns,
+                                      std::span<const WhirColumnRef> unshifted,
+                                      std::span<const fr> unshifted_evaluations,
+                                      std::span<const WhirColumnRef> to_be_shifted,
+                                      std::span<const fr> shifted_evaluations,
+                                      std::span<const fr> u,
+                                      std::span<const fr> taus)
+{
+    const size_t num_groups = group_num_columns.size();
+    const size_t zk_bit = config.zk ? 1 : 0;
+    const size_t total_vars = config.num_variables;
+    const size_t payload_vars = config.num_payload_variables;
+    BB_ASSERT_EQ(taus.size(), total_vars - payload_vars - zk_bit, "tau challenge count mismatch");
+
+    StackedPlan plan;
+    auto make_point = [&](size_t stride_bits, std::span<const fr> column_coords) {
+        std::vector<fr> coords;
+        coords.reserve(total_vars);
+        coords.insert(coords.end(), stride_bits, fr::zero());
+        coords.insert(coords.end(), u.begin(), u.end());
+        coords.insert(coords.end(), column_coords.begin(), column_coords.end());
+        coords.insert(coords.end(), zk_bit, fr::zero());
+        BB_ASSERT_EQ(coords.size(), total_vars, "opening point has the wrong arity");
+        return coords;
+    };
+
+    for (size_t g = 0; g < num_groups; ++g) {
+        const size_t columns = group_num_columns[g];
+        const size_t stack_bits = ceil_log2(columns);
+        const size_t stride_bits = total_vars - (payload_vars + stack_bits + zk_bit);
+        for (const bool shifted : { false, true }) {
+            const auto& refs = shifted ? to_be_shifted : unshifted;
+            const auto& evaluations = shifted ? shifted_evaluations : unshifted_evaluations;
+            std::vector<std::optional<fr>> corner_claims(size_t(1) << stack_bits);
+            size_t num_claims = 0;
+            for (size_t j = 0; j < refs.size(); ++j) {
+                if (refs[j].group != g) {
+                    continue;
+                }
+                BB_ASSERT_LT(refs[j].column, columns, "claim references a padding column");
+                BB_ASSERT(!corner_claims[refs[j].column].has_value(), "duplicate claim for one column");
+                corner_claims[refs[j].column] = evaluations[j];
+                ++num_claims;
+            }
+            if (num_claims == 0) {
+                continue;
+            }
+            // Padding corners are zero columns (for T also: the shift of a padding column, whose
+            // leaked-in constant comes from the next column, again padding).
+            bool all_corners_known = true;
+            for (size_t j = 0; j < columns; ++j) {
+                all_corners_known = all_corners_known && corner_claims[j].has_value();
+            }
+            StackedPlan::Constituent constituent{
+                .tree = g, .shifted = shifted, .stride_bits = stride_bits, .claims = {}
+            };
+            if (all_corners_known) {
+                const auto tau_slice = taus.subspan(0, stack_bits);
+                fr combined = fr::zero();
+                for (size_t j = 0; j < columns; ++j) {
+                    combined += eq_at_corner(j, tau_slice) * *corner_claims[j];
+                }
+                constituent.claims.push_back({ plan.add_point(make_point(stride_bits, tau_slice)), combined });
+            } else {
+                for (size_t j = 0; j < columns; ++j) {
+                    if (!corner_claims[j].has_value()) {
+                        continue;
+                    }
+                    std::vector<fr> column_coords(stack_bits);
+                    for (size_t i = 0; i < stack_bits; ++i) {
+                        column_coords[i] = ((j >> i) & 1) == 1 ? fr::one() : fr::zero();
+                    }
+                    constituent.claims.push_back(
+                        { plan.add_point(make_point(stride_bits, column_coords)), *corner_claims[j] });
+                }
+            }
+            plan.constituents.push_back(std::move(constituent));
+        }
+    }
+    if (config.zk) {
+        plan.constituents.push_back({ .tree = num_groups,
+                                      .shifted = false,
+                                      .stride_bits = 0,
+                                      .claims = { { plan.add_point(make_point(0, taus)), fr::zero() } } });
+    }
+    return plan;
+}
+
 } // namespace detail
 
 /**
@@ -243,13 +429,6 @@ template <typename Hasher> class WhirProver {
         BB_ASSERT_EQ(claims.unshifted.size(), claims.unshifted_evaluations.size());
         BB_ASSERT_EQ(claims.to_be_shifted.size(), claims.shifted_evaluations.size());
 
-        // In zk mode every claim lifts to (u, 0): the appended top variable selects the payload half
-        // of the blinded arrays (README.md §8).
-        std::vector<fr> u_ext(u.begin(), u.end());
-        if (config.zk) {
-            u_ext.push_back(fr::zero());
-        }
-
         if (claims.send_roots) {
             for (size_t g = 0; g < claims.groups.size(); ++g) {
                 transcript->send_to_verifier(detail::whir_label("root", g),
@@ -265,50 +444,108 @@ template <typename Hasher> class WhirProver {
             mask_group = ck.commit_random_mask();
             transcript->send_to_verifier(std::string("WHIR:root_mask"),
                                          Hasher::digest_to_fields(mask_group->tree.root()));
-            const fr mask_evaluation =
-                Polynomial<fr>(std::span<const fr>(mask_group->coefficients[0])).evaluate_mle(u_ext);
-            transcript->send_to_verifier(std::string("WHIR:mask_eval"), mask_evaluation);
             groups.push_back(&*mask_group);
         }
 
-        const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
+        // Column-stacking challenges, then the reduction of the per-column claims to one point
+        // claim per constituent of the batched oracle.
+        std::vector<fr> taus(config.num_variables - config.num_payload_variables - (config.zk ? 1 : 0));
+        for (size_t i = 0; i < taus.size(); ++i) {
+            taus[i] = transcript->template get_challenge<fr>(detail::whir_label("tau", i));
+        }
+        std::vector<size_t> group_num_columns;
+        group_num_columns.reserve(claims.groups.size());
+        for (const WhirGroupData<Hasher>* group : claims.groups) {
+            group_num_columns.push_back(group->num_columns());
+        }
+        detail::StackedPlan plan = detail::build_stacked_plan(config,
+                                                              group_num_columns,
+                                                              claims.unshifted,
+                                                              claims.unshifted_evaluations,
+                                                              claims.to_be_shifted,
+                                                              claims.shifted_evaluations,
+                                                              u,
+                                                              taus);
 
-        // Batched array F = ∑_j ρʲ·a_j + ∑_l ρ^{n_u+l}·shift(a_l) (+ the mask with the last power).
+        // Committed arrays of the constituents: the stacked array, or its coefficient shift.
+        std::vector<std::span<const fr>> constituent_arrays;
+        std::deque<std::vector<fr>> shifted_storage;
+        for (const auto& constituent : plan.constituents) {
+            const std::vector<fr>& stacked = groups[constituent.tree]->stacked;
+            if (!constituent.shifted) {
+                constituent_arrays.emplace_back(stacked);
+                continue;
+            }
+            BB_ASSERT_EQ(stacked[0], fr::zero(), "to-be-shifted group must have zero constant term");
+            std::vector<fr> shifted(stacked.begin() + 1, stacked.end());
+            shifted.push_back(fr::zero());
+            shifted_storage.push_back(std::move(shifted));
+            constituent_arrays.emplace_back(shifted_storage.back());
+        }
+
+        // R_c(p) of the stride-spread constituent: eq(0, p_low)·A_c(p_high).
+        auto constituent_evaluation = [&](size_t c, std::span<const fr> point) {
+            const size_t stride_bits = plan.constituents[c].stride_bits;
+            fr eq_low = fr::one();
+            for (size_t i = 0; i < stride_bits; ++i) {
+                eq_low *= fr::one() - point[i];
+            }
+            return eq_low * detail::mle_of_span(constituent_arrays[c], point.subspan(stride_bits));
+        };
+
+        // The zk mask's claimed evaluation at its own point.
+        if (config.zk) {
+            auto& mask_claim = plan.constituents.back().claims[0];
+            mask_claim.value = constituent_evaluation(plan.constituents.size() - 1, plan.points[mask_claim.point]);
+            transcript->send_to_verifier(std::string("WHIR:mask_eval"), mask_claim.value);
+        }
+
+        // Cross evaluations: every constituent evaluated at every other constituent's points; the
+        // subsequent ρ/γ batching makes each one a claim proven by the same WHIR run.
+        for (size_t t = 0; t < plan.points.size(); ++t) {
+            for (size_t c = 0; c < plan.constituents.size(); ++c) {
+                if (!plan.is_diagonal(t, c)) {
+                    transcript->send_to_verifier(detail::whir_label("cross", t, c),
+                                                 constituent_evaluation(c, plan.points[t]));
+                }
+            }
+        }
+
+        const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
+        const fr gamma_claims = transcript->template get_challenge<fr>("WHIR:gamma_claims");
+
+        // Batched array F = ∑_c ρᶜ·spread(A_c): constituent c enters at coefficient stride 2^d.
         std::vector<fr> batched(n, fr::zero());
         fr rho_power = fr::one();
-        auto accumulate_column = [&](const std::vector<fr>& column, const fr& scalar, bool shifted) {
-            parallel_for_range(n - (shifted ? 1 : 0), [&](size_t start, size_t end) {
-                for (size_t i = start; i < end; ++i) {
-                    batched[i] += scalar * column[i + (shifted ? 1 : 0)];
+        for (size_t c = 0; c < plan.constituents.size(); ++c) {
+            const std::span<const fr> array = constituent_arrays[c];
+            const size_t stride_bits = plan.constituents[c].stride_bits;
+            const fr scalar = rho_power;
+            parallel_for_range(array.size(), [&](size_t start, size_t end) {
+                for (size_t a = start; a < end; ++a) {
+                    batched[a << stride_bits] += scalar * array[a];
                 }
             });
-        };
-        for (const WhirColumnRef& ref : claims.unshifted) {
-            accumulate_column(claims.groups[ref.group]->coefficients[ref.column], rho_power, false);
             rho_power *= rho;
-        }
-        for (const WhirColumnRef& ref : claims.to_be_shifted) {
-            const std::vector<fr>& column = claims.groups[ref.group]->coefficients[ref.column];
-            BB_ASSERT_EQ(column[0], fr::zero(), "to-be-shifted polynomial must have zero constant term");
-            accumulate_column(column, rho_power, true);
-            rho_power *= rho;
-        }
-        if (config.zk) {
-            accumulate_column(mask_group->coefficients[0], rho_power, false);
         }
 
-        // Weight table of the initial claim: W = eq(u, ·) over the committed variables.
+        // Weight table of the initial claims: W = ∑_t γᵗ·eq(p_t, ·) over the committed variables.
         std::vector<fr> weight_table(n, fr::zero());
-        WeightTerm::eq_weight(u_ext, fr::one()).accumulate_table(weight_table);
+        fr gamma_power = fr::one();
+        for (const auto& point : plan.points) {
+            WeightTerm::eq_weight(point, gamma_power).accumulate_table(weight_table);
+            gamma_power *= gamma_claims;
+        }
 
         std::vector<fr> current = std::move(batched);
         std::deque<Tree> folded_trees; // owns the trees committed during the proof
 
-        // Openings of the current oracle at a query index: all round-0 groups, or the last folded tree.
+        // Openings of the current oracle at a query index: all round-0 trees (each at the index
+        // reduced to its own leaf count), or the last folded tree.
         auto send_query_openings = [&](size_t idx) {
             if (folded_trees.empty()) {
                 for (const WhirGroupData<Hasher>* group : groups) {
-                    send_opening(transcript, group->tree.open(idx));
+                    send_opening(transcript, group->tree.open(idx & (group->tree.num_leaves() - 1)));
                 }
             } else {
                 send_opening(transcript, folded_trees.back().open(idx));
@@ -354,7 +591,7 @@ template <typename Hasher> class WhirProver {
                     send_opening(transcript, folded_trees[i - 1].open(indices[s]));
                 } else {
                     for (const WhirGroupData<Hasher>* group : groups) {
-                        send_opening(transcript, group->tree.open(indices[s]));
+                        send_opening(transcript, group->tree.open(indices[s] & (group->tree.num_leaves() - 1)));
                     }
                 }
             }
@@ -421,6 +658,14 @@ template <typename Hasher> class WhirVerifier {
         std::vector<Digest> group_roots;
     };
 
+    /** @brief One constituent's round-0 opening contribution: scalar ρᶜ, stride, and shift flag. */
+    struct Contribution {
+        size_t tree;
+        fr scalar;
+        bool shifted;
+        size_t stride_bits;
+    };
+
     template <typename Transcript>
     static bool verify(const WhirConfig& config,
                        const Claims& claims,
@@ -432,13 +677,8 @@ template <typename Hasher> class WhirVerifier {
         BB_ASSERT_EQ(claims.unshifted.size(), claims.unshifted_evaluations.size());
         BB_ASSERT_EQ(claims.to_be_shifted.size(), claims.shifted_evaluations.size());
 
-        std::vector<fr> u_ext(u.begin(), u.end());
-        if (config.zk) {
-            u_ext.push_back(fr::zero());
-        }
-
-        // Group roots (and the zk mask root/evaluation), then the batching challenge and σ₀.
-        std::vector<size_t> group_columns = claims.group_num_columns;
+        // Group roots and the zk mask root.
+        const std::vector<size_t>& group_columns = claims.group_num_columns;
         std::vector<Digest> roots = claims.group_roots;
         if (roots.empty()) {
             for (size_t g = 0; g < group_columns.size(); ++g) {
@@ -448,41 +688,82 @@ template <typename Hasher> class WhirVerifier {
             }
         }
         BB_ASSERT_EQ(roots.size(), group_columns.size(), "one root per group required");
-        fr mask_evaluation = fr::zero();
         if (config.zk) {
             const auto fields = transcript->template receive_from_prover<std::array<fr, Hasher::DIGEST_NUM_FIELDS>>(
                 std::string("WHIR:root_mask"));
             roots.push_back(Hasher::digest_from_fields(fields));
-            group_columns.push_back(1);
-            mask_evaluation = transcript->template receive_from_prover<fr>(std::string("WHIR:mask_eval"));
+        }
+
+        // Column-stacking challenges and the claim plan (mirrors the prover), the mask evaluation,
+        // then the cross evaluations R_c(p_t) of every constituent at every foreign point.
+        std::vector<fr> taus(config.num_variables - config.num_payload_variables - (config.zk ? 1 : 0));
+        for (size_t i = 0; i < taus.size(); ++i) {
+            taus[i] = transcript->template get_challenge<fr>(detail::whir_label("tau", i));
+        }
+        detail::StackedPlan plan = detail::build_stacked_plan(config,
+                                                              group_columns,
+                                                              claims.unshifted,
+                                                              claims.unshifted_evaluations,
+                                                              claims.to_be_shifted,
+                                                              claims.shifted_evaluations,
+                                                              u,
+                                                              taus);
+        if (config.zk) {
+            plan.constituents.back().claims[0].value =
+                transcript->template receive_from_prover<fr>(std::string("WHIR:mask_eval"));
+        }
+        // values[t][c] = R_c(p_t): claimed on the diagonal, read from the proof stream elsewhere.
+        std::vector<std::vector<fr>> values(plan.points.size(), std::vector<fr>(plan.constituents.size(), fr::zero()));
+        for (size_t c = 0; c < plan.constituents.size(); ++c) {
+            for (const auto& claim : plan.constituents[c].claims) {
+                values[claim.point][c] = claim.value;
+            }
+        }
+        for (size_t t = 0; t < plan.points.size(); ++t) {
+            for (size_t c = 0; c < plan.constituents.size(); ++c) {
+                if (!plan.is_diagonal(t, c)) {
+                    values[t][c] = transcript->template receive_from_prover<fr>(detail::whir_label("cross", t, c));
+                }
+            }
         }
 
         const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
-        // Per-column RLC contributions to the virtual round-0 oracle, in ρ-power order.
-        struct Contribution {
-            WhirColumnRef ref;
-            fr scalar;
-            bool shifted;
-        };
+        const fr gamma_claims = transcript->template get_challenge<fr>("WHIR:gamma_claims");
+
+        // σ₀ = ∑_t γᵗ·F(p_t) with F(p_t) = ∑_c ρᶜ·R_c(p_t); one weight term per point.
         std::vector<Contribution> contributions;
-        fr sigma = fr::zero();
+        std::vector<fr> rho_powers(plan.constituents.size());
         fr rho_power = fr::one();
-        for (size_t j = 0; j < claims.unshifted.size(); ++j) {
-            contributions.push_back({ claims.unshifted[j], rho_power, false });
-            sigma += rho_power * claims.unshifted_evaluations[j];
+        for (size_t c = 0; c < plan.constituents.size(); ++c) {
+            rho_powers[c] = rho_power;
+            contributions.push_back({ plan.constituents[c].tree,
+                                      rho_power,
+                                      plan.constituents[c].shifted,
+                                      plan.constituents[c].stride_bits });
             rho_power *= rho;
         }
-        for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
-            contributions.push_back({ claims.to_be_shifted[l], rho_power, true });
-            sigma += rho_power * claims.shifted_evaluations[l];
-            rho_power *= rho;
-        }
-        if (config.zk) {
-            contributions.push_back({ { group_columns.size() - 1, 0 }, rho_power, false });
-            sigma += rho_power * mask_evaluation;
+        fr sigma = fr::zero();
+        std::vector<WeightTerm> terms;
+        fr gamma_power = fr::one();
+        for (size_t t = 0; t < plan.points.size(); ++t) {
+            fr oracle_value = fr::zero();
+            for (size_t c = 0; c < plan.constituents.size(); ++c) {
+                oracle_value += rho_powers[c] * values[t][c];
+            }
+            sigma += gamma_power * oracle_value;
+            terms.push_back(WeightTerm::eq_weight(plan.points[t], gamma_power));
+            gamma_power *= gamma_claims;
         }
 
-        std::vector<WeightTerm> terms = { WeightTerm::eq_weight(u_ext, fr::one()) };
+        // Committed variable counts of the round-0 trees, for leaf-index reduction.
+        std::vector<size_t> tree_variables;
+        for (const size_t columns : group_columns) {
+            tree_variables.push_back(config.num_payload_variables + detail::ceil_log2(columns) + (config.zk ? 1 : 0));
+        }
+        if (config.zk) {
+            tree_variables.push_back(config.num_variables); // the full-width mask
+        }
+
         std::optional<Digest> folded_root; // the g_i oracle once i >= 1
 
         for (size_t i = 0; i < config.rounds.size(); ++i) {
@@ -529,7 +810,7 @@ template <typename Hasher> class WhirVerifier {
                         : read_round0_openings(transcript,
                                                config,
                                                roots,
-                                               group_columns,
+                                               tree_variables,
                                                contributions,
                                                indices[s],
                                                index_bits,
@@ -578,7 +859,7 @@ template <typename Hasher> class WhirVerifier {
                                 : read_round0_openings(transcript,
                                                        config,
                                                        roots,
-                                                       group_columns,
+                                                       tree_variables,
                                                        contributions,
                                                        idx,
                                                        index_bits,
@@ -627,25 +908,36 @@ template <typename Hasher> class WhirVerifier {
         return opening;
     }
 
-    /** @brief Open every round-0 group at `idx` and assemble the RLC'd virtual coset values. */
-    template <typename Transcript, typename ContributionList>
+    /**
+     * @brief Open every round-0 tree at `idx` (reduced to each tree's own leaf count) and assemble
+     * the RLC'd virtual coset values of the batched oracle.
+     * @details A constituent with stride d is the univariate substitution A(X^{2^d}): its value at
+     * the big-domain point x is the small codeword at x^{2^d}. Coset position t of query `idx`
+     * therefore reads the tree's leaf `idx mod 2^{ib}` at slot (q + t·2^d) mod 2^k, where
+     * ib = tree index bits and q = idx >> ib; shifted constituents scale by (x_t^{2^d})^{-1}.
+     */
+    template <typename Transcript>
     static bool read_round0_openings(const std::shared_ptr<Transcript>& transcript,
                                      const WhirConfig& config,
                                      const std::vector<Digest>& roots,
-                                     const std::vector<size_t>& group_columns,
-                                     const ContributionList& contributions,
+                                     const std::vector<size_t>& tree_variables,
+                                     const std::vector<Contribution>& contributions,
                                      size_t idx,
                                      size_t index_bits,
                                      const fr& omega,
                                      const fr& eta_inv,
                                      std::vector<fr>& out)
     {
-        const size_t arity = size_t(1) << config.folding_factor_bits;
+        const size_t k = config.folding_factor_bits;
+        const size_t arity = size_t(1) << k;
         std::vector<typename Tree::Opening> openings;
+        std::vector<size_t> tree_index_bits(roots.size());
         openings.reserve(roots.size());
         for (size_t g = 0; g < roots.size(); ++g) {
-            openings.push_back(read_opening(transcript, group_columns[g], arity, index_bits, config.zk));
-            if (!Tree::verify(roots[g], idx, openings.back())) {
+            tree_index_bits[g] = tree_variables[g] + config.log_inv_rate - k;
+            BB_ASSERT_LTE(tree_index_bits[g], index_bits, "tree larger than the round-0 oracle");
+            openings.push_back(read_opening(transcript, 1, arity, tree_index_bits[g], config.zk));
+            if (!Tree::verify(roots[g], idx & ((size_t(1) << tree_index_bits[g]) - 1), openings.back())) {
                 return false;
             }
         }
@@ -664,11 +956,18 @@ template <typename Hasher> class WhirVerifier {
 
         out.assign(arity, fr::zero());
         for (const auto& contribution : contributions) {
-            const std::vector<fr>& values = openings[contribution.ref.group].values;
+            const std::vector<fr>& values = openings[contribution.tree].values;
+            const size_t stride_bits = contribution.stride_bits;
+            const size_t slot_base = idx >> tree_index_bits[contribution.tree];
             for (size_t t = 0; t < arity; ++t) {
-                fr value = contribution.scalar * values[contribution.ref.column * arity + t];
+                fr value = contribution.scalar * values[(slot_base + (t << stride_bits)) & (arity - 1)];
                 if (contribution.shifted) {
-                    value *= x_inverses[t];
+                    // (x_t^{2^d})^{-1} by d squarings of the coset point's inverse.
+                    fr y_inv = x_inverses[t];
+                    for (size_t i = 0; i < stride_bits; ++i) {
+                        y_inv = y_inv.sqr();
+                    }
+                    value *= y_inv;
                 }
                 out[t] += value;
             }

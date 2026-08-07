@@ -44,7 +44,7 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
     using Verifier = WhirVerifier<Hasher>;
     using GroupData = WhirGroupData<Hasher>;
 
-    static WhirConfig test_config(size_t num_variables, bool zk = false)
+    static WhirConfig test_config(size_t num_variables, bool zk = false, size_t max_stack_bits = 2)
     {
         return WhirConfig::create(num_variables,
                                   /*security_bits=*/64,
@@ -52,7 +52,8 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
                                   /*folding_factor_bits=*/4,
                                   /*final_poly_bits=*/4,
                                   WhirSoundness::CONJECTURED_LIST,
-                                  zk);
+                                  zk,
+                                  max_stack_bits);
     }
 
     struct Instance {
@@ -149,8 +150,8 @@ TYPED_TEST(WhirTest, BatchedWithShiftedCompleteness)
 // the batched virtual oracle (with shift scaling) directly against the clear polynomial.
 TYPED_TEST(WhirTest, RepairedSoundnessCompleteness)
 {
-    const WhirConfig config =
-        WhirConfig::create(10, /*security_bits=*/64, /*log_inv_rate=*/2, 4, 4, WhirSoundness::REPAIRED_LIST);
+    const WhirConfig config = WhirConfig::create(
+        10, /*security_bits=*/64, /*log_inv_rate=*/2, 4, 4, WhirSoundness::REPAIRED_LIST, /*zk=*/false, 2);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);
     const auto proof = TestFixture::prove_instance(ck, instance);
@@ -215,7 +216,7 @@ TYPED_TEST(WhirTest, TamperedProofRejected)
 TYPED_TEST(WhirTest, ZkBatchedCompleteness)
 {
     const WhirConfig config = TestFixture::test_config(8, /*zk=*/true);
-    ASSERT_EQ(config.num_variables, 9U);
+    ASSERT_EQ(config.num_variables, 11U);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);
     const auto proof = TestFixture::prove_instance(ck, instance);
@@ -224,7 +225,7 @@ TYPED_TEST(WhirTest, ZkBatchedCompleteness)
 
 TYPED_TEST(WhirTest, ZkZeroIterationCompleteness)
 {
-    const WhirConfig config = TestFixture::test_config(6, /*zk=*/true);
+    const WhirConfig config = TestFixture::test_config(4, /*zk=*/true);
     ASSERT_EQ(config.num_iterations(), 0U);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);

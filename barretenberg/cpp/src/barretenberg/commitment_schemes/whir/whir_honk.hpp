@@ -17,9 +17,19 @@ template <typename Hasher_> struct WhirPcs {
 
     using GroupCommitment = typename Hasher::Digest;
 
+    // Stacking headroom for the widest commitment group: the (at most 28) precomputed columns.
+    static constexpr size_t MAX_STACK_BITS = 5;
+
     static Config make_config(size_t log_dyadic_size, size_t security_bits, size_t log_inv_rate)
     {
-        return WhirConfig::create(log_dyadic_size, security_bits, log_inv_rate);
+        return WhirConfig::create(log_dyadic_size,
+                                  security_bits,
+                                  log_inv_rate,
+                                  /*folding_factor_bits=*/4,
+                                  /*final_poly_bits=*/4,
+                                  WhirSoundness::CONJECTURED_LIST,
+                                  /*zk=*/false,
+                                  MAX_STACK_BITS);
     }
     static size_t payload_variables(const Config& config) { return config.num_payload_variables; }
 

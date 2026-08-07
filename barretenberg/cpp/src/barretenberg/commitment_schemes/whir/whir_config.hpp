@@ -163,6 +163,9 @@ struct WhirConfig {
      * variables would remain after folding; the rate improves by k-1 bits per iteration.
      * @param num_payload_variables log-size of the polynomials being opened; in zk mode the
      * committed arrays have one variable more (the blinded high half).
+     * @param max_stack_bits column-stacking headroom: a commitment group of up to 2^max_stack_bits
+     * columns is stacked into one taller array, so the protocol arrays carry this many variables
+     * over the payload.
      */
     static WhirConfig create(size_t num_payload_variables,
                              size_t security_bits = 100,
@@ -170,9 +173,10 @@ struct WhirConfig {
                              size_t folding_factor_bits = 4,
                              size_t final_poly_bits = 4,
                              WhirSoundness soundness = WhirSoundness::CONJECTURED_LIST,
-                             bool zk = false)
+                             bool zk = false,
+                             size_t max_stack_bits = 0)
     {
-        const size_t num_variables = num_payload_variables + (zk ? 1 : 0);
+        const size_t num_variables = num_payload_variables + max_stack_bits + (zk ? 1 : 0);
         BB_ASSERT_GT(folding_factor_bits, size_t(0));
         BB_ASSERT_GTE(num_variables, folding_factor_bits, "polynomial too small for one fold");
         // BN254 Fr has 2-adicity 28; the initial codeword domain must be a power-of-two subgroup.
@@ -215,10 +219,10 @@ struct WhirConfig {
             const size_t round0_queries =
                 config.rounds.empty() ? config.final_round.num_queries : config.rounds[0].num_queries;
             config.num_blinding_coefficients = round0_queries + 8;
-            // Blinding lives in [2^m + 1, 2^{m+1}) so it never collides with the payload or the
-            // shift contract's zero slot at 2^m.
+            // Blinding lives in the committed array's high half, above the (stacked) payload and
+            // the shift contract's zero slot, so it never collides with either.
             BB_ASSERT_LT(config.num_blinding_coefficients + 1,
-                         size_t(1) << num_payload_variables,
+                         size_t(1) << (num_variables - 1),
                          "blinding coefficients do not fit above the payload");
         }
         return config;
