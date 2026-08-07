@@ -25,7 +25,10 @@ if [[ ! -x "$BENCH_BIN" ]]; then
     cmake --build "$BUILD_DIR" --target pcs_acir_bench
 fi
 # Snapshot the binary: a concurrent ninja run can delete/replace it mid-sweep.
+# Unlink first: overwriting an arm64 macOS binary in place invalidates the kernel's cached ad-hoc
+# code signature for that inode, and every later exec dies with "Killed: 9".
 mkdir -p "$WORK_DIR"
+rm -f "$WORK_DIR/pcs_acir_bench.snapshot"
 cp "$BENCH_BIN" "$WORK_DIR/pcs_acir_bench.snapshot"
 BENCH_BIN="$WORK_DIR/pcs_acir_bench.snapshot"
 
