@@ -1,6 +1,7 @@
 #include "barretenberg/commitment_schemes/whir/merkle_tree.hpp"
 
 #include <gtest/gtest.h>
+#include <numeric>
 
 namespace bb::whir {
 
@@ -85,6 +86,99 @@ TYPED_TEST(WhirMerkleTreeTest, SaltedCommitmentIsHidingAndVerifies)
     auto stripped = opening;
     stripped.salt.reset();
     EXPECT_FALSE(MerkleTree<TypeParam>::verify(salted_a.root(), 3, stripped));
+}
+
+TYPED_TEST(WhirMerkleTreeTest, BatchOpeningAuthenticatesEveryLeaf)
+{
+    const std::vector<fr> codeword = random_codeword(1024);
+    MerkleTree<TypeParam> tree(codeword, 2);
+    using Tree = MerkleTree<TypeParam>;
+
+    // Repeated and unsorted indices address the same distinct leaf set.
+    const std::vector<size_t> indices = { 200, 7, 6, 201, 7, 0, 255 };
+    const std::vector<size_t> leaves = Tree::batch_leaves(indices);
+    EXPECT_EQ(leaves, (std::vector<size_t>{ 0, 6, 7, 200, 201, 255 }));
+
+    const auto batch = tree.open_batch(indices);
+    EXPECT_EQ(batch.values.size(), leaves.size());
+    EXPECT_EQ(batch.siblings.size(), Tree::batch_num_siblings(leaves, tree.depth()));
+    EXPECT_TRUE(Tree::verify_batch(tree.root(), leaves, tree.depth(), batch));
+
+    // Each batched leaf carries the same coset the single-leaf opening does.
+    for (size_t i = 0; i < leaves.size(); ++i) {
+        EXPECT_EQ(batch.values[i], tree.open(leaves[i]).values);
+    }
+
+    // Sibling pairs (6,7) and (200,201) are derivable from each other, so a batch must be strictly
+    // cheaper than the independent paths it replaces.
+    EXPECT_LT(batch.siblings.size(), leaves.size() * tree.depth());
+}
+
+TYPED_TEST(WhirMerkleTreeTest, BatchOpeningTamperingRejected)
+{
+    const std::vector<fr> codeword = random_codeword(256);
+    MerkleTree<TypeParam> tree(codeword, 2);
+    using Tree = MerkleTree<TypeParam>;
+
+    const std::vector<size_t> indices = { 3, 17, 40, 41 };
+    const std::vector<size_t> leaves = Tree::batch_leaves(indices);
+    ASSERT_TRUE(Tree::verify_batch(tree.root(), leaves, tree.depth(), tree.open_batch(indices)));
+
+    auto tampered = tree.open_batch(indices);
+    tampered.values[1][0] += fr(1);
+    EXPECT_FALSE(Tree::verify_batch(tree.root(), leaves, tree.depth(), tampered));
+
+    tampered = tree.open_batch(indices);
+    tampered.siblings[0] = TypeParam::hash_node(tampered.siblings[0], tampered.siblings[0]);
+    EXPECT_FALSE(Tree::verify_batch(tree.root(), leaves, tree.depth(), tampered));
+
+    // Claiming a different leaf set for the same data must fail.
+    EXPECT_FALSE(
+        Tree::verify_batch(tree.root(), std::vector<size_t>{ 3, 17, 40, 42 }, tree.depth(), tree.open_batch(indices)));
+
+    // A batch that omits or adds a sibling is rejected rather than silently accepted.
+    tampered = tree.open_batch(indices);
+    tampered.siblings.pop_back();
+    EXPECT_FALSE(Tree::verify_batch(tree.root(), leaves, tree.depth(), tampered));
+    tampered = tree.open_batch(indices);
+    tampered.siblings.push_back(tree.root());
+    EXPECT_FALSE(Tree::verify_batch(tree.root(), leaves, tree.depth(), tampered));
+}
+
+// Every leaf of the tree opened at once needs no siblings at all: the verifier rebuilds the whole
+// tree from the leaves. This pins the walk's accounting at the extreme where sharing is total.
+TYPED_TEST(WhirMerkleTreeTest, BatchOpeningOfEveryLeafSendsNoSiblings)
+{
+    const std::vector<fr> codeword = random_codeword(64);
+    MerkleTree<TypeParam> tree(codeword, 2);
+    using Tree = MerkleTree<TypeParam>;
+
+    std::vector<size_t> all(tree.num_leaves());
+    std::iota(all.begin(), all.end(), size_t(0));
+    const auto batch = tree.open_batch(all);
+    EXPECT_TRUE(batch.siblings.empty());
+    EXPECT_TRUE(Tree::verify_batch(tree.root(), all, tree.depth(), batch));
+}
+
+// Leaves that all sit in one subtree still have to be climbed to the actual root: the walk is
+// driven by the tree's depth, not by "one node left". Leaf 0 alone is the extreme case — its
+// digest is already index 0 at every level, so a walk that stopped there would authenticate
+// nothing at all.
+TYPED_TEST(WhirMerkleTreeTest, BatchOpeningClimbsToTheRootFromAnySubtree)
+{
+    const std::vector<fr> codeword = random_codeword(256);
+    MerkleTree<TypeParam> tree(codeword, 2);
+    using Tree = MerkleTree<TypeParam>;
+
+    for (const std::vector<size_t>& indices :
+         std::vector<std::vector<size_t>>{ { 0 }, { 0, 1 }, { 0, 1, 2, 3 }, { 6, 7 }, { 63 }, { 0, 63 } }) {
+        const std::vector<size_t> leaves = Tree::batch_leaves(indices);
+        EXPECT_TRUE(Tree::verify_batch(tree.root(), leaves, tree.depth(), tree.open_batch(indices)))
+            << "leaves starting at " << indices.front();
+        // The same opening must not authenticate against a foreign root.
+        MerkleTree<TypeParam> other(random_codeword(256), 2);
+        EXPECT_FALSE(Tree::verify_batch(other.root(), leaves, tree.depth(), tree.open_batch(indices)));
+    }
 }
 
 TYPED_TEST(WhirMerkleTreeTest, DigestFieldRoundTrip)

@@ -225,6 +225,20 @@ template <typename Hasher> class MerkleTree {
         std::vector<Digest> path; // sibling digests, leaf level first
     };
 
+    /**
+     * @brief Authentication of several leaves at once, sharing everything their paths have in common.
+     * @details Independent paths for t leaves of a depth-d tree repeat every node the paths meet
+     * above their branch points; near the root they all coincide. This form sends a sibling only
+     * where the verifier cannot already derive it from leaves it holds, which for t random leaves
+     * costs about t·(d - log₂t) digests instead of t·d. `leaves` (distinct, ascending) is derived
+     * from the query indices by both parties and is not part of the transmitted data.
+     */
+    struct BatchOpening {
+        std::vector<std::vector<fr>> values; // one coset per entry of `leaves`
+        std::vector<fr> salts;               // parallel to `leaves`, empty when unsalted
+        std::vector<Digest> siblings;        // in the canonical order `walk_batch` visits them
+    };
+
     MerkleTree(std::vector<fr> codeword, size_t log_arity, bool salted = false)
         : MerkleTree(single_column(std::move(codeword)), log_arity, salted)
     {}
@@ -299,6 +313,95 @@ template <typename Hasher> class MerkleTree {
         return opening;
     }
 
+    /**
+     * @brief The distinct leaves of a query-index multiset, ascending: the batch's addressing.
+     * @details Both parties derive this from the indices alone, so it is never transmitted.
+     */
+    static std::vector<size_t> batch_leaves(std::span<const size_t> leaf_indices)
+    {
+        std::vector<size_t> leaves(leaf_indices.begin(), leaf_indices.end());
+        std::sort(leaves.begin(), leaves.end());
+        leaves.erase(std::unique(leaves.begin(), leaves.end()), leaves.end());
+        return leaves;
+    }
+
+    /** @brief How many sibling digests a batch over `leaves` sends; derivable before reading them. */
+    static size_t batch_num_siblings(std::span<const size_t> leaves, size_t depth)
+    {
+        size_t count = 0;
+        walk_batch(leaves, depth, [&](size_t, size_t, bool paired) { count += paired ? 0 : 1; });
+        return count;
+    }
+
+    /** @brief Open every leaf of `leaf_indices` against this tree, sharing their common path nodes. */
+    BatchOpening open_batch(std::span<const size_t> leaf_indices) const
+    {
+        const std::vector<size_t> leaves = batch_leaves(leaf_indices);
+        BatchOpening opening;
+        opening.values.resize(leaves.size());
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            BB_ASSERT_LT(leaves[i], num_leaves_);
+            gather_leaf_values(leaves[i], opening.values[i]);
+            if (!salts_.empty()) {
+                opening.salts.push_back(salts_[leaves[i]]);
+            }
+        }
+        walk_batch(leaves, depth(), [&](size_t level, size_t index, bool paired) {
+            if (!paired) {
+                opening.siblings.push_back(levels_[level][index ^ 1]);
+            }
+        });
+        return opening;
+    }
+
+    /**
+     * @brief Recompute the root from a batch opening; the mirror of `open_batch`.
+     * @details `depth` must be the tree's, and is climbed in full: stopping as soon as one node is
+     * left would end early whenever the queried leaves all sit under one subtree.
+     */
+    static bool verify_batch(const Digest& root,
+                             std::span<const size_t> leaves,
+                             size_t depth,
+                             const BatchOpening& opening)
+    {
+        if (opening.values.size() != leaves.size() || leaves.empty()) {
+            return false;
+        }
+        if (!opening.salts.empty() && opening.salts.size() != leaves.size()) {
+            return false;
+        }
+        std::vector<size_t> level(leaves.begin(), leaves.end());
+        std::vector<Digest> digests(leaves.size());
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            digests[i] = Hasher::hash_leaf(opening.values[i],
+                                           opening.salts.empty() ? std::nullopt : std::optional<fr>(opening.salts[i]));
+        }
+        size_t cursor = 0;
+        for (size_t l = 0; l < depth; ++l) {
+            std::vector<size_t> parents;
+            std::vector<Digest> parent_digests;
+            for (size_t p = 0; p < level.size();) {
+                const bool paired = p + 1 < level.size() && level[p + 1] == (level[p] ^ 1);
+                parents.push_back(level[p] >> 1);
+                if (paired) {
+                    parent_digests.push_back(Hasher::hash_node(digests[p], digests[p + 1]));
+                    p += 2;
+                    continue;
+                }
+                if (cursor >= opening.siblings.size()) {
+                    return false;
+                }
+                const Digest& sibling = opening.siblings[cursor++];
+                parent_digests.push_back((level[p] & 1) ? Hasher::hash_node(sibling, digests[p])
+                                                        : Hasher::hash_node(digests[p], sibling));
+                p += 1;
+            }
+            level = std::move(parents);
+            digests = std::move(parent_digests);
+        }
+        return level.size() == 1 && level[0] == 0 && cursor == opening.siblings.size() && digests[0] == root;
+    }
+
     static bool verify(const Digest& root, size_t leaf_index, const Opening& opening)
     {
         Digest digest = Hasher::hash_leaf(opening.values, opening.salt);
@@ -311,6 +414,27 @@ template <typename Hasher> class MerkleTree {
     }
 
   private:
+    /**
+     * @brief Walk the levels a batch of leaves induces, reporting each known node once.
+     * @details `visit(level, index, paired)` sees every node the verifier holds at that level, in
+     * ascending index order; `paired` says its sibling is also held, so no digest need be sent for
+     * it. Prover and verifier run the identical walk, which is what fixes the sibling order.
+     */
+    template <typename Visitor> static void walk_batch(std::span<const size_t> leaves, size_t depth, Visitor&& visit)
+    {
+        std::vector<size_t> level(leaves.begin(), leaves.end());
+        for (size_t l = 0; l < depth; ++l) {
+            std::vector<size_t> parents;
+            for (size_t p = 0; p < level.size();) {
+                const bool paired = p + 1 < level.size() && level[p + 1] == (level[p] ^ 1);
+                visit(l, level[p], paired);
+                parents.push_back(level[p] >> 1);
+                p += paired ? 2 : 1;
+            }
+            level = std::move(parents);
+        }
+    }
+
     static std::vector<std::vector<fr>> single_column(std::vector<fr>&& codeword)
     {
         std::vector<std::vector<fr>> columns;
