@@ -2,6 +2,10 @@
 # Benchmarks the ProveKit World ID passport circuit (complete_age_check) across every PCS backend
 # reachable through TransparentHonk, plus the production KZG UltraHonk baseline.
 #
+# The transparent backends run on UltraProveKitFlavor, which drops the elliptic, non-native-field
+# and both Poseidon2 relations — the circuit leaves all four of those trace blocks empty. The KZG
+# row stays on UltraFlavor: it is the production prover, which is the point of comparing to it.
+#
 # Each (backend, rep) pair runs in a fresh pcs_acir_bench process so peak_rss_bytes is a valid
 # per-run maximum. Raw per-run JSON lines land in raw_runs.jsonl; aggregate.py reduces them to
 # medians and same-run ratios against KZG in results.json, and re-embeds that JSON into
@@ -10,12 +14,17 @@
 # Usage: ./driver.sh [reps]        (default 5)
 # Env:   BUILD_DIR   cmake build dir (default: ../../../../build-arm64 relative to this script)
 #        CIRCUIT_DIR directory containing complete_age_check.json + witness.gz (default: auto-fetch)
+#        FLAVOR      flavor for the transparent backends (default: provekit; `ultra` to compare)
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
 REPS="${1:-5}"
-BACKENDS=(kzg mercury whir whir-p2 whir-sky whir-sky-stacked ligero hyrax kzh2 ipa dory)
+# WhirStackedHonk is deliberately absent: it trades ~6x prover time for a ~2.7x smaller proof,
+# which is not the operating point this comparison is about. Measure it ad hoc with
+# `pcs_acir_bench --pcs whir-sky-stacked`.
+BACKENDS=(kzg mercury whir whir-p2 whir-sky ligero hyrax kzh2 ipa dory)
+FLAVOR="${FLAVOR:-provekit}"
 BUILD_DIR="${BUILD_DIR:-$(cd ../../../.. && pwd)/build-arm64}"
 BENCH_BIN="$BUILD_DIR/bin/pcs_acir_bench"
 WORK_DIR="$PWD/workdir"
@@ -54,11 +63,19 @@ RAW="$WORK_DIR/raw_runs.jsonl"
 : > "$RAW"
 echo "circuit: $BYTECODE"
 echo "reps: $REPS  backends: ${BACKENDS[*]}"
+echo "transparent-backend flavor: $FLAVOR"
 
 for rep in $(seq 1 "$REPS"); do
     for pcs in "${BACKENDS[@]}"; do
+        # The KZG baseline is the production UltraFlavor prover and takes no flavor override.
+        if [[ "$pcs" == "kzg" ]]; then
+            flavor_arg=""
+        else
+            flavor_arg="--flavor $FLAVOR"
+        fi
         echo "--- rep $rep/$REPS  pcs=$pcs"
-        if ! "$BENCH_BIN" -b "$BYTECODE" -w "$WITNESS" --pcs "$pcs" >> "$RAW"; then
+        # shellcheck disable=SC2086  # flavor_arg is a deliberate two-word (or empty) expansion
+        if ! "$BENCH_BIN" -b "$BYTECODE" -w "$WITNESS" --pcs "$pcs" $flavor_arg >> "$RAW"; then
             echo "FAILED: pcs=$pcs rep=$rep" >&2
             exit 1
         fi

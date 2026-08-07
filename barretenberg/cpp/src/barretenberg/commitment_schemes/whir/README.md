@@ -378,6 +378,16 @@ root, and the opening phase is one batched WHIR run.
   precomputed columns (the gate selectors of unused block types) or the two lagrange point
   indicators; the verification key records them and the verifier checks sumcheck's claimed
   evaluation against the value it computes itself.
+- **Reduced flavors.** A virtual column still costs a claimed evaluation in the proof and a
+  full pass through the relation's algebra in every sumcheck round. `TransparentHonk`'s
+  second template parameter selects the flavor, and `UltraProveKitFlavor`
+  (`flavor/ultra_provekit_flavor.hpp`) drops the four relations a ProveKit-style Noir circuit
+  never exercises — elliptic, non-native field, and both Poseidon2 — along with their
+  selectors. This is sound exactly when those trace blocks are empty, which
+  `assert_relations_are_dead` checks on the finalized builder. It removes four claimed
+  evaluations and, because the Poseidon2 subrelations are the only degree-6 ones in Ultra,
+  drops `MAX_PARTIAL_RELATION_LENGTH` from 7 to 6: one fewer evaluation in each of the
+  $\log n$ round polynomials, and a shorter edge extension in the sumcheck hot loop.
 - **ZK flavors.** Witness masking rows and Libra sumcheck masking carry over unchanged;
   the PCS phase uses §8. The `SmallSubgroupIPA` sub-protocol reduces to standard opening
   claims, which fold into the same batched WHIR statement.

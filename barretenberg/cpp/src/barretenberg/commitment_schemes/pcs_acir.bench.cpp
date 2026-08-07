@@ -9,6 +9,7 @@
 #include "barretenberg/dsl/acir_format/acir_format.hpp"
 #include "barretenberg/dsl/acir_format/acir_to_constraint_buf.hpp"
 #include "barretenberg/dsl/acir_format/serde/witness_stack.hpp"
+#include "barretenberg/flavor/ultra_provekit_flavor.hpp"
 #include "barretenberg/special_public_inputs/special_public_inputs.hpp"
 #include "barretenberg/srs/global_crs.hpp"
 #include "barretenberg/ultra_honk/ultra_prover.hpp"
@@ -28,8 +29,13 @@
 // stdout so a driver can aggregate medians across fresh-process repetitions (peak_rss_bytes is
 // only meaningful when each run is its own process).
 //
+// `--flavor provekit` runs the transparent backends on UltraProveKitFlavor, which drops the four
+// relations a ProveKit-style circuit never exercises. The KZG baseline is always UltraFlavor: it
+// is the production prover, and that is the point of comparing against it.
+//
 // Usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs
 // <kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory>
+//        [--flavor <ultra|provekit>]
 
 namespace {
 
@@ -104,12 +110,18 @@ Timings run_kzg(UltraCircuitBuilder& builder, Timings timings)
     return timings;
 }
 
+// Flavor selectors for `run_backend`: each maps a backend's default (UltraFlavor) TransparentHonk
+// to the one a given run wants.
+template <typename Honk> using AsIs = Honk;
+template <typename Honk>
+using Reduced = bb::honk_transparent::TransparentHonk<typename Honk::Pcs, bb::UltraProveKitFlavor>;
+
 template <typename Honk> Timings run_transparent(UltraCircuitBuilder& builder, Timings timings)
 {
     // The backend config must know the dyadic size up front; size a throwaway copy since
     // ProverInstance finalizes (mutates) the builder it consumes.
     UltraCircuitBuilder sizing_copy = builder;
-    const size_t log_n = ProverInstance_<UltraFlavor>(sizing_copy).log_dyadic_size();
+    const size_t log_n = typename Honk::ProverInstance(sizing_copy).log_dyadic_size();
     const auto config = Honk::make_config(log_n, SECURITY_BITS, LOG_INV_RATE);
 
     auto start = std::chrono::steady_clock::now();
@@ -130,6 +142,38 @@ template <typename Honk> Timings run_transparent(UltraCircuitBuilder& builder, T
     return timings;
 }
 
+// Runs `pcs` under the flavor selected by `Flavored`, which maps each backend's default
+// TransparentHonk to the one this run wants. Returns false for an unrecognized backend name.
+template <template <typename> class Flavored>
+bool run_backend(const std::string& pcs, UltraCircuitBuilder& builder, Timings& timings)
+{
+    if (pcs == "mercury") {
+        timings = run_transparent<Flavored<bb::mercury::MercuryHonk>>(builder, timings);
+    } else if (pcs == "whir") {
+        timings = run_transparent<Flavored<bb::whir::WhirHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-p2") {
+        timings = run_transparent<Flavored<bb::whir::WhirHonk<bb::whir::Poseidon2MerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-sky") {
+        timings = run_transparent<Flavored<bb::whir::WhirHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-sky-stacked") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirStackedHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "ligero") {
+        timings = run_transparent<Flavored<bb::ligero::LigeroHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
+    } else if (pcs == "hyrax") {
+        timings = run_transparent<Flavored<bb::hyrax::HyraxHonk>>(builder, timings);
+    } else if (pcs == "kzh2") {
+        timings = run_transparent<Flavored<bb::kzh::KzhHonk>>(builder, timings);
+    } else if (pcs == "ipa") {
+        timings = run_transparent<Flavored<bb::pedersen_ipa::IpaHonk>>(builder, timings);
+    } else if (pcs == "dory") {
+        timings = run_transparent<Flavored<bb::dory::DoryHonk>>(builder, timings);
+    } else {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -137,6 +181,7 @@ int main(int argc, char** argv)
     std::string bytecode_path;
     std::string witness_path;
     std::string pcs;
+    std::string flavor = "ultra";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "-b" && i + 1 < argc) {
@@ -145,6 +190,8 @@ int main(int argc, char** argv)
             witness_path = argv[++i];
         } else if (arg == "--pcs" && i + 1 < argc) {
             pcs = argv[++i];
+        } else if (arg == "--flavor" && i + 1 < argc) {
+            flavor = argv[++i];
         } else {
             std::cerr << "unknown argument: " << arg << "\n";
             return 1;
@@ -152,7 +199,16 @@ int main(int argc, char** argv)
     }
     if (bytecode_path.empty() || witness_path.empty() || pcs.empty()) {
         std::cerr << "usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs "
-                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory>\n";
+                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory> "
+                     "[--flavor <ultra|provekit>]\n";
+        return 1;
+    }
+    if (flavor != "ultra" && flavor != "provekit") {
+        std::cerr << "unknown flavor: " << flavor << "\n";
+        return 1;
+    }
+    if (pcs == "kzg" && flavor != "ultra") {
+        std::cerr << "the kzg baseline is the production UltraFlavor prover; it has no reduced flavor\n";
         return 1;
     }
 
@@ -164,34 +220,21 @@ int main(int argc, char** argv)
     timings.circuit_ms = ms_since(start);
     report_block_usage(builder);
 
+    bool known = true;
     if (pcs == "kzg") {
         timings = run_kzg(builder, timings);
-    } else if (pcs == "mercury") {
-        timings = run_transparent<bb::mercury::MercuryHonk>(builder, timings);
-    } else if (pcs == "whir") {
-        timings = run_transparent<bb::whir::WhirHonk<bb::whir::Blake3sMerkleHasher>>(builder, timings);
-    } else if (pcs == "whir-p2") {
-        timings = run_transparent<bb::whir::WhirHonk<bb::whir::Poseidon2MerkleHasher>>(builder, timings);
-    } else if (pcs == "whir-sky") {
-        timings = run_transparent<bb::whir::WhirHonk<bb::whir::SkyscraperMerkleHasher>>(builder, timings);
-    } else if (pcs == "whir-sky-stacked") {
-        timings = run_transparent<bb::whir::WhirStackedHonk<bb::whir::SkyscraperMerkleHasher>>(builder, timings);
-    } else if (pcs == "ligero") {
-        timings = run_transparent<bb::ligero::LigeroHonk<bb::whir::Blake3sMerkleHasher>>(builder, timings);
-    } else if (pcs == "hyrax") {
-        timings = run_transparent<bb::hyrax::HyraxHonk>(builder, timings);
-    } else if (pcs == "kzh2") {
-        timings = run_transparent<bb::kzh::KzhHonk>(builder, timings);
-    } else if (pcs == "ipa") {
-        timings = run_transparent<bb::pedersen_ipa::IpaHonk>(builder, timings);
-    } else if (pcs == "dory") {
-        timings = run_transparent<bb::dory::DoryHonk>(builder, timings);
+    } else if (flavor == "provekit") {
+        known = run_backend<Reduced>(pcs, builder, timings);
     } else {
+        known = run_backend<AsIs>(pcs, builder, timings);
+    }
+    if (!known) {
         std::cerr << "unknown pcs: " << pcs << "\n";
         return 1;
     }
 
     std::cout << "{\"pcs\":\"" << pcs << "\""
+              << ",\"flavor\":\"" << flavor << "\""
               << ",\"log_n\":" << timings.log_n << ",\"num_gates\":" << timings.num_gates
               << ",\"circuit_ms\":" << timings.circuit_ms << ",\"pk_ms\":" << timings.pk_ms
               << ",\"prove_ms\":" << timings.prove_ms << ",\"verify_ms\":" << timings.verify_ms

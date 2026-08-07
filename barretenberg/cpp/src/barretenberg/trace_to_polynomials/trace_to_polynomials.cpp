@@ -18,6 +18,7 @@
 #include "barretenberg/flavor/mega_zk_flavor.hpp"
 #include "barretenberg/flavor/ultra_keccak_flavor.hpp"
 #include "barretenberg/flavor/ultra_keccak_zk_flavor.hpp"
+#include "barretenberg/flavor/ultra_provekit_flavor.hpp"
 #include "barretenberg/flavor/ultra_zk_flavor.hpp"
 namespace bb {
 
@@ -205,6 +206,7 @@ void TraceToPolynomials<Flavor>::add_ecc_op_wires_to_prover_instance(Builder& bu
 
 template class TraceToPolynomials<UltraFlavor>;
 template class TraceToPolynomials<UltraZKFlavor>;
+template class TraceToPolynomials<UltraProveKitFlavor>;
 template class TraceToPolynomials<UltraKeccakFlavor>;
 #ifdef STARKNET_GARAGA_FLAVORS
 template class TraceToPolynomials<UltraStarknetFlavor>;

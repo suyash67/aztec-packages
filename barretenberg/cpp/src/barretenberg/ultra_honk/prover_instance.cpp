@@ -20,6 +20,8 @@
 #include "barretenberg/stdlib_circuit_builders/ultra_circuit_builder.hpp"
 #include "barretenberg/trace_to_polynomials/trace_to_polynomials.hpp"
 
+#include "barretenberg/flavor/ultra_provekit_flavor.hpp"
+
 namespace bb {
 
 template <typename Flavor> ProverInstance_<Flavor>::ProverInstance_(Circuit& circuit)
@@ -395,6 +397,7 @@ template <typename Flavor> void ProverInstance_<Flavor>::populate_memory_records
 
 template class ProverInstance_<UltraFlavor>;
 template class ProverInstance_<UltraZKFlavor>;
+template class ProverInstance_<UltraProveKitFlavor>;
 template class ProverInstance_<UltraKeccakFlavor>;
 #ifdef STARKNET_GARAGA_FLAVORS
 template class ProverInstance_<UltraStarknetFlavor>;

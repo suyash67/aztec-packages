@@ -50,6 +50,13 @@ def main() -> None:
     backends = {}
     for pcs, pcs_runs in by_pcs.items():
         entry = {"reps": len(pcs_runs), "log_n": pcs_runs[0]["log_n"], "num_gates": pcs_runs[0]["num_gates"]}
+        # Which Honk flavor produced the row. Older raw dumps and the external ProveKit row have
+        # no flavor field; the transparent backends and the KZG baseline always do.
+        flavors = {r["flavor"] for r in pcs_runs if "flavor" in r}
+        if len(flavors) > 1:
+            sys.exit(f"{pcs}: runs mix flavors {sorted(flavors)}; medians would be meaningless")
+        if flavors:
+            entry["flavor"] = flavors.pop()
         for metric in METRICS + ["pk_ms", "circuit_ms"]:
             entry[metric] = statistics.median(r[metric] for r in pcs_runs)
         backends[pcs] = entry

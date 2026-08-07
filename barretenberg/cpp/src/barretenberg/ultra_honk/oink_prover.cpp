@@ -19,6 +19,8 @@
 #include "barretenberg/relations/logderiv_lookup_relation.hpp"
 #include "barretenberg/relations/permutation_relation.hpp"
 
+#include "barretenberg/flavor/ultra_provekit_flavor.hpp"
+
 namespace bb {
 
 template <typename Relation> constexpr bool relation_computes_logderivative_inverse()
@@ -373,6 +375,7 @@ void OinkProver<Flavor>::compute_grand_product_polynomial(ProverInstance& instan
 
 template class OinkProver<UltraFlavor>;
 template class OinkProver<UltraZKFlavor>;
+template class OinkProver<UltraProveKitFlavor>;
 template class OinkProver<UltraKeccakFlavor>;
 #ifdef STARKNET_GARAGA_FLAVORS
 template class OinkProver<UltraStarknetFlavor>;

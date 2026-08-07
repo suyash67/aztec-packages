@@ -14,6 +14,7 @@ import { MegaKernel } from "./flavors/mega_kernel.js";
 import { MegaAvm } from "./flavors/mega_avm.js";
 import { MegaZK } from "./flavors/mega_zk.js";
 import { Ultra } from "./flavors/ultra.js";
+import { UltraProveKit } from "./flavors/ultra_provekit.js";
 import { UltraZK } from "./flavors/ultra_zk.js";
 import { formatInPlace } from "./format.js";
 import { GATE_SELECTOR_TO_GATE_KIND, generateTrace } from "./trace.js";
@@ -761,7 +762,7 @@ function generate(flavor: Flavor, repoRoot: string): { path: string; layout: Res
 function main(): void {
     const repoRoot = path.resolve(__dirname, "..", "..", "..", "..", "..");
 
-    for (const flavorValue of [Mega, MegaApp, MegaAvm, MegaKernel, MegaZK, Ultra, UltraZK]) {
+    for (const flavorValue of [Mega, MegaApp, MegaAvm, MegaKernel, MegaZK, Ultra, UltraProveKit, UltraZK]) {
         const { path: outFile, layout } = generate(flavorValue, repoRoot);
         process.stdout.write(
             `flavor-codegen: emitted ${path.relative(repoRoot, outFile)} ` +

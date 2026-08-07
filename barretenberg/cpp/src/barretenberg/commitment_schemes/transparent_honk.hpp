@@ -18,7 +18,9 @@ namespace bb::honk_transparent {
 /**
  * @brief UltraHonk with a transparent (hash-based) polynomial commitment scheme.
  *
- * @details The arithmetization, trace layout, relations, and sumcheck are exactly `UltraFlavor`'s;
+ * @details The arithmetization, trace layout, relations, and sumcheck are exactly `Flavor_`'s
+ * (`UltraFlavor` by default, or a reduced variant such as `UltraProveKitFlavor` that drops the
+ * relations a given circuit family never exercises);
  * every elliptic-curve commitment is replaced by a Merkle root of the `Pcs` backend (WHIR or
  * Ligero), and the Gemini+Shplonk+KZG opening phase by one batched opening of that backend. The
  * Fiat-Shamir schedule mirrors Oink round by round — commitments are absorbed before the challenges
@@ -57,13 +59,14 @@ namespace bb::honk_transparent {
  * `prove` consumes the proving key's instance (memory records are appended to w_4, derived
  * polynomials are computed in place): create a fresh proving key per proof.
  */
-template <typename Pcs> class TransparentHonk {
+template <typename Pcs_, typename Flavor_ = UltraFlavor> class TransparentHonk {
   public:
-    using Flavor = UltraFlavor;
-    using FF = Flavor::FF;
+    using Pcs = Pcs_;
+    using Flavor = Flavor_;
+    using FF = typename Flavor::FF;
     using ProverInstance = ProverInstance_<Flavor>;
     using Oink = OinkProver<Flavor>;
-    using Builder = UltraCircuitBuilder;
+    using Builder = typename Flavor::CircuitBuilder;
     using Config = typename Pcs::Config;
     using CommitmentKey = typename Pcs::CommitmentKey;
     using GroupData = typename Pcs::GroupData;
@@ -72,12 +75,17 @@ template <typename Pcs> class TransparentHonk {
 
     static constexpr size_t NUM_PRECOMPUTED = Flavor::NUM_PRECOMPUTED_ENTITIES;
     static constexpr size_t NUM_WITNESS = Flavor::NUM_WITNESS_ENTITIES;
-    static_assert(NUM_PRECOMPUTED == 28 && NUM_WITNESS == 8 && Flavor::NUM_SHIFTED_ENTITIES == 5,
-                  "Ultra entity layout changed; revisit the commit schedule and claim assembly");
+    static_assert(NUM_WITNESS == 8 && Flavor::NUM_SHIFTED_ENTITIES == 5,
+                  "Ultra witness layout changed; revisit the commit schedule and claim assembly");
+    static_assert(NUM_PRECOMPUTED <= 32, "virtual_mask is a uint32_t bitset over precomputed entities");
+    static_assert(Flavor::NUM_MASKING_ENTITIES == 0,
+                  "get_unshifted() is indexed as [precomputed | witness] throughout this class");
 
     // Precomputed entity indices (get_precomputed() order) of the point-indicator columns.
-    static constexpr size_t LAGRANGE_FIRST_IDX = 8;
-    static constexpr size_t LAGRANGE_LAST_IDX = 9;
+    static constexpr size_t LAGRANGE_FIRST_IDX = static_cast<size_t>(Flavor::EntityId::lagrange_first);
+    static constexpr size_t LAGRANGE_LAST_IDX = static_cast<size_t>(Flavor::EntityId::lagrange_last);
+    static_assert(LAGRANGE_FIRST_IDX < NUM_PRECOMPUTED && LAGRANGE_LAST_IDX < NUM_PRECOMPUTED,
+                  "the lagrange indicators must be precomputed entities");
 
     // Column counts of the witness commitment groups 1..4.
     static constexpr std::array<size_t, 4> WITNESS_GROUP_COLUMNS = { 3, 3, 1, 1 };
@@ -119,6 +127,11 @@ template <typename Pcs> class TransparentHonk {
     {
         ProvingKey pk;
         pk.instance = std::make_shared<ProverInstance>(circuit);
+        // Reduced flavors drop relations that are only vacuous when their trace blocks are empty;
+        // the builder is finalized by now, so this sees the memory/ROM/RAM gates too.
+        if constexpr (requires { Flavor::assert_relations_are_dead(circuit); }) {
+            Flavor::assert_relations_are_dead(circuit);
+        }
         BB_ASSERT_EQ(pk.instance->log_dyadic_size(), Pcs::payload_variables(config), "config/circuit size mismatch");
         pk.ck = std::make_shared<CommitmentKey>(config);
 
