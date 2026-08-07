@@ -183,6 +183,16 @@ bool run_backend(const std::string& pcs, UltraCircuitBuilder& builder, Timings& 
             run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
     } else if (pcs == "whir-provekit-sha256") {
         timings = run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::Sha256MerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-narrow-sky") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirNarrowHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-narrow-b3") {
+        timings = run_transparent<Flavored<bb::whir::WhirNarrowHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-compact-sky") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirCompactHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-compact-b3") {
+        timings = run_transparent<Flavored<bb::whir::WhirCompactHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
     } else if (pcs == "whir-conjectured") {
         timings =
             run_transparent<Flavored<bb::whir::WhirConjecturedHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
