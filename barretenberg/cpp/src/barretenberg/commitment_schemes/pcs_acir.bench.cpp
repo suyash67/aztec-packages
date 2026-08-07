@@ -33,16 +33,29 @@
 // relations a ProveKit-style circuit never exercises. The KZG baseline is always UltraFlavor: it
 // is the production prover, and that is the point of comparing against it.
 //
+// The WHIR backends default to the unconditional Johnson bound with k = 4. `whir-provekit` is
+// ProveKit's own schedule (Johnson, k = 3, meant to be run at PCS_ACIR_BENCH_SECURITY_BITS=128);
+// `whir-conjectured` assumes list decoding up to capacity, which eprint 2025/2046 disproves, and
+// exists only to reproduce figures published under that assumption.
+//
 // Usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs
-// <kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory>
-//        [--flavor <ultra|provekit>]
+// <kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-provekit|whir-conjectured|
+//  ligero|hyrax|kzh2|ipa|dory> [--flavor <ultra|provekit>]
+// Env: PCS_ACIR_BENCH_SECURITY_BITS (default 100), PCS_ACIR_BENCH_LOG_INV_RATE (default 2).
 
 namespace {
 
 using namespace bb;
 
-constexpr size_t SECURITY_BITS = 100;
-constexpr size_t LOG_INV_RATE = 2;
+// Overridable so one binary can be swept across security levels; PCS_ACIR_BENCH_SECURITY_BITS=128
+// with `--pcs whir-provekit` is the ProveKit-parity point.
+size_t env_size_t(const char* name, size_t fallback)
+{
+    const char* value = std::getenv(name);
+    return value == nullptr ? fallback : static_cast<size_t>(std::stoul(value));
+}
+const size_t SECURITY_BITS = env_size_t("PCS_ACIR_BENCH_SECURITY_BITS", 100);
+const size_t LOG_INV_RATE = env_size_t("PCS_ACIR_BENCH_LOG_INV_RATE", 2);
 
 struct Timings {
     double circuit_ms = 0;
@@ -158,6 +171,12 @@ bool run_backend(const std::string& pcs, UltraCircuitBuilder& builder, Timings& 
     } else if (pcs == "whir-sky-stacked") {
         timings =
             run_transparent<Flavored<bb::whir::WhirStackedHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-provekit") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirProveKitHonk<bb::whir::SkyscraperMerkleHasher>>>(builder, timings);
+    } else if (pcs == "whir-conjectured") {
+        timings =
+            run_transparent<Flavored<bb::whir::WhirConjecturedHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
     } else if (pcs == "ligero") {
         timings = run_transparent<Flavored<bb::ligero::LigeroHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
     } else if (pcs == "hyrax") {
@@ -199,8 +218,8 @@ int main(int argc, char** argv)
     }
     if (bytecode_path.empty() || witness_path.empty() || pcs.empty()) {
         std::cerr << "usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs "
-                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory> "
-                     "[--flavor <ultra|provekit>]\n";
+                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-provekit|whir-conjectured|"
+                     "ligero|hyrax|kzh2|ipa|dory> [--flavor <ultra|provekit>]\n";
         return 1;
     }
     if (flavor != "ultra" && flavor != "provekit") {

@@ -284,6 +284,20 @@ inline fr mle_of_span(std::span<const fr> values, std::span<const fr> point)
     return current[0];
 }
 
+/**
+ * @brief The univariate evaluation at `z` of a constituent spread to stride 2^d.
+ * @details spread(A)(x) = A(x^{2^d}), so the value at z is the array's own univariate evaluation at
+ * z^{2^d}. With d = 0 (the default, non-stacked layout) this is just A(z).
+ */
+inline fr spread_univariate_evaluation(std::span<const fr> array, const fr& z, size_t stride_bits)
+{
+    fr point = z;
+    for (size_t i = 0; i < stride_bits; ++i) {
+        point = point.sqr();
+    }
+    return polynomial_arithmetic::evaluate(array.data(), point, array.size());
+}
+
 /** @brief eq(bits(index), tau) with bit 0 of `index` matched against tau[0]. */
 inline fr eq_at_corner(size_t index, std::span<const fr> tau)
 {
@@ -587,6 +601,22 @@ template <typename Hasher> class WhirProver {
             }
         }
 
+        // Out-of-domain samples against the round-0 commitments (README.md §4.2). In any
+        // list-decoding regime a committed word can be close to several codewords; answering at a
+        // random point outside the evaluation domain singles out one of them, which is what makes
+        // the claims below well defined. Drawn before ρ, so each committed array is pinned
+        // individually rather than only their batch.
+        std::vector<fr> z_ood_initial(config.num_ood_samples);
+        for (size_t s = 0; s < config.num_ood_samples; ++s) {
+            z_ood_initial[s] = transcript->template get_challenge<fr>(detail::whir_label("z_ood_init", s));
+            for (size_t c = 0; c < plan.constituents.size(); ++c) {
+                transcript->send_to_verifier(detail::whir_label("y_ood_init", s, c),
+                                             detail::spread_univariate_evaluation(constituent_arrays[c],
+                                                                                  z_ood_initial[s],
+                                                                                  plan.constituents[c].stride_bits));
+            }
+        }
+
         const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
         const fr gamma_claims = transcript->template get_challenge<fr>("WHIR:gamma_claims");
 
@@ -605,11 +635,16 @@ template <typename Hasher> class WhirProver {
             rho_power *= rho;
         }
 
-        // Weight table of the initial claims: W = ∑_t γᵗ·eq(p_t, ·) over the committed variables.
+        // Weight table of the initial claims: W = ∑_t γᵗ·eq(p_t, ·) over the committed variables,
+        // followed by one univariate pow-weight per out-of-domain sample.
         std::vector<fr> weight_table(n, fr::zero());
         fr gamma_power = fr::one();
         for (const auto& point : plan.points) {
             WeightTerm::eq_weight(point, gamma_power).accumulate_table(weight_table);
+            gamma_power *= gamma_claims;
+        }
+        for (const fr& z : z_ood_initial) {
+            WeightTerm::pow_weight(z, config.num_variables, gamma_power).accumulate_table(weight_table);
             gamma_power *= gamma_claims;
         }
 
@@ -804,6 +839,18 @@ template <typename Hasher> class WhirVerifier {
             }
         }
 
+        // Out-of-domain samples against the round-0 commitments; ood_values[s][c] is constituent c's
+        // univariate evaluation at the s-th sampled point.
+        std::vector<fr> z_ood_initial(config.num_ood_samples);
+        std::vector<std::vector<fr>> ood_values(config.num_ood_samples,
+                                                std::vector<fr>(plan.constituents.size(), fr::zero()));
+        for (size_t s = 0; s < config.num_ood_samples; ++s) {
+            z_ood_initial[s] = transcript->template get_challenge<fr>(detail::whir_label("z_ood_init", s));
+            for (size_t c = 0; c < plan.constituents.size(); ++c) {
+                ood_values[s][c] = transcript->template receive_from_prover<fr>(detail::whir_label("y_ood_init", s, c));
+            }
+        }
+
         const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
         const fr gamma_claims = transcript->template get_challenge<fr>("WHIR:gamma_claims");
 
@@ -830,6 +877,15 @@ template <typename Hasher> class WhirVerifier {
             }
             sigma += gamma_power * oracle_value;
             terms.push_back(WeightTerm::eq_weight(plan.points[t], gamma_power));
+            gamma_power *= gamma_claims;
+        }
+        for (size_t s = 0; s < config.num_ood_samples; ++s) {
+            fr oracle_value = fr::zero();
+            for (size_t c = 0; c < plan.constituents.size(); ++c) {
+                oracle_value += rho_powers[c] * ood_values[s][c];
+            }
+            sigma += gamma_power * oracle_value;
+            terms.push_back(WeightTerm::pow_weight(z_ood_initial[s], config.num_variables, gamma_power));
             gamma_power *= gamma_claims;
         }
 

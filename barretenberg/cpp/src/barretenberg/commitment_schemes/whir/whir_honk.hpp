@@ -10,8 +10,15 @@ namespace bb::whir {
  * @tparam MaxStackBits 0 keeps one codeword per column (fast prover, larger proof); non-zero stacks
  * each commitment group into one narrow-leaf oracle sized for up to 2^MaxStackBits columns, which
  * shrinks the proof several-fold at a proportional prover cost. See `WhirGroupData`.
+ * @tparam Soundness the proximity regime the query schedule is derived from. The default is the
+ * unconditional Johnson bound, which rests on no conjecture.
+ * @tparam FoldingFactorBits k, the number of variables folded per iteration.
  */
-template <typename Hasher_, size_t MaxStackBits = 0> struct WhirPcs {
+template <typename Hasher_,
+          size_t MaxStackBits = 0,
+          WhirSoundness Soundness = WhirSoundness::PROVABLE_LIST,
+          size_t FoldingFactorBits = 4>
+struct WhirPcs {
     using Hasher = Hasher_;
     using Config = WhirConfig;
     using CommitmentKey = WhirCommitmentKey<Hasher>;
@@ -27,9 +34,9 @@ template <typename Hasher_, size_t MaxStackBits = 0> struct WhirPcs {
         return WhirConfig::create(log_dyadic_size,
                                   security_bits,
                                   log_inv_rate,
-                                  /*folding_factor_bits=*/4,
+                                  FoldingFactorBits,
                                   /*final_poly_bits=*/4,
-                                  WhirSoundness::CONJECTURED_LIST,
+                                  Soundness,
                                   /*zk=*/false,
                                   MaxStackBits);
     }
@@ -92,5 +99,23 @@ template <typename Hasher = Poseidon2MerkleHasher> using WhirHonk = honk_transpa
  */
 template <typename Hasher = Poseidon2MerkleHasher>
 using WhirStackedHonk = honk_transparent::TransparentHonk<WhirPcs<Hasher, 5>>;
+
+/**
+ * @brief WhirHonk on ProveKit's own WHIR parameters: the Johnson bound with k = 3.
+ * @details ProveKit runs the reference WHIR at λ = 128, rate 2^-2, k = 3 and 10 bits of per-round
+ * grinding. Grinding is not implemented here, so at the same λ this schedule draws every bit of
+ * soundness from queries and is strictly the more conservative of the two.
+ */
+template <typename Hasher = SkyscraperMerkleHasher>
+using WhirProveKitHonk =
+    honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, /*FoldingFactorBits=*/3>>;
+
+/**
+ * @brief WhirHonk under the up-to-capacity conjecture, which eprint 2025/2046 disproves.
+ * @details Retained only to reproduce the published FRI/STIR-style figures that assume it; it is not
+ * a sound configuration to deploy. See README.md §6.
+ */
+template <typename Hasher = Poseidon2MerkleHasher>
+using WhirConjecturedHonk = honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::CONJECTURED_LIST>>;
 
 } // namespace bb::whir

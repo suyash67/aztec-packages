@@ -4,6 +4,7 @@
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
 #include "barretenberg/numeric/uint256/uint256.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -15,11 +16,21 @@ namespace bb::whir {
  */
 enum class WhirSoundness {
     UNIQUE_DECODING,  // distance (1-ρ)/2, no conjecture, most queries
-    PROVABLE_LIST,    // Johnson bound 1-√ρ
+    PROVABLE_LIST,    // Johnson bound 1-√ρ-η with slack η = √ρ/20 (unconditional)
     REPAIRED_LIST,    // list-decoding-capacity bound H_q(δ) = 1-ρ (Crites-Stewart, eprint 2025/2046)
     CONJECTURED_LIST, // capacity 1-ρ (DISPROVED as a conjecture basis by eprint 2025/2046; kept for
                       // comparison with deployed FRI/STIR systems that still assume it)
 };
+
+/**
+ * @brief Johnson slack η as the rational η = √ρ/`JOHNSON_SLACK_INV_NUMERATOR`, matching the
+ * reference WHIR implementation's choice of η = √ρ/20.
+ * @details The Johnson bound gives (1-√ρ-η, 1/(2η√ρ))-list-decodability only for η > 0: the list
+ * size diverges as η → 0, so η = 0 is not an instantiation of the bound at all. Fixing η pins both
+ * the per-query error √ρ+η and the list size, and hence the number of out-of-domain samples needed
+ * to single out one list element.
+ */
+static constexpr uint64_t JOHNSON_SLACK_INV_NUMERATOR = 20;
 
 /**
  * @brief Per-iteration schedule entry. `num_variables`/`log_domain_size` describe the oracle the
@@ -44,6 +55,9 @@ struct WhirConfig {
     size_t folding_factor_bits; // k: each iteration folds 2^k
     size_t final_poly_bits;     // lower bound on the clear final polynomial's log-size
     WhirSoundness soundness;
+    // Out-of-domain samples taken against every committed oracle, the initial one included
+    // (README.md §4.2, §6). Zero in unique decoding, where the list holds a single codeword.
+    size_t num_ood_samples = 1;
 
     // Column stacking (README.md §4.1): concatenate a commitment group's columns into one taller
     // array with narrow Merkle leaves, so a query costs 2^k values per group rather than 2^k per
@@ -110,8 +124,21 @@ struct WhirConfig {
         switch (soundness) {
         case WhirSoundness::CONJECTURED_LIST:
             return (security_bits + log_inv_rate - 1) / log_inv_rate;
-        case WhirSoundness::PROVABLE_LIST:
-            return (2 * security_bits + log_inv_rate - 1) / log_inv_rate;
+        case WhirSoundness::PROVABLE_LIST: {
+            // Johnson: δ = 1-√ρ-η with η = √ρ/J, so the per-query error is √ρ·(1+1/J) and the bits
+            // per query are r/2 - log₂(1+1/J). Taking η = 0 (bits per query exactly r/2) would not
+            // be an instantiation of the Johnson bound, and understates the count by ~7% at J = 20.
+            const uint256_t one_q192 = uint256_t(1) << 192;
+            // -log₂(J/(J+1)) = log₂(1+1/J); the floored argument rounds the penalty up, i.e. toward
+            // more queries.
+            const uint256_t slack_penalty_q64 =
+                neg_log2_q192_to_q64((one_q192 * JOHNSON_SLACK_INV_NUMERATOR) / (JOHNSON_SLACK_INV_NUMERATOR + 1));
+            const uint256_t half_rate_q64 = uint256_t(log_inv_rate) << 63;
+            BB_ASSERT_GT(half_rate_q64, slack_penalty_q64, "Johnson slack exhausts the per-query soundness");
+            const uint256_t bits_per_query_q64 = half_rate_q64 - slack_penalty_q64;
+            const uint256_t queries = ((uint256_t(security_bits) << 64) + bits_per_query_q64 - 1) / bits_per_query_q64;
+            return static_cast<size_t>(queries.data[0]);
+        }
         case WhirSoundness::REPAIRED_LIST: {
             // Solve δ* with H_q(δ*) = 1-ρ. For prime q, H_q(δ) = δ log_q(q-1) - δ log_q δ -
             // (1-δ) log_q(1-δ) ≤ δ + h₂(δ)/log₂q, so iterate δ ← 1-ρ - h₂(δ)/L from δ₀ = 1-ρ.
@@ -162,6 +189,38 @@ struct WhirConfig {
         }
         }
         return 0; // unreachable
+    }
+
+    /**
+     * @brief Out-of-domain samples needed against an oracle of `num_variables` variables at rate
+     * 2^{-log_inv_rate}, so that the sampled point singles out one codeword of the decoding list.
+     * @details STIR lemma 4.5: with a list of size L, the probability that two list elements agree
+     * on all s random out-of-domain points is at most (L choose 2)·((n-1)/|F|)^s, so
+     * s ≥ (λ + log₂(L choose 2)) / (log₂|F| - log₂(n-1)). Every quantity is replaced by an integer
+     * bound in the direction of more samples: log₂|F| ≥ 253 for BN254 Fr, log₂(n-1) ≤ num_variables,
+     * and log₂(L choose 2) ≤ 2·log₂L. In unique decoding the list is a single codeword and no sample
+     * is required. At BN254's field size this returns 1 across the whole schedule.
+     */
+    static size_t compute_num_ood_samples(size_t security_bits,
+                                          size_t log_inv_rate,
+                                          size_t num_variables,
+                                          WhirSoundness soundness)
+    {
+        if (soundness == WhirSoundness::UNIQUE_DECODING) {
+            return 0;
+        }
+        // log₂ of an upper bound on the list size. Johnson gives exactly 1/(2η√ρ) = J·2^{r-1};
+        // the capacity regimes have no proven bound, so charge the generous n/ρ.
+        size_t log_slack_inv = 0;
+        while ((uint64_t(1) << log_slack_inv) < JOHNSON_SLACK_INV_NUMERATOR) {
+            ++log_slack_inv;
+        }
+        const size_t log_list_bound = soundness == WhirSoundness::PROVABLE_LIST ? (log_inv_rate - 1) + log_slack_inv
+                                                                                : num_variables + log_inv_rate;
+        const size_t field_bits = 253;
+        BB_ASSERT_GT(field_bits, num_variables, "polynomial too large to isolate a list element");
+        const size_t bits_per_sample = field_bits - num_variables;
+        return (security_bits + 2 * log_list_bound + bits_per_sample - 1) / bits_per_sample;
     }
 
     /**
@@ -219,6 +278,17 @@ struct WhirConfig {
                                .log_domain_size = log_domain,
                                .log_inv_rate = final_rate_bits,
                                .num_queries = compute_num_queries(security_bits, final_rate_bits, soundness) };
+
+        // One sample count covers every commitment: the initial oracle and each iteration's folded
+        // oracle, taking the worst case over the schedule.
+        config.num_ood_samples = compute_num_ood_samples(security_bits, log_inv_rate, num_variables, soundness);
+        for (const WhirRound& round : config.rounds) {
+            const size_t folded_variables = round.num_variables - folding_factor_bits;
+            const size_t folded_rate_bits = round.log_inv_rate + folding_factor_bits - 1;
+            config.num_ood_samples =
+                std::max(config.num_ood_samples,
+                         compute_num_ood_samples(security_bits, folded_rate_bits, folded_variables, soundness));
+        }
 
         if (zk) {
             // Round-0 queries are the only openings of per-polynomial leaves; q of them must remain

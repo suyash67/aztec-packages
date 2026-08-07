@@ -230,6 +230,43 @@ TYPED_TEST(WhirTest, TamperedProofRejected)
     }
 }
 
+// The out-of-domain answer on the round-0 oracle is what singles out one codeword of the decoding
+// list, so it has to be a checked part of the statement rather than an unconstrained message. With
+// one Poseidon2 group of a single unshifted column and no stacking there are no stacking challenges
+// and no cross evaluations, so the proof opens [Init, root_0, y_ood_init_0_0, sumcheck...] and the
+// sample sits at a known index.
+TEST(WhirOutOfDomainTest, InitialSampleIsConstrained)
+{
+    using Fixture = WhirTest<WhirVariant<Poseidon2MerkleHasher, 0>>;
+    const WhirConfig config = WhirConfig::create(10,
+                                                 /*security_bits=*/64,
+                                                 /*log_inv_rate=*/2,
+                                                 4,
+                                                 4,
+                                                 WhirSoundness::PROVABLE_LIST);
+    ASSERT_EQ(config.num_ood_samples, 1U);
+    Fixture::CK ck(config);
+    const auto instance = Fixture::make_instance(ck, 1, 0);
+    const auto proof = Fixture::prove_instance(ck, instance);
+    EXPECT_TRUE(Fixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
+
+    // Re-proving the same instance with the sample switched off must drop exactly that one field
+    // element, and leave the header and root before it untouched — which pins its position.
+    WhirConfig without_ood = config;
+    without_ood.num_ood_samples = 0;
+    Fixture::CK ck_without_ood(without_ood);
+    const auto proof_without_ood = Fixture::prove_instance(ck_without_ood, instance);
+    ASSERT_EQ(proof.size(), proof_without_ood.size() + 1);
+    constexpr size_t ood_position = 2;
+    for (size_t i = 0; i < ood_position; ++i) {
+        EXPECT_EQ(proof[i], proof_without_ood[i]) << "at position " << i;
+    }
+
+    HonkProof tampered = proof;
+    tampered[ood_position] += fr(1);
+    EXPECT_FALSE(Fixture::verify_proof(config, instance.verifier_claims, instance.u, tampered));
+}
+
 TYPED_TEST(WhirTest, ZkBatchedCompleteness)
 {
     const WhirConfig config = TestFixture::test_config(8, /*zk=*/true);
@@ -290,11 +327,71 @@ TEST(WhirConfigTest, QueryCountFormulas)
 {
     EXPECT_EQ(WhirConfig::compute_num_queries(100, 2, WhirSoundness::CONJECTURED_LIST), 50U);
     EXPECT_EQ(WhirConfig::compute_num_queries(100, 3, WhirSoundness::CONJECTURED_LIST), 34U);
-    EXPECT_EQ(WhirConfig::compute_num_queries(100, 2, WhirSoundness::PROVABLE_LIST), 100U);
+    // Johnson tests distance 1-√ρ-η with η = √ρ/20, so a query is worth r/2 - log₂(21/20) bits,
+    // not r/2: at r=2 that is 0.9296 bits and 108 queries rather than 100.
+    EXPECT_EQ(WhirConfig::compute_num_queries(100, 2, WhirSoundness::PROVABLE_LIST), 108U);
     // Unique decoding at rate 1/2 tests distance 1/4: -log2(3/4) ≈ 0.415 bits per query.
     const size_t ud_queries = WhirConfig::compute_num_queries(64, 1, WhirSoundness::UNIQUE_DECODING);
     EXPECT_GE(ud_queries, 154U);
     EXPECT_LE(ud_queries, 156U);
+}
+
+// The reference WHIR implementation (WizardOfMenlo/whir @ 0aeaa7f, the revision ProveKit pins)
+// derives its in-domain query counts from the same Johnson bound with η = √ρ/20. These are the
+// counts it reports at λ = 128 for the rates a k=3 schedule walks through, and they must agree
+// exactly: a lower count here would mean barretenberg claims λ it does not have.
+TEST(WhirConfigTest, JohnsonQueryCountsMatchReferenceImplementation)
+{
+    const std::vector<std::pair<size_t, size_t>> reference_counts = {
+        { 2, 138 }, { 4, 67 }, { 5, 53 }, { 6, 44 }, { 8, 33 }, { 10, 26 }, { 11, 24 }, { 12, 22 }, { 14, 19 },
+    };
+    for (const auto& [log_inv_rate, expected] : reference_counts) {
+        EXPECT_EQ(WhirConfig::compute_num_queries(128, log_inv_rate, WhirSoundness::PROVABLE_LIST), expected)
+            << "at rate 2^-" << log_inv_rate;
+    }
+}
+
+// The whole schedule at ProveKit's protocol parameters (λ = 128, rate 2^-2, k = 3, Johnson) must
+// reproduce the reference implementation's, oracle by oracle: 138 queries against the round-0
+// commitments, then 67, 44, 33, 26 against each folded oracle, then 22 in the final phase. The
+// reference reaches the same 330 total using 118 bits of queries plus 10 bits of grinding; with no
+// grinding implemented here the counts are derived at the full 128 instead.
+TEST(WhirConfigTest, ProveKitScheduleMatchesReferenceImplementation)
+{
+    const WhirConfig config = WhirConfig::create(19,
+                                                 /*security_bits=*/128,
+                                                 /*log_inv_rate=*/2,
+                                                 /*folding_factor_bits=*/3,
+                                                 /*final_poly_bits=*/4,
+                                                 WhirSoundness::PROVABLE_LIST);
+    ASSERT_EQ(config.num_iterations(), 5U);
+    const std::vector<size_t> expected_rates = { 2, 4, 6, 8, 10 };
+    const std::vector<size_t> expected_queries = { 138, 67, 44, 33, 26 };
+    size_t total_queries = 0;
+    for (size_t i = 0; i < config.num_iterations(); ++i) {
+        EXPECT_EQ(config.rounds[i].num_variables, 19 - 3 * i);
+        EXPECT_EQ(config.rounds[i].log_inv_rate, expected_rates[i]);
+        EXPECT_EQ(config.rounds[i].num_queries, expected_queries[i]);
+        total_queries += config.rounds[i].num_queries;
+    }
+    EXPECT_EQ(config.final_round.num_variables, 4U);
+    EXPECT_EQ(config.final_round.log_inv_rate, 12U);
+    EXPECT_EQ(config.final_round.num_queries, 22U);
+    total_queries += config.final_round.num_queries;
+    EXPECT_EQ(total_queries, 330U);
+}
+
+// Every list-decoding regime must sample out of domain; at BN254's field size one sample per
+// commitment suffices across the schedule, which is what the reference also derives.
+TEST(WhirConfigTest, OutOfDomainSampleCounts)
+{
+    const WhirConfig johnson = WhirConfig::create(19, 128, 2, 3, 4, WhirSoundness::PROVABLE_LIST);
+    EXPECT_EQ(johnson.num_ood_samples, 1U);
+    const WhirConfig conjectured = WhirConfig::create(19, 128, 2, 4, 4, WhirSoundness::CONJECTURED_LIST);
+    EXPECT_EQ(conjectured.num_ood_samples, 1U);
+    // Unique decoding leaves a single codeword in the list, so no sample is needed.
+    const WhirConfig unique = WhirConfig::create(19, 128, 2, 4, 4, WhirSoundness::UNIQUE_DECODING);
+    EXPECT_EQ(unique.num_ood_samples, 0U);
 }
 
 // The repaired-conjecture regime (Crites-Stewart, eprint 2025/2046) tests distance δ* with

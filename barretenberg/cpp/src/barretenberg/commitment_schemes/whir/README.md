@@ -160,6 +160,15 @@ with initial weight list $W_0 = \{\operatorname{eq}(\vec u, \cdot)\}$. Soundness
 batching is by correlated agreement [7], as in batch-FRI. The single-polynomial case is the
 same with an empty $\rho$-combination.
 
+Before $\rho$ is drawn, the verifier sends `num_ood_samples` out-of-domain points
+$z \leftarrow \mathbb F$ and the prover answers with each constituent's univariate evaluation
+$A_c(z^{2^{d_c}})$ (§6). Each answer joins the batch under the same $\rho$ and the weight list
+gains $\gamma^{\,|\text{points}|+s}\cdot\operatorname{pow}_{z_s}$, so
+$\sigma_0$ picks up $\sum_s \gamma^{\,|\text{points}|+s} \sum_c \rho^{\,c} A_c(z_s^{2^{d_c}})$.
+Drawing $z$ before $\rho$ pins each committed array to one codeword of its own list, which is
+what the round-by-round analysis of the first fold requires; pinning only the $\rho$-batch
+would leave the individual commitments ambiguous.
+
 ### 4.3 Iteration $i = 0, \dots, M-1$ (claim on $\hat g_i$, oracle on $L_i$; $\hat g_0 = F$)
 
 Implemented by `WhirProver::prove_round` / mirrored in `WhirVerifier::verify_round`.
@@ -220,7 +229,8 @@ dominate verifier hashing.
 | Order | Label | Direction | Content |
 |---|---|---|---|
 | 1 | `WHIR:root_<poly>` | P→V | commitment roots (or from earlier Honk rounds) |
-| 2 | `WHIR:rho` | V→P | batching challenge (batched case) |
+| 2 | `WHIR:z_ood_init_<s>` / `WHIR:y_ood_init_<s>_<c>` | V→P / P→V | round-0 OOD point / per-constituent answer |
+| 3 | `WHIR:rho` | V→P | batching challenge (batched case) |
 | per iter $i$, round $j$ | `WHIR:sumcheck_<i>_<j>` | P→V | $h_j(0), h_j(1), h_j(2)$ |
 | ″ | `WHIR:alpha_<i>_<j>` | V→P | fold/sumcheck challenge |
 | ″ | `WHIR:root_g<i+1>` | P→V | folded-oracle root |
@@ -248,17 +258,34 @@ $\rho_i = 2^{-r_i}$ [1, §5; 3]:
 | Regime (`WhirSoundness`) | Distance tested | Bits per query at rate $2^{-r}$ | Query count $t_i$ |
 |---|---|---|---|
 | `UNIQUE_DECODING` | $(1-\rho)/2$ | $-\log_2\!\big(\tfrac{1+2^{-r}}{2}\big)$ | $\lceil \lambda / \text{bits} \rceil$ |
-| `PROVABLE_LIST` (Johnson) | $1 - \sqrt\rho$ | $r/2$ | $\lceil 2\lambda / r \rceil$ |
+| `PROVABLE_LIST` (Johnson) | $1 - \sqrt\rho - \eta$, $\eta = \sqrt\rho/20$ | $r/2 - \log_2\tfrac{21}{20}$ | $\lceil \lambda / \text{bits} \rceil$ |
 | `REPAIRED_LIST` | $\delta^*$: $H_q(\delta^*) = 1-\rho$ | $-\log_2(1-\delta^*)$ | $\lceil \lambda / \text{bits} \rceil$ |
 | `CONJECTURED_LIST` (capacity) | $1 - \rho$ | $r$ | $\lceil \lambda / r \rceil$ |
 
+The Johnson bound is $(1-\sqrt\rho-\eta,\ 1/(2\eta\sqrt\rho))$-list-decodability, stated only
+for $\eta > 0$: the list size diverges as $\eta \to 0$, so testing distance exactly
+$1-\sqrt\rho$ (i.e. $r/2$ bits per query) is not an instantiation of the bound. `PROVABLE_LIST`
+therefore fixes $\eta = \sqrt\rho/20$, the same choice the reference implementation makes, which
+costs $\log_2(21/20) \approx 0.070$ bits per query — 138 queries rather than 128 at
+$\lambda = 128$, $r = 2$ — and pins the list size at $1/(2\eta\sqrt\rho) = 10/\rho$.
+
 The rate improves every iteration, $r_{i+1} = r_i + (k-1)$, because degree divides by $2^k$
 while the domain only halves — this is what makes later rounds cheap and total queries much
-lower than FRI at the same $\lambda$. OOD samples (1 per iteration; 0 in unique decoding)
-and the $\gamma$/$\rho$/sumcheck field terms add $O(\text{poly}(2^m)/|\mathbb F|)$ error,
-negligible at 254 bits for $\lambda \le 128$. Grinding (query-phase proof-of-work) is a
-standard further reduction of $t_i$; it is not implemented, and all benchmark numbers are
-grinding-free.
+lower than FRI at the same $\lambda$. The $\gamma$/$\rho$/sumcheck field terms add
+$O(\text{poly}(2^m)/|\mathbb F|)$ error, negligible at 254 bits for $\lambda \le 128$. Grinding
+(query-phase proof-of-work) is a standard further reduction of $t_i$; it is not implemented, and
+all benchmark numbers are grinding-free.
+
+**Out-of-domain samples.** Every list-decoding regime takes `num_ood_samples` samples against
+*each* committed oracle — the round-0 commitments as well as each iteration's folded oracle. A
+committed word may be $\delta$-close to several codewords; answering at a random point outside
+the evaluation domain singles out one of them, without which the claims carried into the
+sumcheck are not well defined. By STIR lemma 4.5 two list elements survive $s$ samples with
+probability at most $\binom{L}{2}\big((n-1)/|\mathbb F|\big)^s$, so
+$s \ge (\lambda + \log_2\binom{L}{2}) / (\log_2|\mathbb F| - \log_2(n-1))$; at BN254's field size
+this is 1 across the whole schedule. Unique decoding leaves a single codeword and needs none.
+The round-0 samples are drawn before the $\rho$ batching challenge, so each committed array is
+pinned individually rather than only their random linear combination.
 
 ### The up-to-capacity conjecture is false; the repaired regime
 
