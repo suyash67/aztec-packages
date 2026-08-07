@@ -194,6 +194,23 @@ template <typename Curve_, size_t log_poly_length = CONST_ECCVM_LOG_N> class IPA
                                                      bb::Polynomial<Fr> b_vec,
                                                      const std::shared_ptr<Transcript>& transcript)
     {
+        compute_inner_product_proof_internal(
+            std::span<const Commitment>(ck.get_monomial_points()), witness, std::move(b_vec), transcript);
+    }
+
+    /**
+     * @brief The IPA reduction core over an explicit generator vector.
+     *
+     * @details The generator vector plays the role of the SRS \f$\vec{G}\f$; the commitment-key overload above passes
+     * the monomial SRS points. Transparent instantiations (e.g. the Pedersen IPA over hash-derived BN254 generators)
+     * pass their own generator vector.
+     */
+    template <typename Transcript>
+    static void compute_inner_product_proof_internal(std::span<const Commitment> generator_points,
+                                                     const bb::Polynomial<Fr>& witness,
+                                                     bb::Polynomial<Fr> b_vec,
+                                                     const std::shared_ptr<Transcript>& transcript)
+    {
         BB_BENCH_NAME("IPA::compute_opening_proof");
 
         // Step 1.
@@ -225,7 +242,7 @@ template <typename Curve_, size_t log_poly_length = CONST_ECCVM_LOG_N> class IPA
         BB_ASSERT_EQ(a_vec.size(),
                      poly_length,
                      "IPA witness length must equal the compile-time poly_length (2^log_poly_length)");
-        std::span<Commitment> srs_elements = ck.get_monomial_points();
+        std::span<const Commitment> srs_elements = generator_points;
         if (poly_length > srs_elements.size()) {
             throw_or_abort("potential bug: Not enough SRS points for IPA!");
         }
@@ -1041,31 +1058,33 @@ template <typename Curve_, size_t log_poly_length = CONST_ECCVM_LOG_N> class IPA
     }
 
     /**
-     * @brief Constructs challenge_poly(X) = ∏_{i ∈ [k]} (1 + u_{len-i}^{-1}.X^{2^{i-1}}), with coefficients in
-     * \f$\mathbb{F}_q\f$. The coefficients of this are alternatively known as `s_vec`.
+     * @brief Constructs challenge_poly(X) = ∏_{i ∈ [k]} (1 + u_{len-i}^{-1}.X^{2^{i-1}}), with coefficients in the
+     * native scalar field of the curve (deduced from the challenge span). The coefficients of this are alternatively
+     * known as `s_vec`.
      *
      * @param u_challenges_inv
-     * @return Polynomial<bb::fq>
+     * @return Polynomial<NativeFr>
      */
-    static Polynomial<bb::fq> construct_poly_from_u_challenges_inv(const std::span<const bb::fq>& u_challenges_inv)
+    template <typename NativeFr = bb::fq>
+    static Polynomial<NativeFr> construct_poly_from_u_challenges_inv(const std::span<const NativeFr>& u_challenges_inv)
     {
         // Each round consumes exactly one inverse challenge; a short span would read out of bounds below.
         BB_ASSERT_EQ(u_challenges_inv.size(), log_poly_length);
 
         // Construct vector s in linear time.
-        std::vector<bb::fq> s_vec(poly_length, bb::fq::one());
-        std::vector<bb::fq> s_vec_temporaries(poly_length / 2);
+        std::vector<NativeFr> s_vec(poly_length, NativeFr::one());
+        std::vector<NativeFr> s_vec_temporaries(poly_length / 2);
 
-        bb::fq* previous_round_s = &s_vec_temporaries[0];
-        bb::fq* current_round_s = &s_vec[0];
+        NativeFr* previous_round_s = &s_vec_temporaries[0];
+        NativeFr* current_round_s = &s_vec[0];
         // if number of rounds is even we need to swap these so that s_vec always contains the result
         if ((log_poly_length & 1) == 0) {
             std::swap(previous_round_s, current_round_s);
         }
-        previous_round_s[0] = bb::fq(1);
+        previous_round_s[0] = NativeFr(1);
         for (size_t i = 0; i < log_poly_length; ++i) {
             const size_t round_size = 1 << (i + 1);
-            const bb::fq round_challenge = u_challenges_inv[i];
+            const NativeFr round_challenge = u_challenges_inv[i];
             parallel_for_heuristic(
                 round_size / 2,
                 [&](size_t j) {
@@ -1094,8 +1113,8 @@ template <typename Curve_, size_t log_poly_length = CONST_ECCVM_LOG_N> class IPA
     {
         // Always extend each to 1<<log_poly_length length
         Polynomial<bb::fq> challenge_poly(1 << log_poly_length);
-        Polynomial challenge_poly_1 = construct_poly_from_u_challenges_inv(u_challenges_inv_1);
-        Polynomial challenge_poly_2 = construct_poly_from_u_challenges_inv(u_challenges_inv_2);
+        Polynomial challenge_poly_1 = construct_poly_from_u_challenges_inv(std::span<const bb::fq>(u_challenges_inv_1));
+        Polynomial challenge_poly_2 = construct_poly_from_u_challenges_inv(std::span<const bb::fq>(u_challenges_inv_2));
         challenge_poly += challenge_poly_1;
         challenge_poly.add_scaled(challenge_poly_2, alpha);
         return challenge_poly;

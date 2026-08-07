@@ -1,14 +1,16 @@
 #pragma once
 
-#include "barretenberg/commitment_schemes/utils/batch_accumulate.hpp"
-#include "barretenberg/commitment_schemes/whir/weights.hpp"
+#include "barretenberg/commitment_schemes/ipa/ipa.hpp"
 #include "barretenberg/common/assert.hpp"
-#include "barretenberg/common/thread.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
 #include "barretenberg/ecc/scalar_multiplication/scalar_multiplication.hpp"
+#include "barretenberg/polynomials/eq_polynomial.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
+#include "barretenberg/polynomials/shifted_eq_polynomial.hpp"
 
+#include <map>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -45,18 +47,35 @@ struct IpaGroupData {
 
 /**
  * @brief Transparent commitment key: hash-derived independent generators (the powers-of-tau SRS
- * cannot serve as Pedersen/IPA generators — its points are DL-related).
+ * cannot serve as Pedersen/IPA generators — its points are DL-related). The auxiliary generator of
+ * the inner-product relation is `Commitment::one()`, DL-independent of the derived vector. The
+ * derived vector is a public parameter shared by every key of the same size, so it is memoized:
+ * constructing a key (e.g. the verifier recreating one per proof) does not re-run the O(n)
+ * hash-to-curve derivation.
  */
 class IpaCommitmentKey {
   public:
     explicit IpaCommitmentKey(const IpaConfig& config)
         : config(config)
-        , generators(Curve::Group::derive_generators(std::vector<uint8_t>{ 'b', 'b', '_', 'i', 'p', 'a' },
-                                                     size_t(1) << config.num_variables))
-        , auxiliary_generator(
-              Curve::Group::derive_generators(std::vector<uint8_t>{ 'b', 'b', '_', 'i', 'p', 'a', '_', 'u' }, 1)[0])
+        , generators_ptr(shared_generators(config.num_variables))
+        , generators(*generators_ptr)
     {}
 
+  private:
+    static std::shared_ptr<const std::vector<Commitment>> shared_generators(size_t num_variables)
+    {
+        static std::mutex mutex;
+        static std::map<size_t, std::shared_ptr<const std::vector<Commitment>>> cache;
+        const std::lock_guard<std::mutex> lock(mutex);
+        auto& entry = cache[num_variables];
+        if (!entry) {
+            entry = std::make_shared<const std::vector<Commitment>>(Curve::Group::derive_generators(
+                std::vector<uint8_t>{ 'b', 'b', '_', 'i', 'p', 'a' }, size_t(1) << num_variables));
+        }
+        return entry;
+    }
+
+  public:
     Commitment commit(std::span<const fr> coefficients) const
     {
         std::vector<fr> scalars(coefficients.begin(), coefficients.end());
@@ -93,80 +112,89 @@ class IpaCommitmentKey {
     }
 
     IpaConfig config;
-    std::vector<Commitment> generators;
-    Commitment auxiliary_generator;
+
+  private:
+    std::shared_ptr<const std::vector<Commitment>> generators_ptr;
+
+  public:
+    const std::vector<Commitment>& generators;
 };
 
 namespace detail {
 
-inline std::string ipa_label(const std::string& name, size_t i, size_t j)
+inline std::string root_label(size_t group, size_t column)
 {
-    return "IPA:" + name + "_" + std::to_string(i) + "_" + std::to_string(j);
+    return "IPA:root_" + std::to_string(group) + "_" + std::to_string(column);
 }
 
 /**
- * @brief Per-variable fold multipliers from the round challenge inverses.
- * @details Round j splits the current vectors into contiguous lo/hi halves, so it binds the highest
- * remaining variable: variable j of the index is folded by the challenge of round `ell-1-j`.
+ * @brief Instantiate `fn` at the compile-time log-size matching the runtime `log_n`.
+ * @details The shared IPA core (`bb::IPA`) is compile-time sized; the transparent suite configures
+ * sizes at runtime, so prover and verifier dispatch through this switch.
  */
-inline std::vector<fr> fold_multipliers(std::span<const fr> challenge_inverses)
+template <typename Fn> decltype(auto) with_log_n(size_t log_n, Fn&& fn)
 {
-    return { challenge_inverses.rbegin(), challenge_inverses.rend() };
-}
-
-/**
- * @brief Final b-scalar of the eq(u) vector after the IPA folds:
- * <eq(u), tensor(1, m_j)> = prod_j ((1-u_j) + u_j m_j), m_j the multiplier of variable j.
- */
-inline fr eq_fold_scalar(std::span<const fr> u, std::span<const fr> multipliers)
-{
-    fr result = fr::one();
-    for (size_t j = 0; j < u.size(); ++j) {
-        result *= (fr::one() - u[j]) + u[j] * multipliers[j];
+    switch (log_n) {
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define BB_PEDERSEN_IPA_CASE(L)                                                                                        \
+    case (L):                                                                                                          \
+        return fn.template operator()<(L)>();
+        BB_PEDERSEN_IPA_CASE(1)
+        BB_PEDERSEN_IPA_CASE(2)
+        BB_PEDERSEN_IPA_CASE(3)
+        BB_PEDERSEN_IPA_CASE(4)
+        BB_PEDERSEN_IPA_CASE(5)
+        BB_PEDERSEN_IPA_CASE(6)
+        BB_PEDERSEN_IPA_CASE(7)
+        BB_PEDERSEN_IPA_CASE(8)
+        BB_PEDERSEN_IPA_CASE(9)
+        BB_PEDERSEN_IPA_CASE(10)
+        BB_PEDERSEN_IPA_CASE(11)
+        BB_PEDERSEN_IPA_CASE(12)
+        BB_PEDERSEN_IPA_CASE(13)
+        BB_PEDERSEN_IPA_CASE(14)
+        BB_PEDERSEN_IPA_CASE(15)
+        BB_PEDERSEN_IPA_CASE(16)
+        BB_PEDERSEN_IPA_CASE(17)
+        BB_PEDERSEN_IPA_CASE(18)
+        BB_PEDERSEN_IPA_CASE(19)
+        BB_PEDERSEN_IPA_CASE(20)
+        BB_PEDERSEN_IPA_CASE(21)
+        BB_PEDERSEN_IPA_CASE(22)
+        BB_PEDERSEN_IPA_CASE(23)
+        BB_PEDERSEN_IPA_CASE(24)
+#undef BB_PEDERSEN_IPA_CASE
+    default:
+        throw_or_abort("pedersen_ipa: unsupported num_variables " + std::to_string(log_n));
     }
-    return result;
-}
-
-/**
- * @brief Final b-scalar of the shifted-eq vector (b_0 = 0, b_i = eq_{i-1}(u)): the successor
- * kernel's telescoping closed form,
- * sum_k [prod_{j<k} u_j] (1-u_k) m_k [prod_{j>k} ((1-u_j) + u_j m_j)].
- */
-inline fr shifted_eq_fold_scalar(std::span<const fr> u, std::span<const fr> multipliers)
-{
-    const size_t ell = u.size();
-    // Suffix products of ((1-u_j) + u_j m_j)
-    std::vector<fr> suffix(ell + 1, fr::one());
-    for (size_t j = ell; j-- > 0;) {
-        suffix[j] = suffix[j + 1] * ((fr::one() - u[j]) + u[j] * multipliers[j]);
-    }
-    fr result = fr::zero();
-    fr prefix = fr::one(); // prod_{j<k} u_j
-    for (size_t k = 0; k < ell; ++k) {
-        result += prefix * (fr::one() - u[k]) * multipliers[k] * suffix[k + 1];
-        prefix *= u[k];
-    }
-    return result;
 }
 
 } // namespace detail
 
 /**
  * @brief Multilinear Bulletproofs inner-product argument over hash-derived BN254 generators
- * (non-hiding): the {transparent, small-proof, linear-verifier} corner. Two chains share the
- * transcript: the unshifted rho-combination against b = eq(u), and the to-be-shifted
- * rho-combination against b = shifted-eq(u), whose folded scalar the verifier computes with the
- * successor-kernel closed form — no shifted commitments and no univariate reduction needed.
+ * (non-hiding): the {transparent, small-proof, linear-verifier} corner of the PCS suite.
  *
- * Per chain, log n rounds: L_j = <a_hi, G_lo> + x_U <a_hi, b_lo> U and symmetrically R_j;
- * challenge x_j folds a' = a_lo + x_j a_hi, b' = b_lo + x_j^{-1} b_hi,
- * G' = G_lo + x_j^{-1} G_hi. The verifier recomputes the folded generator with one size-n MSM
- * (the linear-verifier trade) and checks the final one-point identity.
+ * The claims are reduced to a single run of the shared IPA core (`IPA<Curve,
+ * log_n>::compute_inner_product_proof_internal`), inheriting its prover optimizations: 127-bit
+ * short round challenges, the rescaled generator fold G' = u·G_lo + G_hi (short raw challenge
+ * instead of the full-width inverse, unscaled once at the end), and the fused two-round
+ * `batch_two_round_fold` (see `ipa/ELEMENT_IMPL_FOLD.md`).
  *
- * The lo/hi (rather than even/odd) split is what makes the round cost an MSM: both operands of each
- * cross term are contiguous, so `pippenger_unsafe` applies directly. Round j binds the *highest*
- * remaining variable, so the verifier's per-variable fold multipliers are the round challenges in
- * reverse order — see `fold_multipliers`.
+ * Reduction (the TripleIPA pattern, with the pow tensor omitted):
+ *   1. `IPA:rho` batches the unshifted claims into F = Σ ρⁱ·fᵢ with b-vector eq(u), and the
+ *      to-be-shifted claims into F' = Σ ρˡ·gˡ with b-vector b_sh (b_sh[0] = 0, b_sh[i] = eq[i-1],
+ *      so ⟨F', b_sh⟩ is the batched shifted evaluation — no shifted commitments needed).
+ *   2. The prover sends the cross-sum `IPA:cross_F_shift` = ⟨F, b_sh⟩ + ⟨F', eq⟩; the challenges
+ *      `IPA:zeta_F`, `IPA:zeta_shift` merge the two claims into one:
+ *        witness  A = ζ_F·F + ζ_sh·F',    tensor  b = ζ_F·eq + ζ_sh·b_sh,
+ *        ⟨A, b⟩ = ζ_F²·v_F + ζ_sh²·v_sh + ζ_F·ζ_sh·cross.
+ *   3. One IPA core run opens ⟨A, b⟩ over the derived generators.
+ *
+ * The verifier's b₀ contraction is O(log n) via the closed forms
+ * `ShiftedEqPolynomial::evaluate_eq_folded` / `evaluate_folded`; its linear work is the single
+ * size-n MSM certifying the prover-claimed G₀ (the Halo amortization point — deferrable in
+ * principle, checked inline here).
  */
 class IpaProver {
   public:
@@ -185,110 +213,108 @@ class IpaProver {
                       std::span<const fr> u,
                       const std::shared_ptr<Transcript>& transcript)
     {
-        const size_t n = size_t(1) << ck.config.num_variables;
         BB_ASSERT_EQ(u.size(), ck.config.num_variables, "opening point size mismatch");
+        detail::with_log_n(ck.config.num_variables,
+                           [&]<size_t LOG_N>() { prove_impl<LOG_N>(ck, claims, u, transcript); });
+    }
+
+  private:
+    template <size_t LOG_N, typename Transcript>
+    static void prove_impl(const IpaCommitmentKey& ck,
+                           const Claims& claims,
+                           std::span<const fr> u,
+                           const std::shared_ptr<Transcript>& transcript)
+    {
+        using Ipa = IPA<Curve, LOG_N>;
+        using ShiftedEq = ShiftedEqPolynomial<Curve, LOG_N>;
+        constexpr size_t n = size_t(1) << LOG_N;
 
         if (claims.send_roots) {
             for (size_t g = 0; g < claims.groups.size(); ++g) {
                 for (size_t c = 0; c < claims.groups[g]->num_columns(); ++c) {
-                    transcript->send_to_verifier(detail::ipa_label("root", g, c), claims.groups[g]->commitments[c]);
+                    transcript->send_to_verifier(detail::root_label(g, c), claims.groups[g]->commitments[c]);
                 }
             }
         }
         const fr rho = transcript->template get_challenge<fr>("IPA:rho");
 
-        // Chain arrays: unshifted combination and (unshifted!) to-be-shifted combination — the
-        // shift lives entirely in chain 1's b-vector.
-        std::vector<std::vector<fr>> chains;
-        chains.emplace_back(n, fr::zero());
-        std::vector<pcs_utils::ScaledTerm> terms_a;
-        std::vector<pcs_utils::ScaledTerm> terms_b;
+        // rho-batch the unshifted claims (F) and, continuing the same rho powers, the to-be-shifted
+        // claims (F'). The shift lives entirely in F''s b-vector.
         fr rho_power = fr::one();
-        for (size_t i = 0; i < claims.unshifted.size(); ++i) {
-            const auto& column = claims.groups[claims.unshifted[i].group]->coefficients[claims.unshifted[i].column];
-            terms_a.push_back({ column.data(), rho_power, false });
-            rho_power *= rho;
-        }
-        if (!claims.to_be_shifted.empty()) {
-            chains.emplace_back(n, fr::zero());
-            for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
-                const auto& column =
-                    claims.groups[claims.to_be_shifted[l].group]->coefficients[claims.to_be_shifted[l].column];
-                terms_b.push_back({ column.data(), rho_power, false });
+        const auto batch_chain = [&](std::span<const IpaColumnRef> refs, std::span<const fr> evaluations) {
+            std::vector<PolynomialSpan<const fr>> sources;
+            std::vector<fr> weights;
+            GroupElement commitment = GroupElement::infinity();
+            fr evaluation = fr::zero();
+            for (size_t i = 0; i < refs.size(); ++i) {
+                const auto& group = *claims.groups[refs[i].group];
+                sources.push_back({ 0, std::span<const fr>(group.coefficients[refs[i].column]) });
+                weights.push_back(rho_power);
+                commitment += GroupElement(group.commitments[refs[i].column]) * rho_power;
+                evaluation += rho_power * evaluations[i];
                 rho_power *= rho;
             }
-        }
-        pcs_utils::accumulate_scaled(chains[0], terms_a);
-        if (chains.size() > 1) {
-            pcs_utils::accumulate_scaled(chains[1], terms_b);
+            Polynomial<fr> witness(n);
+            add_scaled_batch(witness, std::span<const PolynomialSpan<const fr>>(sources), std::span<const fr>(weights));
+            return std::make_tuple(std::move(witness), commitment, evaluation);
+        };
+        auto [unshifted_witness, unshifted_commitment, unshifted_evaluation] =
+            batch_chain(claims.unshifted, claims.unshifted_evaluations);
+
+        Polynomial<fr> eq = ProverEqPolynomial<fr>::construct(u, LOG_N);
+
+        Polynomial<fr> witness;
+        Polynomial<fr> b_vec;
+        GroupElement combined_commitment = GroupElement::infinity();
+        fr evaluation = fr::zero();
+        if (claims.to_be_shifted.empty()) {
+            witness = std::move(unshifted_witness);
+            b_vec = std::move(eq);
+            combined_commitment = unshifted_commitment;
+            evaluation = unshifted_evaluation;
+        } else {
+            auto [shifted_witness, shifted_commitment, shifted_evaluation] =
+                batch_chain(claims.to_be_shifted, claims.shifted_evaluations);
+
+            // cross = ⟨F, b_sh⟩ + ⟨F', eq⟩; sent before the zetas that weight it.
+            const fr cross = ShiftedEq::evaluate_from_eq(eq, unshifted_witness) + shifted_witness.evaluate_mle(u);
+            transcript->send_to_verifier("IPA:cross_F_shift", cross);
+            const auto zeta =
+                transcript->template get_challenges<fr>(std::array<std::string, 2>{ "IPA:zeta_F", "IPA:zeta_shift" });
+
+            witness = Polynomial<fr>(n);
+            witness.add_scaled(unshifted_witness, zeta[0]);
+            witness.add_scaled(shifted_witness, zeta[1]);
+            b_vec = Polynomial<fr>(n);
+            b_vec.add_scaled(eq, zeta[0]);
+            ShiftedEq::add_scaled(b_vec, eq, zeta[1]);
+            combined_commitment = unshifted_commitment * zeta[0] + shifted_commitment * zeta[1];
+            evaluation =
+                zeta[0].sqr() * unshifted_evaluation + zeta[1].sqr() * shifted_evaluation + zeta[0] * zeta[1] * cross;
         }
 
-        const fr x_u = transcript->template get_challenge<fr>("IPA:x_u");
-        for (size_t chain = 0; chain < chains.size(); ++chain) {
-            std::vector<fr> a = std::move(chains[chain]);
-            std::vector<fr> b = (chain == 0) ? whir::eq_tensor(u) : shifted_eq_vector(u);
-            std::vector<Commitment> generators(ck.generators.begin(), ck.generators.end());
-            const GroupElement aux = GroupElement(ck.auxiliary_generator) * x_u;
-            std::vector<GroupElement> folded;
-
-            for (size_t round = 0; a.size() > 1; ++round) {
-                const size_t half = a.size() / 2;
-                // L = <a_hi, G_lo> + <a_hi, b_lo> aux ; R = <a_lo, G_hi> + <a_lo, b_hi> aux.
-                // Both operands of each cross term are contiguous, so each is one Pippenger MSM.
-                fr ip_left = fr::zero();
-                fr ip_right = fr::zero();
-                for (size_t t = 0; t < half; ++t) {
-                    ip_left += a[half + t] * b[t];
-                    ip_right += a[t] * b[half + t];
-                }
-                GroupElement left = scalar_multiplication::pippenger_unsafe<Curve>(
-                    PolynomialSpan<const fr>(0, { a.data() + half, half }),
-                    std::span<const Commitment>(generators.data(), half));
-                GroupElement right = scalar_multiplication::pippenger_unsafe<Curve>(
-                    PolynomialSpan<const fr>(0, { a.data(), half }),
-                    std::span<const Commitment>(generators.data() + half, half));
-                left += aux * ip_left;
-                right += aux * ip_right;
-                transcript->send_to_verifier(detail::ipa_label("L", chain, round), Commitment(left));
-                transcript->send_to_verifier(detail::ipa_label("R", chain, round), Commitment(right));
-                const fr x = transcript->template get_challenge<fr>(detail::ipa_label("x", chain, round));
-                const fr x_inv = x.invert();
-                for (size_t t = 0; t < half; ++t) {
-                    a[t] = a[t] + x * a[half + t];
-                    b[t] = b[t] + x_inv * b[half + t];
-                }
-                // G'[t] = G_lo[t] + x^{-1} G_hi[t], batch-normalized back to affine so the next
-                // round's MSMs can consume it directly.
-                folded.resize(half);
-                parallel_for_range(half, [&](size_t start, size_t end) {
-                    for (size_t t = start; t < end; ++t) {
-                        folded[t] = GroupElement(generators[half + t]) * x_inv + generators[t];
-                    }
-                });
-                GroupElement::batch_normalize(folded.data(), half);
-                for (size_t t = 0; t < half; ++t) {
-                    generators[t] = Commitment(folded[t].x, folded[t].y);
-                }
-                a.resize(half);
-                b.resize(half);
-                generators.resize(half);
-            }
-            transcript->send_to_verifier(detail::ipa_label("a_final", chain, 0), a[0]);
-        }
+        add_combined_claim_to_hash_buffer(transcript, u, Commitment(combined_commitment), evaluation);
+        Ipa::compute_inner_product_proof_internal(
+            std::span<const Commitment>(ck.generators), witness, std::move(b_vec), transcript);
     }
 
-    static std::vector<fr> shifted_eq_vector(std::span<const fr> u)
+    template <typename Transcript>
+    static void add_combined_claim_to_hash_buffer(const std::shared_ptr<Transcript>& transcript,
+                                                  std::span<const fr> u,
+                                                  const Commitment& commitment,
+                                                  const fr& evaluation)
     {
-        const std::vector<fr> eq = whir::eq_tensor(u);
-        std::vector<fr> shifted(eq.size(), fr::zero());
-        for (size_t i = 1; i < eq.size(); ++i) {
-            shifted[i] = eq[i - 1];
+        for (size_t coordinate_idx = 0; coordinate_idx < u.size(); ++coordinate_idx) {
+            transcript->add_to_hash_buffer("IPA:u_" + std::to_string(coordinate_idx), u[coordinate_idx]);
         }
-        return shifted;
+        transcript->add_to_hash_buffer("IPA:combined_commitment", commitment);
+        transcript->add_to_hash_buffer("IPA:combined_evaluation", evaluation);
     }
+
+    friend class IpaVerifier;
 };
 
-/** @brief The mirror of `IpaProver`; the folded-generator MSM makes verification O(n). */
+/** @brief The mirror of `IpaProver`; the SRS-style MSM certifying G₀ makes verification O(n). */
 class IpaVerifier {
   public:
     struct Claims {
@@ -307,8 +333,21 @@ class IpaVerifier {
                        const std::shared_ptr<Transcript>& transcript,
                        const IpaCommitmentKey& ck)
     {
-        const size_t ell = config.num_variables;
-        BB_ASSERT_EQ(u.size(), ell, "opening point size mismatch");
+        BB_ASSERT_EQ(u.size(), config.num_variables, "opening point size mismatch");
+        return detail::with_log_n(config.num_variables,
+                                  [&]<size_t LOG_N>() { return verify_impl<LOG_N>(claims, u, transcript, ck); });
+    }
+
+  private:
+    template <size_t LOG_N, typename Transcript>
+    static bool verify_impl(const Claims& claims,
+                            std::span<const fr> u,
+                            const std::shared_ptr<Transcript>& transcript,
+                            const IpaCommitmentKey& ck)
+    {
+        using Ipa = IPA<Curve, LOG_N>;
+        using ShiftedEq = ShiftedEqPolynomial<Curve, LOG_N>;
+        constexpr size_t n = size_t(1) << LOG_N;
 
         std::vector<std::vector<Commitment>> group_commitments = claims.group_commitments;
         if (group_commitments.empty()) {
@@ -316,81 +355,69 @@ class IpaVerifier {
                 std::vector<Commitment> commitments;
                 for (size_t c = 0; c < claims.group_num_columns[g]; ++c) {
                     commitments.push_back(
-                        transcript->template receive_from_prover<Commitment>(detail::ipa_label("root", g, c)));
+                        transcript->template receive_from_prover<Commitment>(detail::root_label(g, c)));
                 }
                 group_commitments.push_back(std::move(commitments));
             }
         }
         const fr rho = transcript->template get_challenge<fr>("IPA:rho");
 
-        struct ChainView {
-            GroupElement commitment = GroupElement::infinity();
-            fr claimed_evaluation = fr::zero();
-            bool is_shifted = false;
-        };
-        std::vector<ChainView> chains(claims.to_be_shifted.empty() ? 1 : 2);
-        chains[0].is_shifted = false;
         fr rho_power = fr::one();
-        for (size_t i = 0; i < claims.unshifted.size(); ++i) {
-            chains[0].commitment +=
-                GroupElement(group_commitments[claims.unshifted[i].group][claims.unshifted[i].column]) * rho_power;
-            chains[0].claimed_evaluation += rho_power * claims.unshifted_evaluations[i];
-            rho_power *= rho;
-        }
-        if (chains.size() > 1) {
-            chains[1].is_shifted = true;
-            for (size_t l = 0; l < claims.to_be_shifted.size(); ++l) {
-                chains[1].commitment +=
-                    GroupElement(group_commitments[claims.to_be_shifted[l].group][claims.to_be_shifted[l].column]) *
-                    rho_power;
-                chains[1].claimed_evaluation += rho_power * claims.shifted_evaluations[l];
+        const auto batch_chain = [&](std::span<const IpaColumnRef> refs, std::span<const fr> evaluations) {
+            GroupElement commitment = GroupElement::infinity();
+            fr evaluation = fr::zero();
+            for (size_t i = 0; i < refs.size(); ++i) {
+                commitment += GroupElement(group_commitments[refs[i].group][refs[i].column]) * rho_power;
+                evaluation += rho_power * evaluations[i];
                 rho_power *= rho;
             }
+            return std::make_pair(commitment, evaluation);
+        };
+        auto [unshifted_commitment, unshifted_evaluation] = batch_chain(claims.unshifted, claims.unshifted_evaluations);
+
+        const bool has_shifted = !claims.to_be_shifted.empty();
+        GroupElement combined_commitment = unshifted_commitment;
+        fr evaluation = unshifted_evaluation;
+        fr zeta_unshifted = fr::one();
+        fr zeta_shifted = fr::zero();
+        if (has_shifted) {
+            auto [shifted_commitment, shifted_evaluation] =
+                batch_chain(claims.to_be_shifted, claims.shifted_evaluations);
+            const fr cross = transcript->template receive_from_prover<fr>("IPA:cross_F_shift");
+            const auto zeta =
+                transcript->template get_challenges<fr>(std::array<std::string, 2>{ "IPA:zeta_F", "IPA:zeta_shift" });
+            zeta_unshifted = zeta[0];
+            zeta_shifted = zeta[1];
+            combined_commitment = unshifted_commitment * zeta_unshifted + shifted_commitment * zeta_shifted;
+            evaluation = zeta_unshifted.sqr() * unshifted_evaluation + zeta_shifted.sqr() * shifted_evaluation +
+                         zeta_unshifted * zeta_shifted * cross;
         }
 
-        const fr x_u = transcript->template get_challenge<fr>("IPA:x_u");
-        const GroupElement aux = GroupElement(ck.auxiliary_generator) * x_u;
+        const Commitment combined_commitment_affine(combined_commitment);
+        IpaProver::add_combined_claim_to_hash_buffer(transcript, u, combined_commitment_affine, evaluation);
 
-        for (size_t chain = 0; chain < chains.size(); ++chain) {
-            GroupElement accumulator = chains[chain].commitment + aux * chains[chain].claimed_evaluation;
-            std::vector<fr> challenges(ell);
-            std::vector<fr> challenge_inverses(ell);
-            for (size_t round = 0; round < ell; ++round) {
-                const Commitment left =
-                    transcript->template receive_from_prover<Commitment>(detail::ipa_label("L", chain, round));
-                const Commitment right =
-                    transcript->template receive_from_prover<Commitment>(detail::ipa_label("R", chain, round));
-                const fr x = transcript->template get_challenge<fr>(detail::ipa_label("x", chain, round));
-                challenges[round] = x;
-                challenge_inverses[round] = x.invert();
-                accumulator += GroupElement(left) * challenges[round] + GroupElement(right) * challenge_inverses[round];
+        // b₀ = ζ_F·⟨eq, s⟩ + ζ_sh·⟨b_sh, s⟩, both contractions O(log n) via the closed forms.
+        const auto b_zero_from_round_challenges = [&](std::span<const fr> round_challenges_inv) {
+            fr result = zeta_unshifted * ShiftedEq::evaluate_eq_folded(u, round_challenges_inv);
+            if (has_shifted) {
+                result += zeta_shifted * ShiftedEq::evaluate_folded(u, round_challenges_inv);
             }
-            const fr a_final = transcript->template receive_from_prover<fr>(detail::ipa_label("a_final", chain, 0));
+            return result;
+        };
+        const auto data = Ipa::read_inner_product_transcript_data(
+            combined_commitment_affine, evaluation, b_zero_from_round_challenges, transcript);
 
-            // Folded generator: G_final = sum_i (prod_{j : bit_j(i)=1} m_j) G_i — one size-n MSM,
-            // with m_j the multiplier of variable j under the lo/hi round schedule.
-            const std::vector<fr> multipliers = detail::fold_multipliers(challenge_inverses);
-            const size_t n = size_t(1) << ell;
-            std::vector<fr> scalars(n, fr::one());
-            for (size_t j = 0; j < ell; ++j) {
-                const size_t bit = size_t(1) << j;
-                for (size_t i = 0; i < n; ++i) {
-                    if ((i & bit) != 0) {
-                        scalars[i] *= multipliers[j];
-                    }
-                }
-            }
-            const Commitment folded_generator =
-                Commitment::batch_mul(std::span<const Commitment>(ck.generators), std::span<fr>(scalars));
-
-            const fr b_final = chains[chain].is_shifted ? detail::shifted_eq_fold_scalar(u, multipliers)
-                                                        : detail::eq_fold_scalar(u, multipliers);
-            const GroupElement expected = (GroupElement(folded_generator) + aux * b_final) * a_final;
-            if (Commitment(accumulator) != Commitment(expected)) {
-                return false;
-            }
+        // Certify the prover-claimed G₀ = ⟨s, G⟩ with the single size-n MSM over the derived
+        // generators, then check the IPA group relation.
+        BB_ASSERT_EQ(ck.generators.size(), n, "generator count mismatch");
+        Commitment G_zero;
+        G_zero = scalar_multiplication::pippenger_unsafe<Curve>(data.s_vec, { ck.generators.data(), n });
+        if (G_zero != data.G_zero_from_prover) {
+            return false;
         }
-        return true;
+        const Commitment aux_generator = Commitment::one() * data.gen_challenge;
+        const GroupElement right_hand_side = G_zero * data.a_zero + aux_generator * (data.a_zero * data.b_zero);
+        return data.C_zero.normalize() == right_hand_side.normalize();
     }
 };
 

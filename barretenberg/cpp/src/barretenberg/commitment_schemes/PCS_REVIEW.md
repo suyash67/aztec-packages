@@ -46,10 +46,12 @@ each sound. Seven findings are recorded in §3, of which the material ones are:
 random linear combination of the $\approx 41$ Honk claims was written as a serial nested loop in every
 non-production backend**, while production Gemini does it with the parallel `add_scaled_batch`. Fixing
 that, plus six related serial loops and one algorithmically wrong IPA inner loop, gives the measured
-improvements in §4.4. Headline, all with the proof bytes and the verifier untouched: **the IPA backend
-is 13.3× faster**, **CHOPIN now proves faster than the KZG baseline** ($0.81\times$, previously
-$1.05\times$) while producing a smaller proof, **Vela's prover penalty drops from $1.70\times$ to
-$1.18\times$**, and **SwitchFold improves 16%**.
+improvements in §4.4. Headline: **the IPA backend's prover went from $82\times$ KZG to
+$\approx 2.2\times$** (rebuilt on the production `ipa.hpp` core — §2.7, §4.2 — which also cut its
+verify from 3.6 s to ~0.1 s and its proof below KZG's), **CHOPIN now proves faster than the KZG
+baseline** ($0.81\times$, previously $1.05\times$) while producing a smaller proof, **Vela's prover
+penalty drops from $1.70\times$ to $1.18\times$**, and **SwitchFold improves 16%**. Apart from the
+IPA rebuild, every fix leaves proof bytes and verifier work untouched.
 
 **Zero-knowledge is the real gap.** Only the production Shplemini path and WHIR have zk. The other
 thirteen backends are non-hiding: they leak the witness outright (§5). This is the single biggest
@@ -224,7 +226,8 @@ correct.
 ## 2. The backends
 
 Fifteen, grouped by trust model and the resource each optimizes. Prove times are given as a **ratio to
-the KZG baseline** (see §4.4 for why); verify and proof size are absolute, at $N = 2^{18}$, and
+the KZG baseline** (see §4.4 for why); verify and proof size are absolute, at $N = 2^{18}$. IPA's
+verify and proof reflect its rebuild on the production core (§2.7, §4.2); every other backend's are
 unaffected by this review's changes.
 
 | Backend | Family | Trust | Prove ($\times$KZG) | Verify | Proof | zk |
@@ -236,7 +239,7 @@ unaffected by this review's changes.
 | KZH2 | pairing, $\sqrt{N}$ | **test-only SRS** | $\sim\!14\times$ | 216 ms | 183.3 KiB | no |
 | KZH3 | pairing, $\sqrt[3]{N}$ | **test-only SRS** | $\sim\!46\times$ | 79.7 ms | 55.3 KiB | no |
 | Dory | pairing, two-tier | **test-only $\mathbb{G}_2$** | $\sim\!12\times$ | 362 ms | 94.3 KiB | no |
-| IPA (Pedersen) | DL | transparent | $\sim\!5.6\times$ | 3596 ms | 16.4 KiB | no |
+| IPA (Pedersen) | DL | transparent | $\sim\!2.2\times$ | 107 ms | 12.0 KiB | no |
 | Hyrax | DL, Pedersen rows | transparent | $\sim\!11\times$ | 243 ms | 566.3 KiB | no |
 | WHIR | hash, RS folding | transparent | $1.08\times$ | 13.5 ms | 1219.7 KiB | **yes** |
 | SwitchFold | hash, code switching | transparent | $2.50\times$ | 13.6 ms | 772.9 KiB | no |
@@ -555,28 +558,53 @@ verifier's $\rho$-combination (§4.5); zk.
 
 ### 2.7 IPA over Pedersen generators (Bulletproofs)
 
-**Math.** The classical inner-product argument over hash-derived generators, run directly on the
-multilinear array. Per chain, $\log n$ rounds:
+**Math.** The classical inner-product argument over hash-derived BN254 generators, run directly on
+the multilinear array through the shared production core (`IPA<Curve, log n>` in `ipa.hpp`, the same
+code path as the ECCVM's Grumpkin IPA). The two claim families are first merged into a **single** IPA
+claim — `triple_ipa`'s reduction with the pow tensor omitted. With $F$ the $\rho$-batched unshifted
+combination ($v_F$ its batched evaluation) and $F'$ the $\rho$-batched to-be-shifted combination
+($v_{sh}$), the prover sends the cross-sum
 
 $$
-L = \langle a_{\mathrm{hi}},\, G_{\mathrm{lo}} \rangle + \langle a_{\mathrm{hi}},\, b_{\mathrm{lo}} \rangle\, U,
+c \;=\; \langle F,\, b_{sh} \rangle + \langle F',\, \mathsf{eq}(\vec{u}) \rangle
+$$
+
+(label `IPA:cross_F_shift`), and the challenges $\zeta_F, \zeta_{sh}$ merge witness and tensor:
+
+$$
+A = \zeta_F F + \zeta_{sh} F',
 \qquad
-R = \langle a_{\mathrm{lo}},\, G_{\mathrm{hi}} \rangle + \langle a_{\mathrm{lo}},\, b_{\mathrm{hi}} \rangle\, U,
-$$
-
-then the challenge $x$ folds
-
-$$
-a' = a_{\mathrm{lo}} + x\,a_{\mathrm{hi}},
+b = \zeta_F\, \mathsf{eq}(\vec{u}) + \zeta_{sh}\, \mathsf{shifted\text{-}eq}(\vec{u}),
 \qquad
-b' = b_{\mathrm{lo}} + x^{-1} b_{\mathrm{hi}},
-\qquad
-G' = G_{\mathrm{lo}} + x^{-1} G_{\mathrm{hi}} .
+\langle A, b \rangle = \zeta_F^2 v_F + \zeta_{sh}^2 v_{sh} + \zeta_F \zeta_{sh}\, c .
 $$
 
-Two chains share the transcript: $b = \mathsf{eq}(\vec{u})$ unshifted,
-$b = \mathsf{shifted\text{-}eq}(\vec{u})$ shifted, with the verifier using the closed forms of contract
-(c). Verification is $O(n)$ — the folded-generator MSM.
+One core run (`compute_inner_product_proof_internal`, over the derived generators in place of the
+SRS) then opens $\langle A, b \rangle$: $\log n$ rounds of
+
+$$
+L = \langle a_{\mathrm{lo}},\, G_{\mathrm{hi}} \rangle + \langle a_{\mathrm{lo}},\, b_{\mathrm{hi}} \rangle\, U,
+\qquad
+R = \langle a_{\mathrm{hi}},\, G_{\mathrm{lo}} \rangle + \langle a_{\mathrm{hi}},\, b_{\mathrm{lo}} \rangle\, U,
+$$
+
+with the challenge $u$ folding $a' = u^{-1} a_{\mathrm{lo}} + a_{\mathrm{hi}}$,
+$b' = u\, b_{\mathrm{lo}} + b_{\mathrm{hi}}$, $G' = u\, G_{\mathrm{lo}} + G_{\mathrm{hi}}$ (the
+rescaled form of the classical fold; the running scale $\prod u$ is removed from the final $G_0$ and
+$a_0$, so the transcript equals the classical one). The core contributes its three prover
+optimizations: 127-bit short round challenges (`get_short_challenge`), the rescaled fold above —
+each generator is multiplied by the short raw challenge, never a full-width inverse — and the fused
+two-round generator fold (`batch_two_round_fold`, one batch-affine pass per two rounds; see
+`ipa/ELEMENT_IMPL_FOLD.md`).
+
+**Verification** is $O(n)$: the transcript reduction (`read_inner_product_transcript_data`) checks
+the group relation against the prover-claimed $G_0$, with the $b_0$ contraction in $O(\log n)$ via
+the closed forms of contract (c) (`ShiftedEqPolynomial::evaluate_eq_folded` / `evaluate_folded`,
+$\zeta$-weighted); the linear work is the one size-$n$ MSM certifying
+$G_0 = \langle \vec{s}, \vec{G} \rangle$. That check is the Halo amortization point — the same claim
+shape the production core defers to an accumulator and discharges across proofs in one batched MSM
+(`verify_accumulator` / `batch_verify_accumulators`); this backend checks it inline, one MSM per
+proof.
 
 **Audit.** The fold algebra is exactly Bulletproofs; I re-derived
 
@@ -587,19 +615,17 @@ $$
 \;+\; x\, \langle a_{\mathrm{hi}},\, G_{\mathrm{lo}} \rangle
 $$
 
-and the matching $\langle a',\, b' \rangle$ relation, so that $P' = P + xL + x^{-1}R$ closes. $U$ is
-drawn after the commitments (challenge `IPA:x_u`), as Bulletproofs requires.
+and the matching $\langle a',\, b' \rangle$ relation, so that $P' = P + xL + x^{-1}R$ closes (the
+core's rescaling is a change of variables on top of this). The $\zeta$-merge is the same
+diagonal-plus-cross-sum identity verified for `triple_ipa` (§2.13), restricted to two tensors. $U$
+is drawn after the commitments (challenge `IPA:generator_challenge`), as Bulletproofs requires; the
+opening point, combined commitment and combined evaluation are absorbed into the hash buffer before
+it.
 
 **Non-hiding.** No blinders. This is the plain, non-zk IPA, not the zero-knowledge variant.
 
-**Efficiency (fixed in this review — §4.2).** The round loop was computing $L$ and $R$ with
-`generators[2t] * a[2t+1]` — **$2N$ individual elliptic-curve scalar multiplications**, not an MSM.
-bb's production `ipa.hpp` uses `pippenger_unsafe` on contiguous lo/hi halves for precisely this reason.
-I converted the backend from even/odd to lo/hi splits (which makes both MSM operands contiguous),
-routed $L$/$R$ through Pippenger, and batched the generator fold. See §4.2 for the measurement.
-
-**Future work.** Adopt production `ipa.hpp`'s two-round-fused `batch_two_round_fold` and short 127-bit
-challenge schedule (a further large constant factor); zk blinders.
+**Future work.** zk blinders; a deferred-accumulator verify entry point so many proofs share one
+$G_0$ MSM (the core already ships the machinery).
 
 ### 2.8 Hyrax (ePrint 2017/1132)
 
@@ -1067,23 +1093,22 @@ for (size_t t = 0; t < half; ++t) {
 called for. bb's production `ipa.hpp` uses `pippenger_unsafe` on contiguous lo/hi halves for exactly
 this. The even/odd split was what blocked it: Pippenger needs contiguous point and scalar spans.
 
-**Fix.** Converted the backend from even/odd to **lo/hi** splits, which is also the classical
-Bulletproofs presentation. Both cross-term operands become contiguous, so each is one
-`pippenger_unsafe` call; the generator fold
-$G'[t] = G_{\mathrm{lo}}[t] + x^{-1} G_{\mathrm{hi}}[t]$ is now a parallel pass followed by one
-`batch_normalize` back to affine.
+**Fix, first pass.** Converted the backend from even/odd to **lo/hi** splits, which is also the
+classical Bulletproofs presentation. Both cross-term operands become contiguous, so each is one
+`pippenger_unsafe` call; the generator fold became a parallel pass followed by one `batch_normalize`
+back to affine.
 
-Because round $j$ now binds the *highest* remaining variable rather than the lowest, the verifier's
-per-variable fold multipliers are the round-challenge inverses **in reverse order**: variable $j$ is
-folded by $x_{\ell-1-j}^{-1}$. This is the new `detail::fold_multipliers`, threaded into both the
-folded-generator scalars
-
-$$
-G_{\mathrm{final}} \;=\; \sum_i \Big( \prod_{j\,:\ \mathsf{bit}_j(i) = 1} m_j \Big) G_i
-$$
-
-and the eq / shifted-eq closed forms of §1.4(c). All four `PedersenIpaTest` cases (including the two
-negative tests) and `IpaHonkTest` pass unchanged.
+**Fix, second pass.** Even with Pippenger cross terms, a hand-rolled round loop pays a full-width
+scalar multiplication per generator in the fold ($x^{-1}$ is a 254-bit scalar) — across the rounds
+that is $\approx n$ full scalar muls, several times the cost of all the round MSMs combined. The
+backend now routes its (merged, see §2.7) claim through the production core
+`IPA::compute_inner_product_proof_internal` via a generator-span overload, so it inherits the core's
+short-challenge schedule, rescaled fold, and fused two-round `batch_two_round_fold` instead of
+re-implementing the reduction. The verifier correspondingly consumes
+`read_inner_product_transcript_data` with the $\zeta$-weighted closed forms of §1.4(c)
+(`ShiftedEqPolynomial`), and the hash-derived generator vector is memoized per size so re-creating a
+verification key does not re-run the O(n) hash-to-curve derivation. All four `PedersenIpaTest` cases
+(including the two negative tests) and `IpaHonkTest` pass.
 
 ### 4.3 Six more serial loops
 
@@ -1132,11 +1157,18 @@ All at $2^{18}$, prove, ratio to same-run KZG:
 | Mercury | $1.27\times$ | $\mathbf{1.14\times}$ | $-10\%$ |
 | Vela | $1.70\times$ | $\mathbf{1.18\times}$ | $-30\%$ |
 | SwitchFold | $2.97\times$ | $\mathbf{2.50\times}$ | $-16\%$ |
-| IPA (Pedersen) | $82.0\times$ | $\mathbf{\approx 5.6\times}$ | **13.3× faster** |
+| IPA (Pedersen) | $82.0\times$ | $\mathbf{\approx 2.2\times}$ | **~37× faster** |
 | Hyrax, KZH2, KZH3, Dory | — | — | unchanged within noise |
 
-The IPA figure is $44\,726\ \mathrm{ms} \to 3351\ \mathrm{ms}$ in comparable single-run conditions; the
-change is large enough that it survives the contention (CPU time in the noisy run was 3391 ms). The four
+The IPA row has two stages. The MSM fix of §4.2 took it from $82.0\times$ to $\approx 5.6\times$
+($44\,726\ \mathrm{ms} \to 3351\ \mathrm{ms}$ in comparable single-run conditions — large enough to
+survive the contention; CPU time in the noisy run was 3391 ms). The rebuild on the production core
+(§2.7, §4.2) then took it to $\approx 2.2\times$: same-run 3-repetition medians of 2026-08-06 give
+IPA/KZG prove ratios $1.8$–$2.5\times$ across $2^{12}$–$2^{20}$ ($1837/819\ \mathrm{ms}$ at
+$2^{18}$), verify $3596 \to 121\ \mathrm{ms}$ at $2^{18}$ (single MSM instead of two, and no
+per-verify generator derivation), proof $16.4 \to 12.0$ KiB (one reduction chain instead of two).
+The IPA entries in `pcs_bench_results.json` / `pcs_report.html` are these medians transported into
+the committed baseline's frame via the same-size same-run KZG ratio. The four
 unchanged backends are exactly the ones whose provers are dominated by $N$ elliptic-curve scalar
 multiplications per column (and $R$ Miller loops per column for Dory), where the $\rho$-batch was never
 more than a few percent — that they did *not* move is a consistency check on the attribution, not a
