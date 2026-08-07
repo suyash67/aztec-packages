@@ -37,14 +37,21 @@ fr shifted_mle(std::span<const fr> array, std::span<const fr> u)
 
 } // namespace
 
-template <typename Hasher> class WhirTest : public ::testing::Test {
+/** @brief Test parameter pairing a Merkle hasher with a commitment layout. */
+template <typename Hasher_, size_t MaxStackBits_> struct WhirVariant {
+    using Hasher = Hasher_;
+    static constexpr size_t MAX_STACK_BITS = MaxStackBits_;
+};
+
+template <typename Variant> class WhirTest : public ::testing::Test {
   public:
+    using Hasher = typename Variant::Hasher;
     using CK = WhirCommitmentKey<Hasher>;
     using Prover = WhirProver<Hasher>;
     using Verifier = WhirVerifier<Hasher>;
     using GroupData = WhirGroupData<Hasher>;
 
-    static WhirConfig test_config(size_t num_variables, bool zk = false, size_t max_stack_bits = 2)
+    static WhirConfig test_config(size_t num_variables, bool zk = false)
     {
         return WhirConfig::create(num_variables,
                                   /*security_bits=*/64,
@@ -53,7 +60,7 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
                                   /*final_poly_bits=*/4,
                                   WhirSoundness::CONJECTURED_LIST,
                                   zk,
-                                  max_stack_bits);
+                                  Variant::MAX_STACK_BITS);
     }
 
     struct Instance {
@@ -125,8 +132,12 @@ template <typename Hasher> class WhirTest : public ::testing::Test {
     }
 };
 
-using HasherTypes = ::testing::Types<Poseidon2MerkleHasher, Blake3sMerkleHasher>;
-TYPED_TEST_SUITE(WhirTest, HasherTypes);
+// Both Merkle hashers against both commitment layouts (interleaved columns, and stacked).
+using WhirVariants = ::testing::Types<WhirVariant<Poseidon2MerkleHasher, 0>,
+                                      WhirVariant<Blake3sMerkleHasher, 0>,
+                                      WhirVariant<Poseidon2MerkleHasher, 2>,
+                                      WhirVariant<Blake3sMerkleHasher, 2>>;
+TYPED_TEST_SUITE(WhirTest, WhirVariants);
 
 TYPED_TEST(WhirTest, SingleUnshiftedCompleteness)
 {
@@ -150,8 +161,14 @@ TYPED_TEST(WhirTest, BatchedWithShiftedCompleteness)
 // the batched virtual oracle (with shift scaling) directly against the clear polynomial.
 TYPED_TEST(WhirTest, RepairedSoundnessCompleteness)
 {
-    const WhirConfig config = WhirConfig::create(
-        10, /*security_bits=*/64, /*log_inv_rate=*/2, 4, 4, WhirSoundness::REPAIRED_LIST, /*zk=*/false, 2);
+    const WhirConfig config = WhirConfig::create(10,
+                                                 /*security_bits=*/64,
+                                                 /*log_inv_rate=*/2,
+                                                 4,
+                                                 4,
+                                                 WhirSoundness::REPAIRED_LIST,
+                                                 /*zk=*/false,
+                                                 TypeParam::MAX_STACK_BITS);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);
     const auto proof = TestFixture::prove_instance(ck, instance);
@@ -216,7 +233,7 @@ TYPED_TEST(WhirTest, TamperedProofRejected)
 TYPED_TEST(WhirTest, ZkBatchedCompleteness)
 {
     const WhirConfig config = TestFixture::test_config(8, /*zk=*/true);
-    ASSERT_EQ(config.num_variables, 11U);
+    ASSERT_EQ(config.num_variables, 9U + TypeParam::MAX_STACK_BITS);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);
     const auto proof = TestFixture::prove_instance(ck, instance);
@@ -225,7 +242,9 @@ TYPED_TEST(WhirTest, ZkBatchedCompleteness)
 
 TYPED_TEST(WhirTest, ZkZeroIterationCompleteness)
 {
-    const WhirConfig config = TestFixture::test_config(4, /*zk=*/true);
+    // The only payload width with both no fold iterations and room for the zk blinding, at either
+    // layout: stacking spends MAX_STACK_BITS of the committed width on the stack index.
+    const WhirConfig config = TestFixture::test_config(6 - TypeParam::MAX_STACK_BITS, /*zk=*/true);
     ASSERT_EQ(config.num_iterations(), 0U);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);

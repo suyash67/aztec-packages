@@ -5,8 +5,13 @@
 
 namespace bb::whir {
 
-/** @brief PCS backend adapter binding WHIR into the transparent-UltraHonk shell. */
-template <typename Hasher_> struct WhirPcs {
+/**
+ * @brief PCS backend adapter binding WHIR into the transparent-UltraHonk shell.
+ * @tparam MaxStackBits 0 keeps one codeword per column (fast prover, larger proof); non-zero stacks
+ * each commitment group into one narrow-leaf oracle sized for up to 2^MaxStackBits columns, which
+ * shrinks the proof several-fold at a proportional prover cost. See `WhirGroupData`.
+ */
+template <typename Hasher_, size_t MaxStackBits = 0> struct WhirPcs {
     using Hasher = Hasher_;
     using Config = WhirConfig;
     using CommitmentKey = WhirCommitmentKey<Hasher>;
@@ -17,9 +22,6 @@ template <typename Hasher_> struct WhirPcs {
 
     using GroupCommitment = typename Hasher::Digest;
 
-    // Stacking headroom for the widest commitment group: the (at most 28) precomputed columns.
-    static constexpr size_t MAX_STACK_BITS = 5;
-
     static Config make_config(size_t log_dyadic_size, size_t security_bits, size_t log_inv_rate)
     {
         return WhirConfig::create(log_dyadic_size,
@@ -29,7 +31,7 @@ template <typename Hasher_> struct WhirPcs {
                                   /*final_poly_bits=*/4,
                                   WhirSoundness::CONJECTURED_LIST,
                                   /*zk=*/false,
-                                  MAX_STACK_BITS);
+                                  MaxStackBits);
     }
     static size_t payload_variables(const Config& config) { return config.num_payload_variables; }
 
@@ -82,5 +84,13 @@ template <typename Hasher_> struct WhirPcs {
 
 /** @brief UltraHonk with WHIR as the polynomial commitment scheme (README.md §10). */
 template <typename Hasher = Poseidon2MerkleHasher> using WhirHonk = honk_transparent::TransparentHonk<WhirPcs<Hasher>>;
+
+/**
+ * @brief WhirHonk with per-group column stacking: roughly a third of the proof size, at several
+ * times the prover cost. Choose it only when proof size dominates.
+ * @details The headroom covers the widest commitment group, the (at most 28) precomputed columns.
+ */
+template <typename Hasher = Poseidon2MerkleHasher>
+using WhirStackedHonk = honk_transparent::TransparentHonk<WhirPcs<Hasher, 5>>;
 
 } // namespace bb::whir

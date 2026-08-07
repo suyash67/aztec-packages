@@ -104,4 +104,34 @@ TYPED_TEST(WhirHonkTest, WrongVkRejected)
     EXPECT_FALSE(TestFixture::Honk::verify(bad_vk, setup.config, setup.proof));
 }
 
+/**
+ * @brief The stacked layout proves and verifies the same circuit, with a materially smaller proof.
+ * @details `WhirStackedHonk` trades prover time for proof size; this pins the size win and that the
+ * two layouts remain independently sound.
+ */
+TEST(WhirStackedHonkTest, ProveAndVerifyIsSmallerThanInterleaved)
+{
+    using Hasher = Blake3sMerkleHasher;
+    const auto build = [] {
+        UltraCircuitBuilder builder = build_test_circuit();
+        ProverInstance_<UltraFlavor> sizing(builder);
+        return sizing.log_dyadic_size();
+    };
+    const size_t log_n = build();
+
+    UltraCircuitBuilder stacked_builder = build_test_circuit();
+    const auto stacked_config = WhirStackedHonk<Hasher>::make_config(log_n, /*security_bits=*/64);
+    auto stacked_pk = WhirStackedHonk<Hasher>::create_proving_key(stacked_builder, stacked_config);
+    const HonkProof stacked_proof = WhirStackedHonk<Hasher>::prove(stacked_pk);
+    EXPECT_TRUE(WhirStackedHonk<Hasher>::verify(stacked_pk.vk, stacked_config, stacked_proof));
+
+    UltraCircuitBuilder plain_builder = build_test_circuit();
+    const auto plain_config = WhirHonk<Hasher>::make_config(log_n, /*security_bits=*/64);
+    auto plain_pk = WhirHonk<Hasher>::create_proving_key(plain_builder, plain_config);
+    const HonkProof plain_proof = WhirHonk<Hasher>::prove(plain_pk);
+    EXPECT_TRUE(WhirHonk<Hasher>::verify(plain_pk.vk, plain_config, plain_proof));
+
+    EXPECT_LT(stacked_proof.size(), plain_proof.size());
+}
+
 } // namespace bb::whir

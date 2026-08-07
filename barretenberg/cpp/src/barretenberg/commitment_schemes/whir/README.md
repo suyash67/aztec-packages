@@ -120,23 +120,31 @@ hold for affine lines [7]).
 ### 4.1 Commitment
 
 `WhirCommitmentKey::commit_group`: polynomials committed together (a "group" — e.g. all
-columns of one Honk round) are *stacked* into one array. Each of the $C$ columns is padded
-to $n = 2^m$ and column $j$ is placed at offset $j \cdot 2^m$, giving a single array of
-$2^{m+s}$ coefficients with $s = \lceil \log_2 C \rceil$ (missing columns are zero
-padding). That one array is FFT'd onto its domain ($2^{m+s+r_0}$ points, natural order) and
-bound by one Merkle tree whose leaf $j$ hashes its values on fold-coset $j$,
+columns of one Honk round) are padded to $n = 2^m$ and bound by one Merkle tree. Leaf $j$
+covers fold-coset $j$,
 
 $$\operatorname{coset}(j) = \{\, j + t \cdot N/2^k \;:\; t \in [2^k] \,\}, \qquad j \in [N / 2^k],$$
 
 so one opening authenticates everything needed to fold at index $j$. The commitment is the
-root. The prover retains the stacked array and tree (`WhirGroupData`); a single polynomial
-is a group of one.
+root; the prover retains the arrays and tree (`WhirGroupData`). A single polynomial is a
+group of one.
 
-Stacking trades prover work for proof size. A query opens $2^k$ values plus one
-authentication path per group, independent of $C$, where interleaving every column into a
-wide leaf would cost $C \cdot 2^k$ values per path. The price is that the batched oracle
-spans $2^{m+s_{\max}}$ coefficients rather than $2^m$, so the sumcheck and the round-0
-encoding grow with the *total* committed data instead of a single column's width.
+Two layouts, selected by `WhirConfig::stack_columns`:
+
+- **Interleaved** (the default). Each of the $C$ columns is FFT'd onto $L_0$ separately and
+  leaf $j$ hashes, column-major, every column's coset-$j$ values. The batched oracle stays
+  $2^m$ wide, so prover cost is independent of $C$; a query costs $C \cdot 2^k$ values per
+  authentication path.
+- **Stacked** (opt-in, `max_stack_bits > 0`). Column $j$ is placed at offset $j \cdot 2^m$
+  of one array of $2^{m+s}$ coefficients, $s = \lceil \log_2 C \rceil$ (missing columns are
+  zero padding), FFT'd as a single codeword with narrow one-column leaves. A query then
+  costs $2^k$ values per path regardless of $C$.
+
+The trade is real in both directions. Stacking shrinks the proof several-fold, but the
+batched oracle spans $2^{m+s_{\max}}$ rather than $2^m$, so the sumcheck and round-0
+encoding grow with the *total* committed data instead of one column's width. On an
+UltraHonk trace that is a $2^5$ factor of prover work for roughly a $3\times$ smaller
+proof — worth it only when proof size dominates, hence off by default.
 
 ### 4.2 Opening statement
 
@@ -295,7 +303,7 @@ costs across the batch; only round-0 leaf openings scale with the number of tree
 |---|---|
 | Prover commit | one size-$N_0$ FFT + $N_0/2^k$ leaf hashes + $N_0/2^k$ tree hashes |
 | Prover open | per iteration: $O(2^{m_i})$ sumcheck/weight field ops, size-$N_{i+1}$ FFT, tree build |
-| Proof size | round 0: $t_0 \cdot 32\,\text{B} \cdot \sum_{\text{groups}} \big(2^k + d \cdot \log_2(N_g/2^k)\big)$ ($d$ digest fields, $N_g$ the group's own codeword length — stacking makes this independent of the column count); rounds $i \ge 1$: $t_i \cdot 32\,\text{B} \cdot \big(2^k + d \log_2(N_i/2^k)\big)$; + $3 \cdot 32\,\text{B} \cdot k M$ (sumcheck) + $2^{m_{\text{fin}}} \cdot 32\,\text{B}$ + the cross evaluations (one field element per (point, constituent) off the claim diagonal) |
+| Proof size | round 0: $t_0 \cdot 32\,\text{B} \cdot \sum_{\text{groups}} \big(C_g 2^k + d \cdot \log_2(N_g/2^k)\big)$ ($d$ digest fields, $N_g$ the group's codeword length, $C_g$ its leaf columns — $C_g = 1$ when stacked, so the term stops scaling with the column count); rounds $i \ge 1$: $t_i \cdot 32\,\text{B} \cdot \big(2^k + d \log_2(N_i/2^k)\big)$; + $3 \cdot 32\,\text{B} \cdot k M$ (sumcheck) + $2^{m_{\text{fin}}} \cdot 32\,\text{B}$ + when stacked, the cross evaluations (one field element per (point, constituent) off the claim diagonal) |
 | Verifier | $\sum_i t_i \cdot (\log_2(N_i/2^k) + 1)$ hashes + $O\big(\sum_i t_i (2^k + m_i)\big)$ field ops |
 
 For the §6 example the proof is $\approx 90$ KiB and the verifier computes $\approx 1{,}700$
@@ -361,10 +369,11 @@ root, and the opening phase is one batched WHIR run.
   Shplemini batch-mul + pairing with `WhirVerifier` (no `PairingPoints`, no SRS anywhere).
 - **Per-round tree groups.** Polynomials committed in the same Honk round share one tree
   (five groups: the committed precomputed columns, wires, counts+w_4, lookup_inverses,
-  z_perm), stacked as in §4.1, so a round-0 query opens one narrow leaf and one path per
-  commitment round rather than per polynomial, and a shifted claim reuses its group's
-  opened values with $x^{-1}$ scaling instead of a second opening. RECURSION.md §2
-  quantifies the effect.
+  z_perm), so a round-0 query opens one path per commitment round rather than per
+  polynomial, and a shifted claim reuses its group's opened values with $x^{-1}$ scaling
+  instead of a second opening. RECURSION.md §2 quantifies the effect.
+- **Layout choice.** `WhirHonk` uses the interleaved layout; `WhirStackedHonk` stacks each
+  group per §4.1, cutting the proof to roughly a third at several times the prover cost.
 - **Virtual precomputed columns.** `TransparentHonk` does not commit identically-zero
   precomputed columns (the gate selectors of unused block types) or the two lagrange point
   indicators; the verification key records them and the verifier checks sumcheck's claimed

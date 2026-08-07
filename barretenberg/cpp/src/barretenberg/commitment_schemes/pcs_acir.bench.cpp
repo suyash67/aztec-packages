@@ -29,7 +29,7 @@
 // only meaningful when each run is its own process).
 //
 // Usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs
-// <kzg|mercury|whir|whir-p2|whir-sky|ligero|hyrax|kzh2|ipa|dory>
+// <kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory>
 
 namespace {
 
@@ -152,7 +152,7 @@ int main(int argc, char** argv)
     }
     if (bytecode_path.empty() || witness_path.empty() || pcs.empty()) {
         std::cerr << "usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs "
-                     "<kzg|mercury|whir|whir-p2|whir-sky|ligero|hyrax|kzh2|ipa|dory>\n";
+                     "<kzg|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|ligero|hyrax|kzh2|ipa|dory>\n";
         return 1;
     }
 
@@ -174,6 +174,8 @@ int main(int argc, char** argv)
         timings = run_transparent<bb::whir::WhirHonk<bb::whir::Poseidon2MerkleHasher>>(builder, timings);
     } else if (pcs == "whir-sky") {
         timings = run_transparent<bb::whir::WhirHonk<bb::whir::SkyscraperMerkleHasher>>(builder, timings);
+    } else if (pcs == "whir-sky-stacked") {
+        timings = run_transparent<bb::whir::WhirStackedHonk<bb::whir::SkyscraperMerkleHasher>>(builder, timings);
     } else if (pcs == "ligero") {
         timings = run_transparent<bb::ligero::LigeroHonk<bb::whir::Blake3sMerkleHasher>>(builder, timings);
     } else if (pcs == "hyrax") {

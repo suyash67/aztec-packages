@@ -45,6 +45,12 @@ struct WhirConfig {
     size_t final_poly_bits;     // lower bound on the clear final polynomial's log-size
     WhirSoundness soundness;
 
+    // Column stacking (README.md §4.1): concatenate a commitment group's columns into one taller
+    // array with narrow Merkle leaves, so a query costs 2^k values per group rather than 2^k per
+    // column. Shrinks the proof several-fold but widens the batched oracle from one column to the
+    // whole group, which costs proportionally more prover time. Off by default.
+    bool stack_columns = false;
+
     // Zero-knowledge mode (README.md §8): committed arrays gain one variable over the payload
     // (blinding coefficients live in the high half), leaves are salted, and the opening batches in a
     // fresh random mask polynomial.
@@ -163,9 +169,9 @@ struct WhirConfig {
      * variables would remain after folding; the rate improves by k-1 bits per iteration.
      * @param num_payload_variables log-size of the polynomials being opened; in zk mode the
      * committed arrays have one variable more (the blinded high half).
-     * @param max_stack_bits column-stacking headroom: a commitment group of up to 2^max_stack_bits
-     * columns is stacked into one taller array, so the protocol arrays carry this many variables
-     * over the payload.
+     * @param max_stack_bits column-stacking headroom: when non-zero, groups are stacked and a group
+     * of up to 2^max_stack_bits columns fits, so the protocol arrays carry this many variables over
+     * the payload. Zero (the default) keeps the one-codeword-per-column layout.
      */
     static WhirConfig create(size_t num_payload_variables,
                              size_t security_bits = 100,
@@ -188,6 +194,7 @@ struct WhirConfig {
                            .folding_factor_bits = folding_factor_bits,
                            .final_poly_bits = final_poly_bits,
                            .soundness = soundness,
+                           .stack_columns = max_stack_bits > 0,
                            .zk = zk,
                            .num_payload_variables = num_payload_variables,
                            .num_blinding_coefficients = 0,

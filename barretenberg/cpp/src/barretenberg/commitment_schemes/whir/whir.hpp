@@ -21,17 +21,28 @@ namespace bb::whir {
 
 /**
  * @brief Prover-side result of committing a group of polynomials ("columns") into one shared Merkle
- * tree (README.md §4.1, §10). The columns are stacked into one taller array — column j occupies
- * entries [j·2^m, (j+1)·2^m) — encoded as a single codeword and committed as one tree with narrow
- * (single-column) leaves. The commitment sent to the verifier is the single `tree.root()`.
+ * tree (README.md §4.1, §10). Two layouts, chosen by `WhirConfig::stack_columns`:
+ *
+ *  - *interleaved* (default): one codeword per column, leaf j holding every column's coset-j values.
+ *    The batched oracle stays the width of a single column, so the prover is fast; a query costs
+ *    `columns · 2^k` values per path.
+ *  - *stacked*: the columns are concatenated into one taller array (column j at offset j·2^m),
+ *    encoded as a single codeword with narrow single-column leaves. A query costs `2^k` values per
+ *    path regardless of the column count, but the batched oracle widens to the group's full size.
+ *
+ * The commitment sent to the verifier is the single `tree.root()` either way.
  */
 template <typename Hasher> struct WhirGroupData {
-    std::vector<fr> stacked; // the committed array: stacked payload columns (+ zk blinding half)
-    size_t columns = 0;      // payload columns before power-of-two padding
+    // One array per column when interleaved; exactly one (the stacked array) when stacked.
+    std::vector<std::vector<fr>> arrays;
+    size_t columns = 0; // logical payload columns, before any power-of-two stack padding
+    bool stacked = false;
     MerkleTree<Hasher> tree;
 
     size_t num_columns() const { return columns; }
-    size_t num_variables() const { return static_cast<size_t>(std::countr_zero(stacked.size())); }
+    /** @brief Columns per Merkle leaf: 1 when stacked, else one slot per column. */
+    size_t leaf_columns() const { return stacked ? 1 : columns; }
+    size_t num_variables() const { return static_cast<size_t>(std::countr_zero(arrays[0].size())); }
 };
 
 /** @brief Reference to one column of one committed group, shared by prover and verifier claims. */
@@ -64,13 +75,12 @@ template <typename Hasher> class WhirCommitmentKey {
     {}
 
     /**
-     * @brief Commit a group of payload columns (each of length <= 2^m) stacked into one tree:
-     * column j occupies entries [j·2^m, (j+1)·2^m) of a single array of 2^{m+s} entries,
-     * s = ⌈log₂ columns⌉ (missing columns are zero padding).
-     * @details In zk mode the committed array doubles: the stacked payload occupies the low half
-     * and `config.num_blinding_coefficients` fresh random coefficients occupy the high half
-     * (offset 2^{m+s}, or 2^{m+s} + 1 when the group holds to-be-shifted columns so the shift
-     * contract's zero slot is preserved), and the leaves are salted. See README.md §8.
+     * @brief Commit a group of payload columns (each of length <= 2^m) into one tree, in whichever
+     * layout `config.stack_columns` selects (see `WhirGroupData`).
+     * @details In zk mode the committed array(s) double: the payload occupies the low half and
+     * `config.num_blinding_coefficients` fresh random coefficients occupy the high half (just above
+     * the payload, offset by one more when the array is to-be-shifted so the shift contract's zero
+     * slot is preserved), and the leaves are salted. See README.md §8.
      *
      * @param payload_columns payload coefficient arrays; consumed
      * @param to_be_shifted per-column flag; empty means all false
@@ -82,6 +92,22 @@ template <typename Hasher> class WhirCommitmentKey {
                   "per-column shift flags must match the column count");
         const size_t payload_size = size_t(1) << config.num_payload_variables;
         const size_t num_columns = payload_columns.size();
+        for (const auto& column : payload_columns) {
+            BB_ASSERT_LTE(column.size(), payload_size, "polynomial too large for the configured size");
+        }
+
+        if (!config.stack_columns) {
+            std::vector<std::vector<fr>> dense;
+            dense.reserve(num_columns);
+            for (size_t c = 0; c < num_columns; ++c) {
+                std::vector<fr> column = std::move(payload_columns[c]);
+                column.resize(size_t(1) << config.num_variables, fr::zero());
+                add_blinding(column, config.num_payload_variables, !to_be_shifted.empty() && to_be_shifted[c]);
+                dense.push_back(std::move(column));
+            }
+            return commit_arrays(std::move(dense), num_columns, /*stacked=*/false);
+        }
+
         const size_t stack_bits = detail::ceil_log2(num_columns);
         const size_t stacked_payload_bits = config.num_payload_variables + stack_bits;
         BB_ASSERT_LTE(stacked_payload_bits + (config.zk ? 1 : 0),
@@ -91,7 +117,6 @@ template <typename Hasher> class WhirCommitmentKey {
         std::vector<fr> stacked(size_t(1) << (stacked_payload_bits + (config.zk ? 1 : 0)), fr::zero());
         bool any_shifted = false;
         for (size_t c = 0; c < num_columns; ++c) {
-            BB_ASSERT_LTE(payload_columns[c].size(), payload_size, "polynomial too large for the configured size");
             std::copy(payload_columns[c].begin(),
                       payload_columns[c].end(),
                       stacked.begin() + static_cast<std::ptrdiff_t>(c * payload_size));
@@ -102,13 +127,10 @@ template <typename Hasher> class WhirCommitmentKey {
             // the coefficient-shifted array only when the constant coefficient vanishes.
             BB_ASSERT_EQ(stacked[0], fr::zero(), "to-be-shifted group must have a zero constant term");
         }
-        if (config.zk) {
-            const size_t offset = (size_t(1) << stacked_payload_bits) + (any_shifted ? 1 : 0);
-            for (size_t i = 0; i < config.num_blinding_coefficients; ++i) {
-                stacked[offset + i] = fr::random_element();
-            }
-        }
-        return commit_stacked(std::move(stacked), num_columns);
+        add_blinding(stacked, stacked_payload_bits, any_shifted);
+        std::vector<std::vector<fr>> arrays;
+        arrays.push_back(std::move(stacked));
+        return commit_arrays(std::move(arrays), num_columns, /*stacked=*/true);
     }
 
     /** @brief Commit a group of Honk polynomials (virtual zeros outside their spans are honored). */
@@ -145,22 +167,45 @@ template <typename Hasher> class WhirCommitmentKey {
         for (fr& value : mask) {
             value = fr::random_element();
         }
-        return commit_stacked(std::move(mask), 1);
+        std::vector<std::vector<fr>> arrays;
+        arrays.push_back(std::move(mask));
+        return commit_arrays(std::move(arrays), 1, config.stack_columns);
     }
 
     WhirConfig config;
     mutable RSDomains domains;
 
   private:
-    /** @brief Encode a committed array on its own domain (rate `config.log_inv_rate`) and build
-     * its tree. Smaller-than-protocol arrays live on the correspondingly smaller domain. */
-    WhirGroupData<Hasher> commit_stacked(std::vector<fr> stacked, size_t num_columns) const
+    /**
+     * @brief Encode the committed arrays on their own domain (rate `config.log_inv_rate`) and build
+     * one tree over them. Arrays narrower than the protocol width live on a correspondingly smaller
+     * domain, which only arises when stacking.
+     */
+    WhirGroupData<Hasher> commit_arrays(std::vector<std::vector<fr>> arrays, size_t num_columns, bool stacked) const
     {
-        BB_ASSERT_EQ(stacked.size() & (stacked.size() - 1), size_t(0), "committed array must be a power of two");
-        const auto& domain = domains.get(stacked.size() << config.log_inv_rate);
-        std::vector<fr> codeword = rs_encode(stacked, domain, domains.round_roots());
-        MerkleTree<Hasher> tree(std::move(codeword), config.folding_factor_bits, /*salted=*/config.zk);
-        return { std::move(stacked), num_columns, std::move(tree) };
+        const size_t size = arrays.at(0).size();
+        BB_ASSERT_EQ(size & (size - 1), size_t(0), "committed array must be a power of two");
+        const auto& domain = domains.get(size << config.log_inv_rate);
+        std::vector<std::vector<fr>> codewords;
+        codewords.reserve(arrays.size());
+        for (const auto& array : arrays) {
+            BB_ASSERT_EQ(array.size(), size, "committed arrays must share one size");
+            codewords.push_back(rs_encode(array, domain, domains.round_roots()));
+        }
+        MerkleTree<Hasher> tree(std::move(codewords), config.folding_factor_bits, /*salted=*/config.zk);
+        return { std::move(arrays), num_columns, stacked, std::move(tree) };
+    }
+
+    /** @brief Fill the zk blinding coefficients just above a payload of `payload_bits` variables. */
+    void add_blinding(std::vector<fr>& array, size_t payload_bits, bool to_be_shifted) const
+    {
+        if (!config.zk) {
+            return;
+        }
+        const size_t offset = (size_t(1) << payload_bits) + (to_be_shifted ? 1 : 0);
+        for (size_t i = 0; i < config.num_blinding_coefficients; ++i) {
+            array[offset + i] = fr::random_element();
+        }
     }
 };
 
@@ -253,8 +298,12 @@ inline fr eq_at_corner(size_t index, std::span<const fr> tau)
  * @brief The deterministic reduction of per-column claims to per-constituent point claims on the
  * stacked arrays; derived identically by prover and verifier (README.md §10).
  *
- * Each commitment group contributes up to two "constituents" of the batched round-0 oracle: its
- * stacked array S, and — when the group carries to-be-shifted claims — the coefficient-shifted
+ * Interleaved (the default): every claimed column is its own constituent, at stride 0 and claimed
+ * at the single point u — so there is exactly one point, no cross evaluations, and one weight term,
+ * recovering the plain ρ-batched opening.
+ *
+ * Stacked: each commitment group contributes up to two constituents of the batched round-0 oracle:
+ * its stacked array S, and — when the group carries to-be-shifted claims — the coefficient-shifted
  * array T whose codeword is S's scaled by x^{-1}. A constituent of 2^s columns whose every stack
  * corner is claimed or known-zero carries one claim at the τ-reduced point (0^d, u, τ[0..s)); a
  * constituent with unclaimed non-zero corners carries one claim per claimed corner at
@@ -267,7 +316,8 @@ struct StackedPlan {
         fr value;     // the claimed evaluation of this constituent at that point
     };
     struct Constituent {
-        size_t tree; // round-0 tree index: the groups in order, then the zk mask
+        size_t tree;        // round-0 tree index: the groups in order, then the zk mask
+        size_t leaf_column; // slot within the tree's leaf: the column when interleaved, else 0
         bool shifted;
         size_t stride_bits; // d = P - (committed variables of the tree)
         std::vector<Claim> claims;
@@ -330,6 +380,30 @@ inline StackedPlan build_stacked_plan(const WhirConfig& config,
         return coords;
     };
 
+    if (!config.stack_columns) {
+        // One constituent per claimed column, all at the single point u (plus the zk 0 coordinate).
+        const size_t point = plan.add_point(make_point(0, {}));
+        for (const bool shifted : { false, true }) {
+            const auto& refs = shifted ? to_be_shifted : unshifted;
+            const auto& evaluations = shifted ? shifted_evaluations : unshifted_evaluations;
+            for (size_t j = 0; j < refs.size(); ++j) {
+                plan.constituents.push_back({ .tree = refs[j].group,
+                                              .leaf_column = refs[j].column,
+                                              .shifted = shifted,
+                                              .stride_bits = 0,
+                                              .claims = { { point, evaluations[j] } } });
+            }
+        }
+        if (config.zk) {
+            plan.constituents.push_back({ .tree = num_groups,
+                                          .leaf_column = 0,
+                                          .shifted = false,
+                                          .stride_bits = 0,
+                                          .claims = { { point, fr::zero() } } });
+        }
+        return plan;
+    }
+
     for (size_t g = 0; g < num_groups; ++g) {
         const size_t columns = group_num_columns[g];
         const size_t stack_bits = ceil_log2(columns);
@@ -358,7 +432,7 @@ inline StackedPlan build_stacked_plan(const WhirConfig& config,
                 all_corners_known = all_corners_known && corner_claims[j].has_value();
             }
             StackedPlan::Constituent constituent{
-                .tree = g, .shifted = shifted, .stride_bits = stride_bits, .claims = {}
+                .tree = g, .leaf_column = 0, .shifted = shifted, .stride_bits = stride_bits, .claims = {}
             };
             if (all_corners_known) {
                 const auto tau_slice = taus.subspan(0, stack_bits);
@@ -385,6 +459,7 @@ inline StackedPlan build_stacked_plan(const WhirConfig& config,
     }
     if (config.zk) {
         plan.constituents.push_back({ .tree = num_groups,
+                                      .leaf_column = 0,
                                       .shifted = false,
                                       .stride_bits = 0,
                                       .claims = { { plan.add_point(make_point(0, taus)), fr::zero() } } });
@@ -471,13 +546,14 @@ template <typename Hasher> class WhirProver {
         std::vector<std::span<const fr>> constituent_arrays;
         std::deque<std::vector<fr>> shifted_storage;
         for (const auto& constituent : plan.constituents) {
-            const std::vector<fr>& stacked = groups[constituent.tree]->stacked;
+            const WhirGroupData<Hasher>& group = *groups[constituent.tree];
+            const std::vector<fr>& base = group.arrays[group.stacked ? 0 : constituent.leaf_column];
             if (!constituent.shifted) {
-                constituent_arrays.emplace_back(stacked);
+                constituent_arrays.emplace_back(base);
                 continue;
             }
-            BB_ASSERT_EQ(stacked[0], fr::zero(), "to-be-shifted group must have zero constant term");
-            std::vector<fr> shifted(stacked.begin() + 1, stacked.end());
+            BB_ASSERT_EQ(base[0], fr::zero(), "to-be-shifted array must have zero constant term");
+            std::vector<fr> shifted(base.begin() + 1, base.end());
             shifted.push_back(fr::zero());
             shifted_storage.push_back(std::move(shifted));
             constituent_arrays.emplace_back(shifted_storage.back());
@@ -658,9 +734,10 @@ template <typename Hasher> class WhirVerifier {
         std::vector<Digest> group_roots;
     };
 
-    /** @brief One constituent's round-0 opening contribution: scalar ρᶜ, stride, and shift flag. */
+    /** @brief One constituent's round-0 opening contribution: leaf slot, scalar ρᶜ, stride, shift. */
     struct Contribution {
         size_t tree;
+        size_t leaf_column;
         fr scalar;
         bool shifted;
         size_t stride_bits;
@@ -737,6 +814,7 @@ template <typename Hasher> class WhirVerifier {
         for (size_t c = 0; c < plan.constituents.size(); ++c) {
             rho_powers[c] = rho_power;
             contributions.push_back({ plan.constituents[c].tree,
+                                      plan.constituents[c].leaf_column,
                                       rho_power,
                                       plan.constituents[c].shifted,
                                       plan.constituents[c].stride_bits });
@@ -755,13 +833,19 @@ template <typename Hasher> class WhirVerifier {
             gamma_power *= gamma_claims;
         }
 
-        // Committed variable counts of the round-0 trees, for leaf-index reduction.
+        // Per-tree leaf layout: committed variable count (for leaf-index reduction) and how many
+        // columns each leaf carries. Interleaved trees are full width with one slot per column.
         std::vector<size_t> tree_variables;
+        std::vector<size_t> tree_leaf_columns;
         for (const size_t columns : group_columns) {
-            tree_variables.push_back(config.num_payload_variables + detail::ceil_log2(columns) + (config.zk ? 1 : 0));
+            tree_variables.push_back(config.stack_columns ? config.num_payload_variables + detail::ceil_log2(columns) +
+                                                                (config.zk ? 1 : 0)
+                                                          : config.num_variables);
+            tree_leaf_columns.push_back(config.stack_columns ? 1 : columns);
         }
         if (config.zk) {
             tree_variables.push_back(config.num_variables); // the full-width mask
+            tree_leaf_columns.push_back(1);
         }
 
         std::optional<Digest> folded_root; // the g_i oracle once i >= 1
@@ -811,6 +895,8 @@ template <typename Hasher> class WhirVerifier {
                                                config,
                                                roots,
                                                tree_variables,
+
+                                               tree_leaf_columns,
                                                contributions,
                                                indices[s],
                                                index_bits,
@@ -860,6 +946,8 @@ template <typename Hasher> class WhirVerifier {
                                                        config,
                                                        roots,
                                                        tree_variables,
+
+                                                       tree_leaf_columns,
                                                        contributions,
                                                        idx,
                                                        index_bits,
@@ -921,6 +1009,7 @@ template <typename Hasher> class WhirVerifier {
                                      const WhirConfig& config,
                                      const std::vector<Digest>& roots,
                                      const std::vector<size_t>& tree_variables,
+                                     const std::vector<size_t>& tree_leaf_columns,
                                      const std::vector<Contribution>& contributions,
                                      size_t idx,
                                      size_t index_bits,
@@ -936,7 +1025,7 @@ template <typename Hasher> class WhirVerifier {
         for (size_t g = 0; g < roots.size(); ++g) {
             tree_index_bits[g] = tree_variables[g] + config.log_inv_rate - k;
             BB_ASSERT_LTE(tree_index_bits[g], index_bits, "tree larger than the round-0 oracle");
-            openings.push_back(read_opening(transcript, 1, arity, tree_index_bits[g], config.zk));
+            openings.push_back(read_opening(transcript, tree_leaf_columns[g], arity, tree_index_bits[g], config.zk));
             if (!Tree::verify(roots[g], idx & ((size_t(1) << tree_index_bits[g]) - 1), openings.back())) {
                 return false;
             }
@@ -959,8 +1048,10 @@ template <typename Hasher> class WhirVerifier {
             const std::vector<fr>& values = openings[contribution.tree].values;
             const size_t stride_bits = contribution.stride_bits;
             const size_t slot_base = idx >> tree_index_bits[contribution.tree];
+            const size_t column_offset = contribution.leaf_column * arity;
             for (size_t t = 0; t < arity; ++t) {
-                fr value = contribution.scalar * values[(slot_base + (t << stride_bits)) & (arity - 1)];
+                fr value =
+                    contribution.scalar * values[column_offset + ((slot_base + (t << stride_bits)) & (arity - 1))];
                 if (contribution.shifted) {
                     // (x_t^{2^d})^{-1} by d squarings of the coset point's inverse.
                     fr y_inv = x_inverses[t];

@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 REPS="${1:-5}"
-BACKENDS=(kzg mercury whir whir-p2 whir-sky ligero hyrax kzh2 ipa dory)
+BACKENDS=(kzg mercury whir whir-p2 whir-sky whir-sky-stacked ligero hyrax kzh2 ipa dory)
 BUILD_DIR="${BUILD_DIR:-$(cd ../../../.. && pwd)/build-arm64}"
 BENCH_BIN="$BUILD_DIR/bin/pcs_acir_bench"
 WORK_DIR="$PWD/workdir"
