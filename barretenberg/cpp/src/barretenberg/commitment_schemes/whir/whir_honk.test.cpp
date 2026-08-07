@@ -169,14 +169,96 @@ TEST(WhirProveKitFlavorTest, ProveAndVerifyWithFewerFieldsThanUltra)
     EXPECT_TRUE(WhirHonk<Hasher>::verify(ultra_pk.vk, config, ultra_proof));
 
     // The dropped selectors were identically zero, so UltraFlavor already left them uncommitted:
-    // both flavors open the same set of columns, and the difference is the shorter round
-    // polynomials plus the four claimed evaluations the reduced flavor no longer sends.
+    // both flavors open the same set of columns, and the saving is the shorter sumcheck round
+    // polynomials plus the four claimed evaluations the reduced flavor no longer sends — not fewer
+    // commitments. (That saving is not readable off the total proof lengths: the flavors' sumcheck
+    // messages differ, so the query indices do too, and batched Merkle openings cost a number of
+    // digests that depends on them.)
     EXPECT_EQ(reduced_vk.num_committed_precomputed(), ultra_pk.vk.num_committed_precomputed());
-    EXPECT_EQ(ultra_proof.size() - reduced_proof.size(), log_n + 4);
 
     HonkProof tampered = reduced_proof;
     tampered[tampered.size() / 2] += fr(1);
     EXPECT_FALSE(ReducedHonk::verify(reduced_vk, config, tampered));
+}
+
+/**
+ * @brief Narrowing the first fold to 2 proves, verifies, and shrinks the proof several-fold.
+ * @details Round-0 queries are the only ones that open the wide commitment, and each reveals
+ * 2^{k₀} values of every committed column. Dropping k₀ from 3 to 1 quarters that term while the
+ * later single-column rounds keep folding by 8, so the proof must come out substantially smaller
+ * and still verify — and a tampered one must still fail.
+ */
+TEST(WhirNarrowHonkTest, NarrowFirstFoldIsSmallerAndStillSound)
+{
+    using Hasher = SkyscraperMerkleHasher;
+    using Wide = honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, 3>>;
+    using Narrow = honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, 3, 1>>;
+
+    UltraCircuitBuilder sizing_builder = build_test_circuit();
+    const size_t log_n = ProverInstance_<UltraFlavor>(sizing_builder).log_dyadic_size();
+
+    UltraCircuitBuilder wide_builder = build_test_circuit();
+    const auto wide_config = Wide::make_config(log_n, /*security_bits=*/64);
+    auto wide_pk = Wide::create_proving_key(wide_builder, wide_config);
+    const auto wide_vk = wide_pk.vk;
+    const HonkProof wide_proof = Wide::prove(wide_pk);
+    EXPECT_TRUE(Wide::verify(wide_vk, wide_config, wide_proof));
+
+    UltraCircuitBuilder narrow_builder = build_test_circuit();
+    const auto narrow_config = Narrow::make_config(log_n, /*security_bits=*/64);
+    auto narrow_pk = Narrow::create_proving_key(narrow_builder, narrow_config);
+    const auto narrow_vk = narrow_pk.vk;
+    const HonkProof narrow_proof = Narrow::prove(narrow_pk);
+    EXPECT_TRUE(Narrow::verify(narrow_vk, narrow_config, narrow_proof));
+
+    // Round-0 leaf values drop to a quarter; the deeper trees give some of it back in path
+    // digests, so the whole proof lands under 60% at this size and lower still as the circuit grows.
+    EXPECT_LT(narrow_proof.size() * 5, wide_proof.size() * 3);
+
+    HonkProof tampered = narrow_proof;
+    tampered[tampered.size() / 2] += fr(1);
+    EXPECT_FALSE(Narrow::verify(narrow_vk, narrow_config, tampered));
+
+    // A proof made under one schedule must not verify under the other: the folding factors are
+    // derived, not transcribed, so a mismatch has to surface as a failed check.
+    EXPECT_FALSE(Narrow::verify(narrow_vk, wide_config, narrow_proof));
+}
+
+/**
+ * @brief Grinding shrinks the proof further and its nonces are checked, not decorative.
+ * @details The query counts drop because 20 of the 64 bits come from proof of work, so the proof
+ * must be smaller than the same schedule without it — and a proof whose nonces were ground for 20
+ * bits must fail against a verifier expecting more work.
+ */
+TEST(WhirNarrowHonkTest, GrindingShrinksTheProofAndIsEnforced)
+{
+    using Hasher = SkyscraperMerkleHasher;
+    using Plain = honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, 3, 1>>;
+    using Ground = honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, 3, 1, 20>>;
+
+    UltraCircuitBuilder sizing_builder = build_test_circuit();
+    const size_t log_n = ProverInstance_<UltraFlavor>(sizing_builder).log_dyadic_size();
+
+    UltraCircuitBuilder plain_builder = build_test_circuit();
+    const auto plain_config = Plain::make_config(log_n, /*security_bits=*/64);
+    auto plain_pk = Plain::create_proving_key(plain_builder, plain_config);
+    const HonkProof plain_proof = Plain::prove(plain_pk);
+    EXPECT_TRUE(Plain::verify(plain_pk.vk, plain_config, plain_proof));
+
+    UltraCircuitBuilder ground_builder = build_test_circuit();
+    const auto ground_config = Ground::make_config(log_n, /*security_bits=*/64);
+    auto ground_pk = Ground::create_proving_key(ground_builder, ground_config);
+    const auto ground_vk = ground_pk.vk;
+    const HonkProof ground_proof = Ground::prove(ground_pk);
+    EXPECT_TRUE(Ground::verify(ground_vk, ground_config, ground_proof));
+
+    EXPECT_LT(ground_proof.size(), plain_proof.size());
+
+    // Demanding more work than the prover did must be rejected, even though every other check in
+    // the proof still passes.
+    WhirConfig stricter = ground_config;
+    stricter.pow_bits = 30;
+    EXPECT_FALSE(Ground::verify(ground_vk, stricter, ground_proof));
 }
 
 /**

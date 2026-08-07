@@ -35,12 +35,15 @@ static constexpr uint64_t JOHNSON_SLACK_INV_NUMERATOR = 20;
 /**
  * @brief Per-iteration schedule entry. `num_variables`/`log_domain_size` describe the oracle the
  * iteration starts from; `num_queries` is the number of in-domain queries made against it.
+ * @details `folding_factor_bits` is the fold applied in this iteration, and hence also the leaf
+ * arity of the oracle the iteration queries: a query must open the whole fold coset in one leaf.
  */
 struct WhirRound {
     size_t num_variables;
     size_t log_domain_size;
     size_t log_inv_rate;
     size_t num_queries;
+    size_t folding_factor_bits;
 };
 
 /**
@@ -52,9 +55,22 @@ struct WhirConfig {
     size_t num_variables;       // committed arrays have 2^num_variables coefficients
     size_t security_bits;       // λ
     size_t log_inv_rate;        // r₀: initial codeword length is 2^{num_variables + r₀}
-    size_t folding_factor_bits; // k: each iteration folds 2^k
+    size_t folding_factor_bits; // k: every iteration after the first folds 2^k
     size_t final_poly_bits;     // lower bound on the clear final polynomial's log-size
     WhirSoundness soundness;
+
+    // k₀, the first iteration's fold, and hence the leaf arity of the committed oracles: a round-0
+    // query reveals 2^{k₀} values *per committed column*, so on a wide commitment (transparent Honk
+    // opens ~30 columns at once) this is the dominant term of the whole proof. Splitting it from k
+    // buys a proportional cut there while leaving the later, single-column rounds free to fold
+    // faster. The reference implementation calls it `initial_folding_factor`.
+    size_t initial_folding_factor_bits;
+
+    // Bits of proof of work the prover grinds out before each round's query indices are drawn.
+    // Forging a round means re-grinding, so the work replaces query soundness one bit for one bit
+    // and the query counts are derived at `security_bits - pow_bits`. The reference implementation
+    // and ProveKit both take 10 bits this way; zero here means every bit comes from queries.
+    size_t pow_bits = 0;
     // Out-of-domain samples taken against every committed oracle, the initial one included
     // (README.md §4.2, §6). Zero in unique decoding, where the list holds a single codeword.
     size_t num_ood_samples = 1;
@@ -75,8 +91,14 @@ struct WhirConfig {
     std::vector<WhirRound> rounds; // the M fold-and-commit iterations
     WhirRound final_round;         // query schedule for the final clear-polynomial phase
 
-    size_t folding_factor() const { return size_t(1) << folding_factor_bits; }
     size_t num_iterations() const { return rounds.size(); }
+
+    /** @brief Leaf arity of the oracle committed at the end of iteration `i` (the one iteration
+     * i+1, or the final round, queries). */
+    size_t committed_arity_bits(size_t i) const
+    {
+        return i + 1 < rounds.size() ? rounds[i + 1].folding_factor_bits : final_round.folding_factor_bits;
+    }
 
     /**
      * @brief -log₂(x) of a Q192 fixed-point value x ∈ (0, 1), returned in Q64 fixed point.
@@ -231,6 +253,7 @@ struct WhirConfig {
      * @param max_stack_bits column-stacking headroom: when non-zero, groups are stacked and a group
      * of up to 2^max_stack_bits columns fits, so the protocol arrays carry this many variables over
      * the payload. Zero (the default) keeps the one-codeword-per-column layout.
+     * @param initial_folding_factor_bits k₀, the first iteration's fold; zero means "same as k".
      */
     static WhirConfig create(size_t num_payload_variables,
                              size_t security_bits = 100,
@@ -239,11 +262,17 @@ struct WhirConfig {
                              size_t final_poly_bits = 4,
                              WhirSoundness soundness = WhirSoundness::CONJECTURED_LIST,
                              bool zk = false,
-                             size_t max_stack_bits = 0)
+                             size_t max_stack_bits = 0,
+                             size_t initial_folding_factor_bits = 0,
+                             size_t pow_bits = 0)
     {
         const size_t num_variables = num_payload_variables + max_stack_bits + (zk ? 1 : 0);
+        const size_t k0 = initial_folding_factor_bits == 0 ? folding_factor_bits : initial_folding_factor_bits;
+        // Grinding supplies `pow_bits` of each round's soundness; the queries supply the rest.
+        BB_ASSERT_LT(pow_bits, security_bits, "proof of work cannot cover the whole security level");
+        const size_t query_bits = security_bits - pow_bits;
         BB_ASSERT_GT(folding_factor_bits, size_t(0));
-        BB_ASSERT_GTE(num_variables, folding_factor_bits, "polynomial too small for one fold");
+        BB_ASSERT_GTE(num_variables, std::max(folding_factor_bits, k0), "polynomial too small for one fold");
         // BN254 Fr has 2-adicity 28; the initial codeword domain must be a power-of-two subgroup.
         BB_ASSERT_LTE(num_variables + log_inv_rate, size_t(28), "initial domain exceeds field 2-adicity");
 
@@ -253,6 +282,8 @@ struct WhirConfig {
                            .folding_factor_bits = folding_factor_bits,
                            .final_poly_bits = final_poly_bits,
                            .soundness = soundness,
+                           .initial_folding_factor_bits = k0,
+                           .pow_bits = pow_bits,
                            .stack_columns = max_stack_bits > 0,
                            .zk = zk,
                            .num_payload_variables = num_payload_variables,
@@ -262,29 +293,37 @@ struct WhirConfig {
 
         size_t vars = num_variables;
         size_t log_domain = num_variables + log_inv_rate;
-        while (vars >= folding_factor_bits && (vars - folding_factor_bits) >= final_poly_bits) {
+        for (size_t i = 0;; ++i) {
+            const size_t k = i == 0 ? k0 : folding_factor_bits;
+            if (vars < k || (vars - k) < final_poly_bits) {
+                break;
+            }
             const size_t rate_bits = log_domain - vars;
             config.rounds.push_back({ .num_variables = vars,
                                       .log_domain_size = log_domain,
                                       .log_inv_rate = rate_bits,
-                                      .num_queries = compute_num_queries(security_bits, rate_bits, soundness) });
-            vars -= folding_factor_bits;
+                                      .num_queries = compute_num_queries(query_bits, rate_bits, soundness),
+                                      .folding_factor_bits = k });
+            vars -= k;
             log_domain -= 1;
             // Leaves of the next oracle group 2^k values; its domain must be large enough.
             BB_ASSERT_GTE(log_domain, folding_factor_bits, "domain too small for leaf grouping");
         }
         const size_t final_rate_bits = log_domain - vars;
+        // The final round queries the last committed oracle, whose leaves already group 2^k values -
+        // except when no iteration ran at all, where the round-0 commitment's k₀ leaves apply.
         config.final_round = { .num_variables = vars,
                                .log_domain_size = log_domain,
                                .log_inv_rate = final_rate_bits,
-                               .num_queries = compute_num_queries(security_bits, final_rate_bits, soundness) };
+                               .num_queries = compute_num_queries(query_bits, final_rate_bits, soundness),
+                               .folding_factor_bits = config.rounds.empty() ? k0 : folding_factor_bits };
 
         // One sample count covers every commitment: the initial oracle and each iteration's folded
         // oracle, taking the worst case over the schedule.
         config.num_ood_samples = compute_num_ood_samples(security_bits, log_inv_rate, num_variables, soundness);
         for (const WhirRound& round : config.rounds) {
-            const size_t folded_variables = round.num_variables - folding_factor_bits;
-            const size_t folded_rate_bits = round.log_inv_rate + folding_factor_bits - 1;
+            const size_t folded_variables = round.num_variables - round.folding_factor_bits;
+            const size_t folded_rate_bits = round.log_inv_rate + round.folding_factor_bits - 1;
             config.num_ood_samples =
                 std::max(config.num_ood_samples,
                          compute_num_ood_samples(security_bits, folded_rate_bits, folded_variables, soundness));
@@ -296,10 +335,13 @@ struct WhirConfig {
             const size_t round0_queries =
                 config.rounds.empty() ? config.final_round.num_queries : config.rounds[0].num_queries;
             config.num_blinding_coefficients = round0_queries + 8;
-            // Blinding lives in the committed array's high half, above the (stacked) payload and
-            // the shift contract's zero slot, so it never collides with either.
+            // Blinding lives above the payload and the shift contract's zero slot, so it never
+            // collides with either. The room there is 2^num_payload_variables in both layouts: an
+            // interleaved column is 2^num_variables wide over a 2^m payload, and the narrowest
+            // stacked group (one column) is 2^{m+1} wide over the same payload. Sizing this against
+            // the committed width instead would overrun exactly those narrow stacked groups.
             BB_ASSERT_LT(config.num_blinding_coefficients + 1,
-                         size_t(1) << (num_variables - 1),
+                         size_t(1) << num_payload_variables,
                          "blinding coefficients do not fit above the payload");
         }
         return config;

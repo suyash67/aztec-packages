@@ -5,11 +5,13 @@
 #include "barretenberg/commitment_schemes/whir/weights.hpp"
 #include "barretenberg/commitment_schemes/whir/whir_config.hpp"
 #include "barretenberg/common/assert.hpp"
+#include "barretenberg/common/log.hpp"
 #include "barretenberg/common/thread.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
 #include "barretenberg/polynomials/polynomial_arithmetic.hpp"
 
 #include <bit>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -49,6 +51,83 @@ template <typename Hasher> struct WhirGroupData {
 struct WhirColumnRef {
     size_t group;
     size_t column;
+};
+
+/**
+ * @brief Attributes the field elements the opening writes to the proof stream to named categories.
+ * @details Enabled by setting WHIR_PROOF_BREAKDOWN in the environment; a no-op otherwise. Each
+ * category is charged the growth of the proof between two samples of the transcript's length, so the
+ * tally is the proof itself rather than a model of it.
+ */
+class WhirProofAccounting {
+  public:
+    static bool enabled()
+    {
+        static const bool on = std::getenv("WHIR_PROOF_BREAKDOWN") != nullptr;
+        return on;
+    }
+
+    template <typename Transcript>
+    explicit WhirProofAccounting(const std::shared_ptr<Transcript>& transcript)
+        : size_at_mark_(transcript->get_proof_size())
+    {}
+
+    /** @brief Charge everything written since the last mark to `category`. */
+    template <typename Transcript> void mark(const std::shared_ptr<Transcript>& transcript, const std::string& category)
+    {
+        const size_t size = transcript->get_proof_size();
+        add(category, size - size_at_mark_);
+        size_at_mark_ = size;
+    }
+
+    /** @brief Charge `count` field elements to `category` directly, for a hand-split write. */
+    void add(const std::string& category, size_t count)
+    {
+        if (!enabled()) {
+            return;
+        }
+        for (auto& [name, tally] : categories_) {
+            if (name == category) {
+                tally += count;
+                return;
+            }
+        }
+        categories_.emplace_back(category, count);
+    }
+
+    /** @brief Discard the pending span, for writes already charged through `add`. */
+    template <typename Transcript> void sync(const std::shared_ptr<Transcript>& transcript)
+    {
+        size_at_mark_ = transcript->get_proof_size();
+    }
+
+    void report() const
+    {
+        if (!enabled()) {
+            return;
+        }
+        size_t total = 0;
+        for (const auto& [name, count] : categories_) {
+            total += count;
+        }
+        info("WHIR proof breakdown (field elements, 32 bytes each):");
+        for (const auto& [name, count] : categories_) {
+            info("  ",
+                 name,
+                 std::string(std::max<size_t>(1, 22 - std::min<size_t>(21, name.size())), ' '),
+                 count,
+                 "\t",
+                 count * 32,
+                 " B\t",
+                 total == 0 ? 0 : (100 * count) / total,
+                 "%");
+        }
+        info("  WHIR opening total     ", total, "\t", total * 32, " B");
+    }
+
+  private:
+    size_t size_at_mark_;
+    std::vector<std::pair<std::string, size_t>> categories_;
 };
 
 namespace detail {
@@ -192,7 +271,7 @@ template <typename Hasher> class WhirCommitmentKey {
             BB_ASSERT_EQ(array.size(), size, "committed arrays must share one size");
             codewords.push_back(rs_encode(array, domain, domains.round_roots()));
         }
-        MerkleTree<Hasher> tree(std::move(codewords), config.folding_factor_bits, /*salted=*/config.zk);
+        MerkleTree<Hasher> tree(std::move(codewords), config.initial_folding_factor_bits, /*salted=*/config.zk);
         return { std::move(arrays), num_columns, stacked, std::move(tree) };
     }
 
@@ -203,6 +282,7 @@ template <typename Hasher> class WhirCommitmentKey {
             return;
         }
         const size_t offset = (size_t(1) << payload_bits) + (to_be_shifted ? 1 : 0);
+        BB_ASSERT_LTE(offset + config.num_blinding_coefficients, array.size(), "blinding overruns the array");
         for (size_t i = 0; i < config.num_blinding_coefficients; ++i) {
             array[offset + i] = fr::random_element();
         }
@@ -262,6 +342,70 @@ inline std::array<fr, 3> sumcheck_round_univariate(std::span<const fr> f, std::s
 inline size_t index_from_challenge(const fr& challenge, size_t index_bits)
 {
     return static_cast<size_t>(uint256_t(challenge).data[0] & ((uint64_t(1) << index_bits) - 1));
+}
+
+/**
+ * @brief Does `nonce` satisfy the round's proof of work against `seed`?
+ * @details Blake3 of the seed's canonical limbs followed by the little-endian nonce, accepted when
+ * the leading `pow_bits` bits of the digest are zero. Blake3 rather than the transcript's Poseidon2
+ * because the prover runs this 2^{pow_bits} times: the search has to be cheap for the honest party
+ * and is the same work for a dishonest one.
+ */
+inline bool pow_is_valid(const fr& seed, uint64_t nonce, size_t pow_bits)
+{
+    if (pow_bits == 0) {
+        return true;
+    }
+    BB_ASSERT_LT(pow_bits, size_t(64), "proof of work is capped at 63 bits");
+    std::array<uint8_t, 40> input{};
+    const uint256_t limbs = uint256_t(seed);
+    for (size_t l = 0; l < 4; ++l) {
+        for (size_t b = 0; b < 8; ++b) {
+            input[l * 8 + b] = static_cast<uint8_t>(limbs.data[l] >> (8 * b));
+        }
+    }
+    for (size_t b = 0; b < 8; ++b) {
+        input[32 + b] = static_cast<uint8_t>(nonce >> (8 * b));
+    }
+    const std::array<uint8_t, 32> digest = blake3::blake3s_constexpr(input.data(), input.size());
+    uint64_t leading = 0;
+    for (size_t b = 0; b < 8; ++b) {
+        leading = (leading << 8) | digest[b];
+    }
+    return (leading >> (64 - pow_bits)) == 0;
+}
+
+/**
+ * @brief The least nonce satisfying `pow_is_valid`; the prover's side of the grind.
+ * @details Threads take disjoint contiguous chunks of one block at a time and the block's smallest
+ * winner is returned, so the nonce is the same whatever the thread count — proving twice gives the
+ * same proof.
+ */
+inline uint64_t grind(const fr& seed, size_t pow_bits)
+{
+    if (pow_bits == 0) {
+        return 0;
+    }
+    constexpr uint64_t chunk = 1024;
+    constexpr uint64_t no_winner = std::numeric_limits<uint64_t>::max();
+    const size_t num_threads = std::max<size_t>(1, get_num_cpus());
+    std::vector<uint64_t> found(num_threads);
+    for (uint64_t base = 0;; base += chunk * num_threads) {
+        std::fill(found.begin(), found.end(), no_winner);
+        parallel_for(num_threads, [&](size_t t) {
+            const uint64_t start = base + chunk * t;
+            for (uint64_t nonce = start; nonce < start + chunk; ++nonce) {
+                if (pow_is_valid(seed, nonce, pow_bits)) {
+                    found[t] = nonce;
+                    return;
+                }
+            }
+        });
+        const uint64_t nonce = *std::min_element(found.begin(), found.end());
+        if (nonce != no_winner) {
+            return nonce;
+        }
+    }
 }
 
 /**
@@ -512,11 +656,12 @@ template <typename Hasher> class WhirProver {
                       const std::shared_ptr<Transcript>& transcript)
     {
         const WhirConfig& config = ck.config;
-        const size_t k = config.folding_factor_bits;
         const size_t n = size_t(1) << config.num_variables;
         BB_ASSERT_EQ(u.size(), config.num_payload_variables, "opening point size mismatch");
         BB_ASSERT_EQ(claims.unshifted.size(), claims.unshifted_evaluations.size());
         BB_ASSERT_EQ(claims.to_be_shifted.size(), claims.shifted_evaluations.size());
+
+        WhirProofAccounting acct(transcript);
 
         if (claims.send_roots) {
             for (size_t g = 0; g < claims.groups.size(); ++g) {
@@ -524,6 +669,7 @@ template <typename Hasher> class WhirProver {
                                              Hasher::digest_to_fields(claims.groups[g]->tree.root()));
             }
         }
+        acct.mark(transcript, "group roots");
 
         // zk: commit a uniformly random mask polynomial and reveal its (independent, uniform)
         // claimed evaluation; batched into F below, it makes every post-ρ message witness-independent.
@@ -600,6 +746,7 @@ template <typename Hasher> class WhirProver {
                 }
             }
         }
+        acct.mark(transcript, "cross evaluations");
 
         // Out-of-domain samples against the round-0 commitments (README.md §4.2). In any
         // list-decoding regime a committed word can be close to several codewords; answering at a
@@ -616,6 +763,7 @@ template <typename Hasher> class WhirProver {
                                                                                   plan.constituents[c].stride_bits));
             }
         }
+        acct.mark(transcript, "initial OOD answers");
 
         const fr rho = transcript->template get_challenge<fr>("WHIR:rho");
         const fr gamma_claims = transcript->template get_challenge<fr>("WHIR:gamma_claims");
@@ -651,20 +799,22 @@ template <typename Hasher> class WhirProver {
         std::vector<fr> current = std::move(batched);
         std::deque<Tree> folded_trees; // owns the trees committed during the proof
 
-        // Openings of the current oracle at a query index: all round-0 trees (each at the index
-        // reduced to its own leaf count), or the last folded tree.
-        auto send_query_openings = [&](size_t idx) {
+        // Openings of the current oracle at a round's whole query set: all round-0 trees (each at the
+        // indices reduced to its own leaf count), or the last folded tree. One batch per tree, so
+        // the queries share every path node they have in common.
+        auto send_query_openings = [&](std::span<const size_t> indices, const std::string& category) {
             if (folded_trees.empty()) {
                 for (const WhirGroupData<Hasher>* group : groups) {
-                    send_opening(transcript, group->tree.open(idx & (group->tree.num_leaves() - 1)));
+                    send_batch_opening(transcript, group->tree, reduce_indices(indices, group->tree), acct, category);
                 }
             } else {
-                send_opening(transcript, folded_trees.back().open(idx));
+                send_batch_opening(transcript, folded_trees.back(), indices, acct, category);
             }
         };
 
         for (size_t i = 0; i < config.rounds.size(); ++i) {
             const WhirRound& round = config.rounds[i];
+            const size_t k = round.folding_factor_bits;
 
             // 1. k sumcheck rounds; array and weight table fold at each challenge.
             for (size_t j = 0; j < k; ++j) {
@@ -674,36 +824,41 @@ template <typename Hasher> class WhirProver {
                 fold_array_in_place(current, alpha);
                 fold_array_in_place(weight_table, alpha);
             }
+            acct.mark(transcript, "sumcheck univariates");
 
             // 2. Commit the folded polynomial on the halved domain.
             const auto& next_domain = ck.domains.get(size_t(1) << (round.log_domain_size - 1));
             std::vector<fr> codeword = rs_encode(current, next_domain, ck.domains.round_roots());
-            folded_trees.emplace_back(std::move(codeword), k, /*salted=*/false);
+            folded_trees.emplace_back(std::move(codeword), config.committed_arity_bits(i), /*salted=*/false);
             transcript->send_to_verifier(detail::whir_label("root_g", i + 1),
                                          Hasher::digest_to_fields(folded_trees.back().root()));
+            acct.mark(transcript, "folded-oracle roots");
 
             // 3. Out-of-domain sample.
             const fr z_ood = transcript->template get_challenge<fr>(detail::whir_label("z_ood", i));
             const fr y_ood = polynomial_arithmetic::evaluate(current.data(), z_ood, current.size());
             transcript->send_to_verifier(detail::whir_label("y_ood", i), y_ood);
+            acct.mark(transcript, "per-round OOD answers");
 
             // 4. In-domain queries against the round-i oracle. Note the openings are needed for step
             // 2 of the NEXT iteration's committed tree only when i = 0... they always target the
             // previous oracle, so they are emitted before the trees rotate below.
             const size_t index_bits = round.log_domain_size - k;
+            // Grind before the indices are drawn: forging this round means redoing the work.
+            const fr pow_seed = transcript->template get_challenge<fr>(detail::whir_label("pow", i));
+            transcript->send_to_verifier(detail::whir_label("nonce", i), fr(detail::grind(pow_seed, config.pow_bits)));
             std::vector<size_t> indices(round.num_queries);
             for (size_t s = 0; s < round.num_queries; ++s) {
                 const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("query", i, s));
                 indices[s] = detail::index_from_challenge(challenge, index_bits);
             }
-            const bool query_folded_oracle = (i > 0);
-            for (size_t s = 0; s < round.num_queries; ++s) {
-                if (query_folded_oracle) {
-                    send_opening(transcript, folded_trees[i - 1].open(indices[s]));
-                } else {
-                    for (const WhirGroupData<Hasher>* group : groups) {
-                        send_opening(transcript, group->tree.open(indices[s] & (group->tree.num_leaves() - 1)));
-                    }
+            acct.mark(transcript, "grinding nonces");
+            if (i > 0) {
+                send_batch_opening(transcript, folded_trees[i - 1], indices, acct, "folded-round queries");
+            } else {
+                for (const WhirGroupData<Hasher>* group : groups) {
+                    send_batch_opening(
+                        transcript, group->tree, reduce_indices(indices, group->tree), acct, "round-0 queries");
                 }
             }
 
@@ -724,28 +879,100 @@ template <typename Hasher> class WhirProver {
         for (size_t j = 0; j < current.size(); ++j) {
             transcript->send_to_verifier(detail::whir_label("final", j), current[j]);
         }
-        const size_t index_bits = config.final_round.log_domain_size - k;
+        acct.mark(transcript, "final polynomial");
+        const size_t index_bits = config.final_round.log_domain_size - config.final_round.folding_factor_bits;
+        const fr final_pow_seed = transcript->template get_challenge<fr>(std::string("WHIR:fpow"));
+        transcript->send_to_verifier(std::string("WHIR:fnonce"), fr(detail::grind(final_pow_seed, config.pow_bits)));
+        std::vector<size_t> final_indices(config.final_round.num_queries);
         for (size_t s = 0; s < config.final_round.num_queries; ++s) {
             const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("fquery", s));
-            send_query_openings(detail::index_from_challenge(challenge, index_bits));
+            final_indices[s] = detail::index_from_challenge(challenge, index_bits);
         }
+        acct.mark(transcript, "grinding nonces");
+        send_query_openings(final_indices, "final-round queries");
+        if (WhirProofAccounting::enabled()) {
+            size_t total_columns = 0;
+            for (const WhirGroupData<Hasher>* group : groups) {
+                total_columns += group->leaf_columns();
+            }
+            info("WHIR schedule: ",
+                 config.num_variables,
+                 " vars, rate 2^-",
+                 config.log_inv_rate,
+                 ", k0=",
+                 config.initial_folding_factor_bits,
+                 ", k=",
+                 config.folding_factor_bits,
+                 ", ",
+                 groups.size(),
+                 " round-0 trees holding ",
+                 total_columns,
+                 " leaf columns, ",
+                 plan.constituents.size(),
+                 " constituents");
+            for (size_t i = 0; i < config.rounds.size(); ++i) {
+                info("  round ",
+                     i,
+                     ": ",
+                     config.rounds[i].num_queries,
+                     " queries, domain 2^",
+                     config.rounds[i].log_domain_size,
+                     ", rate 2^-",
+                     config.rounds[i].log_inv_rate,
+                     ", fold 2^",
+                     config.rounds[i].folding_factor_bits);
+            }
+            info("  final: ",
+                 config.final_round.num_queries,
+                 " queries, domain 2^",
+                 config.final_round.log_domain_size,
+                 ", rate 2^-",
+                 config.final_round.log_inv_rate);
+        }
+        acct.report();
     }
 
   private:
-    template <typename Transcript>
-    static void send_opening(const std::shared_ptr<Transcript>& transcript, const typename Tree::Opening& opening)
+    /** @brief The query indices reduced to a tree's own leaf count, for a tree narrower than the
+     * round-0 oracle (which only arises when stacking). */
+    static std::vector<size_t> reduce_indices(std::span<const size_t> indices, const Tree& tree)
     {
-        std::vector<fr> flat;
-        flat.reserve(opening.values.size() + 1 + opening.path.size() * Hasher::DIGEST_NUM_FIELDS);
-        flat.insert(flat.end(), opening.values.begin(), opening.values.end());
-        if (opening.salt) {
-            flat.push_back(*opening.salt);
+        std::vector<size_t> reduced(indices.begin(), indices.end());
+        for (size_t& index : reduced) {
+            index &= tree.num_leaves() - 1;
         }
-        for (const auto& digest : opening.path) {
+        return reduced;
+    }
+
+    /**
+     * @brief Authenticate a round's whole query set against one tree in a single batch.
+     * @details Values come first (the distinct leaves in ascending index order), then the sibling
+     * digests the verifier cannot derive. Both sides recover the leaf set from the query indices,
+     * so nothing about the addressing is transmitted.
+     */
+    template <typename Transcript>
+    static void send_batch_opening(const std::shared_ptr<Transcript>& transcript,
+                                   const Tree& tree,
+                                   std::span<const size_t> indices,
+                                   WhirProofAccounting& acct,
+                                   const std::string& category)
+    {
+        const typename Tree::BatchOpening opening = tree.open_batch(indices);
+        std::vector<fr> flat;
+        for (size_t i = 0; i < opening.values.size(); ++i) {
+            flat.insert(flat.end(), opening.values[i].begin(), opening.values[i].end());
+            if (!opening.salts.empty()) {
+                flat.push_back(opening.salts[i]);
+            }
+        }
+        acct.add(category + ": leaf values", flat.size());
+        for (const auto& digest : opening.siblings) {
             const auto fields = Hasher::digest_to_fields(digest);
             flat.insert(flat.end(), fields.begin(), fields.end());
         }
+        acct.add(category + ": merkle paths", opening.siblings.size() * Hasher::DIGEST_NUM_FIELDS);
         transcript->send_unhashed_to_verifier(flat);
+        acct.sync(transcript);
     }
 };
 
@@ -784,7 +1011,6 @@ template <typename Hasher> class WhirVerifier {
                        std::span<const fr> u,
                        const std::shared_ptr<Transcript>& transcript)
     {
-        const size_t k = config.folding_factor_bits;
         BB_ASSERT_EQ(u.size(), config.num_payload_variables, "opening point size mismatch");
         BB_ASSERT_EQ(claims.unshifted.size(), claims.unshifted_evaluations.size());
         BB_ASSERT_EQ(claims.to_be_shifted.size(), claims.shifted_evaluations.size());
@@ -908,6 +1134,7 @@ template <typename Hasher> class WhirVerifier {
 
         for (size_t i = 0; i < config.rounds.size(); ++i) {
             const WhirRound& round = config.rounds[i];
+            const size_t k = round.folding_factor_bits;
 
             // 1. Sumcheck rounds.
             std::vector<fr> alphas(k);
@@ -934,6 +1161,11 @@ template <typename Hasher> class WhirVerifier {
 
             // 4. Queries: authenticate openings, assemble virtual values, fold cosets.
             const size_t index_bits = round.log_domain_size - k;
+            const fr pow_seed = transcript->template get_challenge<fr>(detail::whir_label("pow", i));
+            const fr nonce = transcript->template receive_from_prover<fr>(detail::whir_label("nonce", i));
+            if (!detail::pow_is_valid(pow_seed, uint256_t(nonce).data[0], config.pow_bits)) {
+                return false;
+            }
             std::vector<size_t> indices(round.num_queries);
             for (size_t s = 0; s < round.num_queries; ++s) {
                 const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("query", i, s));
@@ -941,26 +1173,23 @@ template <typename Hasher> class WhirVerifier {
             }
             const fr omega = fr::get_root_of_unity(round.log_domain_size);
             const fr eta_inv = omega.pow(uint256_t(uint64_t(1)) << index_bits).invert();
+            RoundOpenings openings;
+            const bool read_ok =
+                folded_root
+                    ? read_folded_openings(transcript, k, *folded_root, indices, index_bits, openings)
+                    : read_round0_openings(
+                          transcript, config, roots, tree_variables, tree_leaf_columns, indices, index_bits, openings);
+            if (!read_ok) {
+                return false;
+            }
             std::vector<fr> folded_values(round.num_queries);
             for (size_t s = 0; s < round.num_queries; ++s) {
                 std::vector<fr> virtual_values;
-                const bool ok =
-                    folded_root
-                        ? read_folded_opening(transcript, config, *folded_root, indices[s], index_bits, virtual_values)
-                        : read_round0_openings(transcript,
-                                               config,
-                                               roots,
-                                               tree_variables,
-
-                                               tree_leaf_columns,
-                                               contributions,
-                                               indices[s],
-                                               index_bits,
-                                               omega,
-                                               eta_inv,
-                                               virtual_values);
-                if (!ok) {
-                    return false;
+                if (folded_root) {
+                    const std::span<const fr> coset = openings.coset(0, indices[s]);
+                    virtual_values.assign(coset.begin(), coset.end());
+                } else {
+                    round0_coset(config, openings, contributions, indices[s], omega, eta_inv, virtual_values);
                 }
                 const fr x_base_inv = omega.pow(uint256_t(uint64_t(indices[s]))).invert();
                 folded_values[s] = fold_coset(virtual_values, x_base_inv, eta_inv, alphas);
@@ -988,30 +1217,43 @@ template <typename Hasher> class WhirVerifier {
         for (size_t j = 0; j < final_size; ++j) {
             final_poly[j] = transcript->template receive_from_prover<fr>(detail::whir_label("final", j));
         }
-        const size_t index_bits = config.final_round.log_domain_size - k;
+        const size_t final_k = config.final_round.folding_factor_bits;
+        const size_t index_bits = config.final_round.log_domain_size - final_k;
         const fr omega = fr::get_root_of_unity(config.final_round.log_domain_size);
         const fr eta = omega.pow(uint256_t(uint64_t(1)) << index_bits);
         const fr eta_inv = eta.invert();
+        const fr final_pow_seed = transcript->template get_challenge<fr>(std::string("WHIR:fpow"));
+        const fr final_nonce = transcript->template receive_from_prover<fr>(std::string("WHIR:fnonce"));
+        if (!detail::pow_is_valid(final_pow_seed, uint256_t(final_nonce).data[0], config.pow_bits)) {
+            return false;
+        }
+        std::vector<size_t> final_indices(config.final_round.num_queries);
         for (size_t s = 0; s < config.final_round.num_queries; ++s) {
             const fr challenge = transcript->template get_challenge<fr>(detail::whir_label("fquery", s));
-            const size_t idx = detail::index_from_challenge(challenge, index_bits);
+            final_indices[s] = detail::index_from_challenge(challenge, index_bits);
+        }
+        RoundOpenings final_openings;
+        const bool final_read_ok =
+            folded_root
+                ? read_folded_openings(transcript, final_k, *folded_root, final_indices, index_bits, final_openings)
+                : read_round0_openings(transcript,
+                                       config,
+                                       roots,
+                                       tree_variables,
+                                       tree_leaf_columns,
+                                       final_indices,
+                                       index_bits,
+                                       final_openings);
+        if (!final_read_ok) {
+            return false;
+        }
+        for (const size_t idx : final_indices) {
             std::vector<fr> virtual_values;
-            const bool ok = folded_root
-                                ? read_folded_opening(transcript, config, *folded_root, idx, index_bits, virtual_values)
-                                : read_round0_openings(transcript,
-                                                       config,
-                                                       roots,
-                                                       tree_variables,
-
-                                                       tree_leaf_columns,
-                                                       contributions,
-                                                       idx,
-                                                       index_bits,
-                                                       omega,
-                                                       eta_inv,
-                                                       virtual_values);
-            if (!ok) {
-                return false;
+            if (folded_root) {
+                const std::span<const fr> coset = final_openings.coset(0, idx);
+                virtual_values.assign(coset.begin(), coset.end());
+            } else {
+                round0_coset(config, final_openings, contributions, idx, omega, eta_inv, virtual_values);
             }
             // Every value of the opened coset must match the clear polynomial.
             fr point = omega.pow(uint256_t(uint64_t(idx)));
@@ -1031,25 +1273,60 @@ template <typename Hasher> class WhirVerifier {
     }
 
   private:
-    template <typename Transcript>
-    static typename Tree::Opening read_opening(
-        const std::shared_ptr<Transcript>& transcript, size_t num_columns, size_t arity, size_t depth, bool salted)
-    {
-        const std::vector<fr> flat = transcript->receive_unhashed_from_prover(
-            detail::opening_num_fields<Hasher>(num_columns, arity, depth, salted));
-        typename Tree::Opening opening;
-        size_t cursor = num_columns * arity;
-        opening.values.assign(flat.begin(), flat.begin() + static_cast<std::ptrdiff_t>(cursor));
-        if (salted) {
-            opening.salt = flat[cursor++];
+    /**
+     * @brief A round's authenticated openings: one batch per queried tree.
+     * @details Round 0 queries every committed group's tree; later rounds query the single folded
+     * oracle. `leaves[t]` is the distinct ascending leaf set batch t addresses, derived from the
+     * query indices, so `coset` can find any query's values by binary search.
+     */
+    struct RoundOpenings {
+        std::vector<typename Tree::BatchOpening> batches;
+        std::vector<std::vector<size_t>> leaves;
+        std::vector<size_t> tree_index_bits; // round 0 only: each tree's own index width
+
+        std::span<const fr> coset(size_t tree, size_t leaf) const
+        {
+            const auto& list = leaves[tree];
+            const auto it = std::lower_bound(list.begin(), list.end(), leaf);
+            if (it == list.end() || *it != leaf) {
+                throw_or_abort("WHIR: queried leaf missing from the batch");
+            }
+            return batches[tree].values[static_cast<size_t>(it - list.begin())];
         }
-        opening.path.reserve(depth);
-        for (size_t l = 0; l < depth; ++l) {
-            opening.path.push_back(
+    };
+
+    /** @brief Read one tree's batch off the proof stream and authenticate it against `root`. */
+    template <typename Transcript>
+    static bool read_batch(const std::shared_ptr<Transcript>& transcript,
+                           const Digest& root,
+                           const std::vector<size_t>& leaves,
+                           size_t num_columns,
+                           size_t arity,
+                           size_t depth,
+                           bool salted,
+                           typename Tree::BatchOpening& opening)
+    {
+        const size_t coset_fields = num_columns * arity + (salted ? 1 : 0);
+        const size_t num_siblings = Tree::batch_num_siblings(leaves, depth);
+        const std::vector<fr> flat = transcript->receive_unhashed_from_prover(leaves.size() * coset_fields +
+                                                                              num_siblings * Hasher::DIGEST_NUM_FIELDS);
+        size_t cursor = 0;
+        opening.values.resize(leaves.size());
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            opening.values[i].assign(flat.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                     flat.begin() + static_cast<std::ptrdiff_t>(cursor + num_columns * arity));
+            cursor += num_columns * arity;
+            if (salted) {
+                opening.salts.push_back(flat[cursor++]);
+            }
+        }
+        opening.siblings.reserve(num_siblings);
+        for (size_t l = 0; l < num_siblings; ++l) {
+            opening.siblings.push_back(
                 Hasher::digest_from_fields(std::span<const fr>(flat).subspan(cursor, Hasher::DIGEST_NUM_FIELDS)));
             cursor += Hasher::DIGEST_NUM_FIELDS;
         }
-        return opening;
+        return Tree::verify_batch(root, leaves, depth, opening);
     }
 
     /**
@@ -1066,27 +1343,48 @@ template <typename Hasher> class WhirVerifier {
                                      const std::vector<Digest>& roots,
                                      const std::vector<size_t>& tree_variables,
                                      const std::vector<size_t>& tree_leaf_columns,
-                                     const std::vector<Contribution>& contributions,
-                                     size_t idx,
+                                     std::span<const size_t> indices,
                                      size_t index_bits,
-                                     const fr& omega,
-                                     const fr& eta_inv,
-                                     std::vector<fr>& out)
+                                     RoundOpenings& openings)
     {
-        const size_t k = config.folding_factor_bits;
+        const size_t k = config.initial_folding_factor_bits;
         const size_t arity = size_t(1) << k;
-        std::vector<typename Tree::Opening> openings;
-        std::vector<size_t> tree_index_bits(roots.size());
-        openings.reserve(roots.size());
+        openings.batches.resize(roots.size());
+        openings.leaves.resize(roots.size());
+        openings.tree_index_bits.resize(roots.size());
         for (size_t g = 0; g < roots.size(); ++g) {
-            tree_index_bits[g] = tree_variables[g] + config.log_inv_rate - k;
-            BB_ASSERT_LTE(tree_index_bits[g], index_bits, "tree larger than the round-0 oracle");
-            openings.push_back(read_opening(transcript, tree_leaf_columns[g], arity, tree_index_bits[g], config.zk));
-            if (!Tree::verify(roots[g], idx & ((size_t(1) << tree_index_bits[g]) - 1), openings.back())) {
+            openings.tree_index_bits[g] = tree_variables[g] + config.log_inv_rate - k;
+            BB_ASSERT_LTE(openings.tree_index_bits[g], index_bits, "tree larger than the round-0 oracle");
+            const size_t mask = (size_t(1) << openings.tree_index_bits[g]) - 1;
+            std::vector<size_t> reduced(indices.begin(), indices.end());
+            for (size_t& index : reduced) {
+                index &= mask;
+            }
+            openings.leaves[g] = Tree::batch_leaves(reduced);
+            if (!read_batch(transcript,
+                            roots[g],
+                            openings.leaves[g],
+                            tree_leaf_columns[g],
+                            arity,
+                            openings.tree_index_bits[g],
+                            config.zk,
+                            openings.batches[g])) {
                 return false;
             }
         }
+        return true;
+    }
 
+    /** @brief The batched oracle's virtual coset values at query `idx`, from the round-0 openings. */
+    static void round0_coset(const WhirConfig& config,
+                             const RoundOpenings& openings,
+                             const std::vector<Contribution>& contributions,
+                             size_t idx,
+                             const fr& omega,
+                             const fr& eta_inv,
+                             std::vector<fr>& out)
+    {
+        const size_t arity = size_t(1) << config.initial_folding_factor_bits;
         const bool any_shifted = std::any_of(
             contributions.begin(), contributions.end(), [](const auto& contribution) { return contribution.shifted; });
         std::vector<fr> x_inverses;
@@ -1101,9 +1399,10 @@ template <typename Hasher> class WhirVerifier {
 
         out.assign(arity, fr::zero());
         for (const auto& contribution : contributions) {
-            const std::vector<fr>& values = openings[contribution.tree].values;
+            const size_t tree_bits = openings.tree_index_bits[contribution.tree];
+            const std::span<const fr> values = openings.coset(contribution.tree, idx & ((size_t(1) << tree_bits) - 1));
             const size_t stride_bits = contribution.stride_bits;
-            const size_t slot_base = idx >> tree_index_bits[contribution.tree];
+            const size_t slot_base = idx >> tree_bits;
             const size_t column_offset = contribution.leaf_column * arity;
             for (size_t t = 0; t < arity; ++t) {
                 fr value =
@@ -1119,25 +1418,27 @@ template <typename Hasher> class WhirVerifier {
                 out[t] += value;
             }
         }
-        return true;
     }
 
-    /** @brief Open the single-column folded oracle g_i at `idx`; out = the coset values. */
+    /** @brief Open the single-column folded oracle g_i at a round's whole query set. */
     template <typename Transcript>
-    static bool read_folded_opening(const std::shared_ptr<Transcript>& transcript,
-                                    const WhirConfig& config,
-                                    const Digest& root,
-                                    size_t idx,
-                                    size_t index_bits,
-                                    std::vector<fr>& out)
+    static bool read_folded_openings(const std::shared_ptr<Transcript>& transcript,
+                                     size_t folding_factor_bits,
+                                     const Digest& root,
+                                     std::span<const size_t> indices,
+                                     size_t index_bits,
+                                     RoundOpenings& openings)
     {
-        const size_t arity = size_t(1) << config.folding_factor_bits;
-        const typename Tree::Opening opening = read_opening(transcript, 1, arity, index_bits, /*salted=*/false);
-        if (!Tree::verify(root, idx, opening)) {
-            return false;
-        }
-        out = opening.values;
-        return true;
+        openings.batches.resize(1);
+        openings.leaves = { Tree::batch_leaves(indices) };
+        return read_batch(transcript,
+                          root,
+                          openings.leaves[0],
+                          /*num_columns=*/1,
+                          size_t(1) << folding_factor_bits,
+                          index_bits,
+                          /*salted=*/false,
+                          openings.batches[0]);
     }
 };
 

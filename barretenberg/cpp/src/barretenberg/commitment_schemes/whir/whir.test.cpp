@@ -51,10 +51,10 @@ template <typename Variant> class WhirTest : public ::testing::Test {
     using Verifier = WhirVerifier<Hasher>;
     using GroupData = WhirGroupData<Hasher>;
 
-    static WhirConfig test_config(size_t num_variables, bool zk = false)
+    static WhirConfig test_config(size_t num_variables, bool zk = false, size_t security_bits = 64)
     {
         return WhirConfig::create(num_variables,
-                                  /*security_bits=*/64,
+                                  security_bits,
                                   /*log_inv_rate=*/2,
                                   /*folding_factor_bits=*/4,
                                   /*final_poly_bits=*/4,
@@ -252,17 +252,19 @@ TEST(WhirOutOfDomainTest, InitialSampleIsConstrained)
     const auto proof = Fixture::prove_instance(ck, instance);
     EXPECT_TRUE(Fixture::verify_proof(config, instance.verifier_claims, instance.u, proof));
 
-    // Re-proving the same instance with the sample switched off must drop exactly that one field
-    // element, and leave the header and root before it untouched — which pins its position.
+    // Re-proving the same instance with the sample switched off leaves the header and root before
+    // it untouched and diverges exactly at the sample, which pins its position. (The two proofs'
+    // total lengths are not comparable: the sample is absorbed, so every later challenge differs,
+    // and batched Merkle openings cost a number of digests that depends on the query indices.)
     WhirConfig without_ood = config;
     without_ood.num_ood_samples = 0;
     Fixture::CK ck_without_ood(without_ood);
     const auto proof_without_ood = Fixture::prove_instance(ck_without_ood, instance);
-    ASSERT_EQ(proof.size(), proof_without_ood.size() + 1);
     constexpr size_t ood_position = 2;
     for (size_t i = 0; i < ood_position; ++i) {
         EXPECT_EQ(proof[i], proof_without_ood[i]) << "at position " << i;
     }
+    EXPECT_NE(proof[ood_position], proof_without_ood[ood_position]);
 
     HonkProof tampered = proof;
     tampered[ood_position] += fr(1);
@@ -281,9 +283,13 @@ TYPED_TEST(WhirTest, ZkBatchedCompleteness)
 
 TYPED_TEST(WhirTest, ZkZeroIterationCompleteness)
 {
-    // The only payload width with both no fold iterations and room for the zk blinding, at either
-    // layout: stacking spends MAX_STACK_BITS of the committed width on the stack index.
-    const WhirConfig config = TestFixture::test_config(6 - TypeParam::MAX_STACK_BITS, /*zk=*/true);
+    // The only payload width with no fold iterations at either layout: stacking spends
+    // MAX_STACK_BITS of the committed width on the stack index. The blinding coefficients have to
+    // fit above that payload (one per round-0 query, plus slack), which at a 4-variable payload
+    // caps the security level this configuration can carry - a stacked group of one column is only
+    // 2^{m+1} wide, so there is no more room than the payload itself.
+    const WhirConfig config =
+        TestFixture::test_config(6 - TypeParam::MAX_STACK_BITS, /*zk=*/true, /*security_bits=*/12);
     ASSERT_EQ(config.num_iterations(), 0U);
     typename TestFixture::CK ck(config);
     const auto instance = TestFixture::make_instance(ck, 2, 1);
@@ -414,6 +420,90 @@ TEST(WhirConfigTest, RepairedQueryCountsExceedDisprovenCapacityCounts)
         EXPECT_GE(repaired, WhirConfig::compute_num_queries(100, rate, WhirSoundness::CONJECTURED_LIST));
         EXPECT_LE(repaired, WhirConfig::compute_num_queries(100, rate, WhirSoundness::PROVABLE_LIST));
     }
+}
+
+// A first fold narrower than the rest shortens only the first iteration: round 0 folds 2^{k₀} and
+// improves the rate by k₀-1 bits, every later iteration folds 2^k as usual. At k₀ = 1 the rate does
+// not improve at all across round 0, so round 1 repeats round 0's query count.
+TEST(WhirConfigTest, NarrowFirstFoldSchedule)
+{
+    const WhirConfig config = WhirConfig::create(19,
+                                                 /*security_bits=*/128,
+                                                 /*log_inv_rate=*/2,
+                                                 /*folding_factor_bits=*/3,
+                                                 /*final_poly_bits=*/4,
+                                                 WhirSoundness::PROVABLE_LIST,
+                                                 /*zk=*/false,
+                                                 /*max_stack_bits=*/0,
+                                                 /*initial_folding_factor_bits=*/1);
+    ASSERT_EQ(config.num_iterations(), 5U);
+    EXPECT_EQ(config.initial_folding_factor_bits, 1U);
+    const std::vector<size_t> expected_variables = { 19, 18, 15, 12, 9 };
+    const std::vector<size_t> expected_folds = { 1, 3, 3, 3, 3 };
+    const std::vector<size_t> expected_rates = { 2, 2, 4, 6, 8 };
+    const std::vector<size_t> expected_queries = { 138, 138, 67, 44, 33 };
+    for (size_t i = 0; i < config.num_iterations(); ++i) {
+        EXPECT_EQ(config.rounds[i].num_variables, expected_variables[i]) << "round " << i;
+        EXPECT_EQ(config.rounds[i].folding_factor_bits, expected_folds[i]) << "round " << i;
+        EXPECT_EQ(config.rounds[i].log_inv_rate, expected_rates[i]) << "round " << i;
+        EXPECT_EQ(config.rounds[i].num_queries, expected_queries[i]) << "round " << i;
+    }
+    // Each folded oracle is committed with the arity the *next* round folds by.
+    for (size_t i = 0; i + 1 < config.num_iterations(); ++i) {
+        EXPECT_EQ(config.committed_arity_bits(i), config.rounds[i + 1].folding_factor_bits);
+    }
+    EXPECT_EQ(config.committed_arity_bits(config.num_iterations() - 1), config.final_round.folding_factor_bits);
+    EXPECT_EQ(config.final_round.num_variables, 6U);
+    EXPECT_EQ(config.final_round.log_inv_rate, 10U);
+    EXPECT_EQ(config.final_round.num_queries, 26U);
+    EXPECT_EQ(config.final_round.folding_factor_bits, 3U);
+}
+
+// Grinding trades query soundness for prover work one bit at a time, so a schedule with p bits of
+// proof of work draws its query counts at λ-p. ProveKit's own configuration is this at p = 10.
+TEST(WhirConfigTest, GrindingReplacesQueryBits)
+{
+    const auto schedule = [](size_t pow_bits) {
+        return WhirConfig::create(19,
+                                  /*security_bits=*/128,
+                                  /*log_inv_rate=*/2,
+                                  /*folding_factor_bits=*/3,
+                                  /*final_poly_bits=*/4,
+                                  WhirSoundness::PROVABLE_LIST,
+                                  /*zk=*/false,
+                                  /*max_stack_bits=*/0,
+                                  /*initial_folding_factor_bits=*/0,
+                                  pow_bits);
+    };
+    const WhirConfig ground = schedule(10);
+    EXPECT_EQ(ground.pow_bits, 10U);
+    for (size_t i = 0; i < ground.num_iterations(); ++i) {
+        EXPECT_EQ(ground.rounds[i].num_queries,
+                  WhirConfig::compute_num_queries(118, ground.rounds[i].log_inv_rate, WhirSoundness::PROVABLE_LIST));
+        EXPECT_LT(ground.rounds[i].num_queries, schedule(0).rounds[i].num_queries);
+    }
+    EXPECT_EQ(schedule(0).pow_bits, 0U);
+}
+
+// The grind must actually bind: a nonce is accepted only when its digest has the required leading
+// zeros, and the search returns the same nonce every time it runs.
+TEST(WhirProofOfWorkTest, NonceIsCheckedAndDeterministic)
+{
+    constexpr size_t pow_bits = 12;
+    const fr seed = fr::random_element();
+    const uint64_t nonce = detail::grind(seed, pow_bits);
+    EXPECT_TRUE(detail::pow_is_valid(seed, nonce, pow_bits));
+    EXPECT_EQ(detail::grind(seed, pow_bits), nonce);
+
+    // Every smaller nonce fails, so the search really did find the first one.
+    for (uint64_t candidate = 0; candidate < nonce; ++candidate) {
+        EXPECT_FALSE(detail::pow_is_valid(seed, candidate, pow_bits)) << "at nonce " << candidate;
+    }
+    // A nonce that works for one seed does not carry over to another.
+    EXPECT_FALSE(detail::pow_is_valid(seed + fr(1), nonce, pow_bits) &&
+                 detail::pow_is_valid(seed + fr(2), nonce, pow_bits));
+    // Zero bits of work accept anything.
+    EXPECT_TRUE(detail::pow_is_valid(seed, 12345, 0));
 }
 
 // The README.md §6 worked example: m = 20, r₀ = 2, k = 4, λ = 100.

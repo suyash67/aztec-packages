@@ -13,11 +13,17 @@ namespace bb::whir {
  * @tparam Soundness the proximity regime the query schedule is derived from. The default is the
  * unconditional Johnson bound, which rests on no conjecture.
  * @tparam FoldingFactorBits k, the number of variables folded per iteration.
+ * @tparam InitialFoldingFactorBits k₀, the first iteration's fold; 0 means "same as k". A round-0
+ * query reveals 2^{k₀} values of *every* committed column, so on the ~30-column Honk commitment this
+ * is the single largest term in the proof; the later rounds run on one column and are free to fold
+ * faster.
  */
 template <typename Hasher_,
           size_t MaxStackBits = 0,
           WhirSoundness Soundness = WhirSoundness::PROVABLE_LIST,
-          size_t FoldingFactorBits = 4>
+          size_t FoldingFactorBits = 4,
+          size_t InitialFoldingFactorBits = 0,
+          size_t PowBits = 0>
 struct WhirPcs {
     using Hasher = Hasher_;
     using Config = WhirConfig;
@@ -38,7 +44,9 @@ struct WhirPcs {
                                   /*final_poly_bits=*/4,
                                   Soundness,
                                   /*zk=*/false,
-                                  MaxStackBits);
+                                  MaxStackBits,
+                                  InitialFoldingFactorBits,
+                                  PowBits);
     }
     static size_t payload_variables(const Config& config) { return config.num_payload_variables; }
 
@@ -109,6 +117,32 @@ using WhirStackedHonk = honk_transparent::TransparentHonk<WhirPcs<Hasher, 5>>;
 template <typename Hasher = SkyscraperMerkleHasher>
 using WhirProveKitHonk =
     honk_transparent::TransparentHonk<WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, /*FoldingFactorBits=*/3>>;
+
+/**
+ * @brief WhirProveKitHonk with the first fold narrowed to 2, the rest left at ProveKit's 8.
+ * @details Round-0 queries are the only ones that touch the wide commitment, and each reveals
+ * 2^{k₀} values of all ~30 opened columns; the later rounds run against a single-column oracle where
+ * a larger fold is what shortens the schedule. Trading k₀ = 3 for k₀ = 1 costs one extra iteration
+ * and two extra Merkle levels on the round-0 trees, and removes three quarters of the proof's
+ * largest term.
+ */
+template <typename Hasher = SkyscraperMerkleHasher>
+using WhirNarrowHonk = honk_transparent::TransparentHonk<
+    WhirPcs<Hasher, 0, WhirSoundness::PROVABLE_LIST, /*FoldingFactorBits=*/3, /*InitialFoldingFactorBits=*/1>>;
+
+/**
+ * @brief WhirNarrowHonk with 20 bits of per-round grinding: the smallest proof at λ = 128.
+ * @details Grinding is the cheapest soundness bit there is here — one nonce in the proof and a
+ * Blake3 search the honest prover runs once per round, against a query that costs the wide
+ * commitment's whole leaf width. ProveKit takes 10 bits this way; 20 is still milliseconds.
+ */
+template <typename Hasher = SkyscraperMerkleHasher>
+using WhirCompactHonk = honk_transparent::TransparentHonk<WhirPcs<Hasher,
+                                                                  0,
+                                                                  WhirSoundness::PROVABLE_LIST,
+                                                                  /*FoldingFactorBits=*/3,
+                                                                  /*InitialFoldingFactorBits=*/1,
+                                                                  /*PowBits=*/20>>;
 
 /**
  * @brief WhirHonk under the up-to-capacity conjecture, which eprint 2025/2046 disproves.
