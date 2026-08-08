@@ -1,4 +1,5 @@
 #include "barretenberg/commitment_schemes/dory/dory_honk.hpp"
+#include "barretenberg/commitment_schemes/fflonk/fflonk_honk.hpp"
 #include "barretenberg/commitment_schemes/hyrax/hyrax_honk.hpp"
 #include "barretenberg/commitment_schemes/kzh/kzh_honk.hpp"
 #include "barretenberg/commitment_schemes/ligero/ligero_honk.hpp"
@@ -166,6 +167,8 @@ bool run_backend(const std::string& pcs, UltraCircuitBuilder& builder, Timings& 
         timings = run_transparent<Flavored<bb::mercury::MercuryHonk>>(builder, timings);
     } else if (pcs == "vela") {
         timings = run_transparent<Flavored<bb::vela::VelaHonk>>(builder, timings);
+    } else if (pcs == "fflonk") {
+        timings = run_transparent<Flavored<bb::fflonk::FflonkHonk>>(builder, timings);
     } else if (pcs == "whir") {
         timings = run_transparent<Flavored<bb::whir::WhirHonk<bb::whir::Blake3sMerkleHasher>>>(builder, timings);
     } else if (pcs == "whir-p2") {
@@ -240,7 +243,7 @@ int main(int argc, char** argv)
     }
     if (bytecode_path.empty() || witness_path.empty() || pcs.empty()) {
         std::cerr << "usage: pcs_acir_bench -b <bytecode> -w <witness.gz> --pcs "
-                     "<kzg|vela|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-conjectured|"
+                     "<kzg|vela|fflonk|mercury|whir|whir-p2|whir-sky|whir-sky-stacked|whir-conjectured|"
                      "whir-provekit-<sky|p2|b3|sha256>|ligero|hyrax|kzh2|ipa|dory> "
                      "[--flavor <ultra|provekit>]\n";
         return 1;

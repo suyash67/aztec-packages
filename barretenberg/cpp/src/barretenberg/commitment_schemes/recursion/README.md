@@ -16,6 +16,7 @@ Everything here verifies real proofs: the Noir circuits are driven by proofs `Wh
 | `noir/ligero_verifier/` | the Ligero-Honk recursive verifier circuit |
 | `pcs_noir_export.bench.cpp` | proves the inner circuit and writes each verifier's `params.nr` and `Prover.toml` |
 | `vela_evm_export.bench.cpp` | proves an ACIR circuit with UltraHonk + Vela under a Keccak transcript and exports its opening argument |
+| `fflonk/` (in `commitment_schemes/`) | the fflonk opening as a PCS backend, with `fflonk_evm_export.bench.cpp` for its Keccak-transcript export |
 | `sol/` | Foundry harness: gas for the generated UltraHonk verifier (default and `--optimized`), the Vela opening in both plain and assembly form, and an IPA verifier's size-n MSM |
 | `driver.sh` | `sizes`, `outer`, `gas`, `ipa-gas` — regenerates every measurement below |
 
@@ -223,6 +224,59 @@ is that at equal optimization the schemes are closer than the unoptimized compar
 suggests — 630k against 573k execution, ~10 % of the transaction — because the generated verifier's
 hand-written MSM already extracts most of what assembly can give. Vela's durable advantages are the
 smaller point count and the 1,216 fewer calldata bytes, not implementation slack.
+
+## 7. fflonk as the final wrapper
+
+fflonk's reputation is a PlonK number: verifiers around 200k gas. Most of that comes from PlonK's
+*linearisation*, which leaves the verifier an MSM over a handful of selector commitments. Honk has no
+linearisation - its verifier runs `log n` sumcheck rounds and thirty-one subrelations (155,803 gas
+here, measured, and untouchable by any commitment scheme) and holds ~36 column commitments. So fflonk
+cannot turn an UltraHonk wrapper into a 200k verifier. What it *can* do is delete the one part that
+scales with the column count, and that is worth measuring.
+
+`commitment_schemes/fflonk/` implements it as a PCS backend. A commitment round of `t` columns is
+committed as the single interleaved polynomial `g(X) = sum_i f_i(X^t) X^i`, and
+
+    g mod (X^t - z) = sum_i f_i(z) X^i
+
+so one opening of `g` certifies *every* column's evaluation at `z`, and the residue's coefficients are
+exactly those evaluations - no root of unity, no inverse DFT. Opening at `z` and `1/z` together lets
+Vela's Laurent reduction carry the multilinear claim, with `Z_r(X) = (X^t - z)(X^t - 1/z)` and the
+interpolant in closed form (`B = (P - Q)/(z - 1/z)`, `A = P - zB`). A BDFG21 batch over the rounds'
+point sets closes it. Batching moves out of the group and into the field: what was a 35- or 50-point
+MSM becomes **eight scalar multiplications** - four round commitments, the Laurent auxiliary, the
+quotient, the linearization and the generator - whatever the column count.
+
+Measured on the same 2^19 proof, at the same optimization level, with the same split:
+
+| | Shplemini + KZG | Vela | fflonk |
+|---|---:|---:|---:|
+| opening, elliptic-curve work | 474,433 | 346,330 | **225,187** |
+| opening, total | *(in shared)* | 417,303 | 363,361 |
+| full verification | 630,236 | 573,106 | **519,164** |
+| proof calldata | 8,832 B / 130,476 | 7,616 B / 110,720 | 9,888 B / 134,592 |
+| **transaction gas** | 781,712 | 704,826 | **674,756** |
+
+And the price, natively, on the same circuit:
+
+| | prove | verify | proof | peak RSS |
+|---|---:|---:|---:|---:|
+| UltraHonk + KZG | 1,016 ms | 5.89 ms | 8,832 B | 832 MiB |
+| UltraHonk + Vela | 1,348 ms | 4.33 ms | 7,616 B | 1,742 MiB |
+| UltraHonk + fflonk | **7,609 ms** | **2.48 ms** | 10,272 B | **5,311 MiB** |
+
+That is the whole trade in one line: fflonk gives the cheapest L1 verification of the three and the
+fastest native verifier, and pays for it with a 7.5x prover and 6x the memory. Packing a round of `t`
+columns multiplies its committed degree by `t`, so the precomputed round - 26 columns, packed to 32 -
+commits at 2^24 and every Shplonk polynomial pass runs at that degree. For a final wrapper, proven
+once and verified forever, that is usually the right side of the trade; for anything proven often it
+is not.
+
+The packing factor is a dial rather than a constant. Splitting the precomputed round into four
+sub-rounds of eight would cut the prover's degree fourfold and cost three more scalar multiplications
+(~19k gas), which is a better point on the curve for most uses. The two calldata regressions are
+structural, though: fflonk sends `sum_r t_r` evaluations per opening point (43 here, against Vela's
+five), which is why its proof is the largest of the three even as its verifier is the cheapest.
 
 ## 6. What a transparent outer PCS would cost: IPA
 

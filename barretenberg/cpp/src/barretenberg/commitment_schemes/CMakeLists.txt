@@ -19,6 +19,11 @@ if(TARGET vela_evm_export_bench)
     target_link_libraries(vela_evm_export_bench PRIVATE dsl ultra_honk vm2_stub)
 endif()
 
+# fflonk_evm_export_bench does the same for the fflonk opening.
+if(TARGET fflonk_evm_export_bench)
+    target_link_libraries(fflonk_evm_export_bench PRIVATE dsl ultra_honk vm2_stub)
+endif()
+
 # whir_differential_bench compares barretenberg's WHIR against the reference Rust implementation
 # ProveKit builds on, through the C ABI in whir/rust/. That library is not part of the C++ build:
 # build it with `cargo build --release` in whir/rust/, then reconfigure. Without it the target is

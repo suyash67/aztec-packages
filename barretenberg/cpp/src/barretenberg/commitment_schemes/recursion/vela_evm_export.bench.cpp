@@ -1,3 +1,4 @@
+#include "barretenberg/commitment_schemes/fflonk/fflonk_honk.hpp"
 #include "barretenberg/commitment_schemes/mercury/vela_honk.hpp"
 #include "barretenberg/flavor/ultra_keccak_flavor.hpp"
 #include "barretenberg/common/get_bytecode.hpp"
@@ -31,6 +32,7 @@ using namespace bb;
 
 using Flavor = UltraKeccakFlavor;
 using VelaHonkEvm = honk_transparent::TransparentHonk<vela::VelaPcs, Flavor, typename Flavor::Transcript>;
+using FflonkHonkEvm = honk_transparent::TransparentHonk<fflonk::FflonkPcs, Flavor, typename Flavor::Transcript>;
 
 constexpr size_t NUM_PRECOMPUTED = Flavor::NUM_PRECOMPUTED_ENTITIES;
 constexpr size_t NUM_ALL_ENTITIES = Flavor::NUM_ALL_ENTITIES;

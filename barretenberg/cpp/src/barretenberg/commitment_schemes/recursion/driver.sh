@@ -109,8 +109,10 @@ cmd_gas() {
     "$here/sol/test/VerifierOptInstrumented.sol"
   "$vela_export" -b "$noir/target/$crate.json" -w "$noir/target/$crate.gz" -o "$out/vela_opening.bin" 2>&1 |
     tail -1
+  "$BB_BUILD/bin/fflonk_evm_export_bench" -b "$noir/target/$crate.json" -w "$noir/target/$crate.gz" \
+    -o "$out/fflonk_opening.bin" 2>&1 | tail -1
   (cd "$here/sol" && PROOF_DIR="$out" "$FORGE" test -vv 2>&1 |
-    grep -E "kzg_|vela_|execution_gas|calldata_gas|total_tx_gas|proof_bytes|public_inputs")
+    grep -E "kzg_|vela_|fflonk_|opt_|execution_gas|calldata_gas|total_tx_gas|proof_bytes|public_inputs")
 }
 
 cmd_ipa_gas() {
