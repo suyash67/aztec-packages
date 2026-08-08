@@ -1,0 +1,1 @@
+barretenberg_module(ultra_fflonk fflonk ultra_honk stdlib_primitives stdlib_poseidon2 circuit_checker)

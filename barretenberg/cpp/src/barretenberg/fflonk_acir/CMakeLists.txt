@@ -1,0 +1,1 @@
+barretenberg_module(fflonk_acir fflonk stdlib_circuit_builders)

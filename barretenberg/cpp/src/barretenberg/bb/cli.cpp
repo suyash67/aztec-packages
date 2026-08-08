@@ -18,6 +18,8 @@
 #include "barretenberg/api/api_avm.hpp"
 #include "barretenberg/api/api_chonk.hpp"
 #include "barretenberg/api/api_msgpack.hpp"
+#include "barretenberg/api/api_fflonk.hpp"
+#include "barretenberg/api/api_ultra_fflonk.hpp"
 #include "barretenberg/api/api_ultra_honk.hpp"
 #include "barretenberg/api/aztec_process.hpp"
 #include "barretenberg/api/file_io.hpp"
@@ -203,7 +205,7 @@ int parse_and_run_cli_command(int argc, char* argv[])
                 "particular type of circuit to be constructed and proven for some implicit scheme.")
             ->envname("BB_SCHEME")
             ->default_val("ultra_honk")
-            ->check(CLI::IsMember({ "chonk", "avm", "ultra_honk" }).name("is_member"))
+            ->check(CLI::IsMember({ "chonk", "avm", "ultra_honk", "ultra_fflonk", "fflonk" }).name("is_member"))
             ->group(advanced_group);
     };
 
@@ -1088,6 +1090,20 @@ int parse_and_run_cli_command(int argc, char* argv[])
                     vinfo("Perfetto aggregate trace written to ", trace_out_perfetto_aggregate);
                 }
 #endif
+                return 0;
+            }
+            return execute_non_prove_command(api);
+        } else if (flags.scheme == "ultra_fflonk") {
+            UltraFflonkAPI api;
+            if (prove->parsed()) {
+                api.prove(flags, bytecode_path, witness_path, vk_path, output_path);
+                return 0;
+            }
+            return execute_non_prove_command(api);
+        } else if (flags.scheme == "fflonk") {
+            FflonkAPI api;
+            if (prove->parsed()) {
+                api.prove(flags, bytecode_path, witness_path, vk_path, output_path);
                 return 0;
             }
             return execute_non_prove_command(api);

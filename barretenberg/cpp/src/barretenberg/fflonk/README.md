@@ -194,11 +194,17 @@ harness needs Foundry and borrows `forge-std` from
 ## 7. What is not here
 
 **The arithmetization is vanilla plonkish** — three wires, `q_M q_L q_R q_O q_C`, copy constraints,
-public inputs. No lookups, no custom gates, no ACIR frontend. A wrapper circuit for a hash-based PCS
-verifier has to be written against `CircuitBuilder` today; compiling one from Noir would mean an
-ACIR → fflonk frontend, or widening the arithmetization to four wires and plookup, which changes the
-group layout but not the shape of the verifier. That is the main thing standing between this module
-and being drop-in for the use case in §1.
+public inputs. No lookups and no custom gates, and no three-wire encoding of them that is not
+astronomically expensive: "expand a lookup into explicit constraints" costs the size of the table.
+
+Noir programs reach it through `../fflonk_acir/`, which rewrites the `UltraCircuitBuilder` the ACIR
+frontend already produces into this arithmetization — **arithmetic gates only**, rejecting anything
+else with a diagnostic. `bb prove --scheme fflonk` on a small arithmetic Noir program verifies on L1
+for a measured 207,189 execution / 248,109 transaction gas (10 public inputs).
+
+For programs that do use lookups, RAM/ROM, range constraints, elliptic additions or Poseidon2, the
+other side of the trade is `../ultra_fflonk/`: the same fflonk verifier shape over UltraHonk's
+arithmetization, so the whole frontend and gate set carry over. It has no Solidity verifier yet.
 
 **The prover has not been optimised.** The `8n` quotient domain is the simple, obviously-correct
 choice (`PROTOCOL.md` §9 derives why `4n` does not fit with full blinding); it is also where the
