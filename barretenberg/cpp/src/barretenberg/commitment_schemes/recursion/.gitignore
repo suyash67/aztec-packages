@@ -6,4 +6,6 @@ sol/out/
 sol/cache/
 sol/lib/
 sol/src/Verifier.sol
+sol/src/VerifierOpt.sol
+sol/test/VerifierOptInstrumented.sol
 restore.log

@@ -16,7 +16,7 @@ Everything here verifies real proofs: the Noir circuits are driven by proofs `Wh
 | `noir/ligero_verifier/` | the Ligero-Honk recursive verifier circuit |
 | `pcs_noir_export.bench.cpp` | proves the inner circuit and writes each verifier's `params.nr` and `Prover.toml` |
 | `vela_evm_export.bench.cpp` | proves an ACIR circuit with UltraHonk + Vela under a Keccak transcript and exports its opening argument |
-| `sol/` | Foundry harness: gas for the generated UltraHonk (Shplemini+KZG) verifier, the Vela opening, and an IPA verifier's size-n MSM |
+| `sol/` | Foundry harness: gas for the generated UltraHonk verifier (default and `--optimized`), the Vela opening in both plain and assembly form, and an IPA verifier's size-n MSM |
 | `driver.sh` | `sizes`, `outer`, `gas`, `ipa-gas` — regenerates every measurement below |
 
 The inner circuit is a small UltraHonk circuit that exercises every relation the flavor keeps —
@@ -143,6 +143,86 @@ metadata — noise at this scale.
 The structural reason Vela wins: its opening is one MSM over the claim commitments (31 points here)
 plus three further scalar multiplications and one pairing, where Shplemini needs
 `NUM_ENTITIES + log n + 2 ≈ 62` points for the same claim set.
+
+## 6. The optimized verifier, and what Aztec actually pays on L1
+
+`bb write_solidity_verifier` has two backends. Section 5 measured the default one. Aztec's L1 rollup
+verifier is the other: `noir-projects/fnd/noir-protocol-circuits/bootstrap.sh` generates it with
+`--optimized` from the `rollup_root` circuit's key, and `l1-contracts/bootstrap.sh` copies the result
+to `generated/HonkVerifier.sol`. On the same 2^19 proof:
+
+| verifier | execution gas | + calldata | transaction gas |
+|---|---:|---:|---:|
+| default (`Verifier.sol`) | 1,635,967 | 130,476 | 1,787,443 |
+| `--optimized` | **630,067** | 130,476 | **781,543** |
+
+That is the ~800k figure: 2.6x better than the default verifier, and it is the number that matters
+because it is the one deployed.
+
+**What the published Aztec benchmark does and does not include.** `l1-contracts/gas_benchmark.md`
+reports `submitEpochRootProof` at 697,655 average (896,101 with validators), but
+`test/builder/RollupBuilder.sol` deploys `MockVerifier` — whose `verify` returns `true` immediately.
+Those figures are rollup bookkeeping only. A production epoch proof pays them **plus** the optimized
+Honk verifier, so the real cost is on the order of 1.3M gas without validators and 1.5M with them.
+The verifier's own cost is nearly flat in circuit size — each extra `log n` adds one Gemini fold
+commitment to the MSM (~6.3k gas) and one sumcheck round of field work — so 2^19 is representative.
+
+### Which optimizations these are
+
+From `barretenberg/sol/src/honk/optimised/honk-optimized.sol.template`:
+
+1. **The whole verifier is one `assembly` block over a fixed memory map.** Named offset constants
+   replace structs, so nothing is allocated, ABI-encoded or copied between steps.
+2. **Precompiles are called straight into scratch.** `ACCUMULATOR` at 0x00, the staged point at
+   `G1_LOCATION`, the scalar at `SCALAR_LOCATION` — laid out so `ecMul`'s output region *is* `ecAdd`'s
+   second operand. An MSM step is two `staticcall`s and an `mcopy`, with no memory churn.
+3. **One batched inversion for the entire protocol.** Every barycentric denominator, the
+   public-input-delta denominator and all the Shplemini denominators accumulate into a running
+   product, one `modexp` inverts it, and a backward pass extracts each inverse — one precompile call
+   instead of about forty.
+4. **The proof is `calldatacopy`'d once** into contiguous memory and hashed in place with
+   `keccak256(ptr, len)`; the transcript never rebuilds a buffer.
+5. **Everything is unrolled** — `log n` sumcheck rounds, the powers of the evaluation challenge, the
+   inverse collection — with per-index memory constants generated into the template.
+6. **Constants are literals**: barycentric Lagrange denominators, `NEG_HALF_MODULO_P`, and the
+   verification key itself, injected at generation time.
+7. **Scratch space is aliased across phases** that provably do not overlap in time.
+
+### The same optimizations applied to Vela
+
+`VelaOpeningOpt.sol` is the same protocol as `VelaOpening.sol` with techniques 2, 3 and 4 applied —
+they are the ones that bite here. Techniques 1, 5 and 6 target the sumcheck and relation evaluation,
+which the opening step does not contain. Vela's inversion batching is a special case worth naming: it
+needs `1/z` and `1/(z - 1/z)`, and both fall out of inverting `z(z^2-1)` once, since
+`t = 1/(z(z^2-1))` gives `1/z = t(z^2-1)` and `1/(z - 1/z) = t z^2`.
+
+Measured with the same split — elliptic-curve work separated from the field work that precedes it —
+on the same proof:
+
+| | Shplemini + KZG | Vela |
+|---|---:|---:|
+| shared Honk work (transcript, sumcheck, relations, batching scalars) | 155,803 | 155,803 |
+| opening, field work | *(counted in shared)* | 70,973 |
+| opening, elliptic-curve work | 474,433 | **346,330** |
+| full verification | 630,236 | **573,106** |
+| proof calldata | 8,832 B / 130,476 | 7,616 B / **110,720** |
+| transaction gas | 781,712 | **704,826** |
+
+Vela's opening does 27 % less curve work: 35 scalar multiplications (31 claim commitments, `C_h`,
+`C_q`, `[1]`, `pi_L`) against Shplemini's ~50 once the Gemini fold commitments and the shifted-column
+reuse are counted. Naive Solidity cost it 499,720; the assembly rewrite brings it to 417,303, so the
+techniques transfer at about the same 1.2x the Honk verifier gets on its own curve work.
+
+The composed Vela total is **conservative**. Shplemini's opening also does substantial *field* work —
+the Gemini fold scalars, the ~40-way batch inversion, 41 rho powers — and the checkpoint leaves all of
+it in the shared bucket, while Vela's 70,973 of equivalent work is charged against Vela. The true gap
+is wider than the 57k the table shows.
+
+**So: yes, the optimizations transfer, and they were worth about 83k gas on Vela.** But the headline
+is that at equal optimization the schemes are closer than the unoptimized comparison in section 5
+suggests — 630k against 573k execution, ~10 % of the transaction — because the generated verifier's
+hand-written MSM already extracts most of what assembly can give. Vela's durable advantages are the
+smaller point count and the 1,216 fewer calldata bytes, not implementation slack.
 
 ## 6. What a transparent outer PCS would cost: IPA
 

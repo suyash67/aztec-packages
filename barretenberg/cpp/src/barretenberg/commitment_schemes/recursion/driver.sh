@@ -102,6 +102,11 @@ cmd_gas() {
   "$bb" prove -b "$noir/target/$crate.json" -w "$noir/target/$crate.gz" -k "$out/vk" -o "$out" \
     -t evm-no-zk >/dev/null 2>&1
   "$bb" write_solidity_verifier -k "$out/vk" -o "$here/sol/src/Verifier.sol" -t evm-no-zk >/dev/null 2>&1
+  # The `--optimized` backend is the one Aztec deploys for its L1 rollup verifier.
+  "$bb" write_solidity_verifier -k "$out/vk" -o "$here/sol/src/VerifierOpt.sol" -t evm-no-zk --optimized \
+    >/dev/null 2>&1
+  python3 "$here/sol/scripts/instrument_optimized.py" "$here/sol/src/VerifierOpt.sol" \
+    "$here/sol/test/VerifierOptInstrumented.sol"
   "$vela_export" -b "$noir/target/$crate.json" -w "$noir/target/$crate.gz" -o "$out/vela_opening.bin" 2>&1 |
     tail -1
   (cd "$here/sol" && PROOF_DIR="$out" "$FORGE" test -vv 2>&1 |

@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {HonkVerifier, Honk, Transcript, TranscriptLib, LOG_N, VK_HASH, NUMBER_OF_PUBLIC_INPUTS} from
     "../src/Verifier.sol";
 import {VelaOpeningVerifier} from "../src/VelaOpening.sol";
+import {VelaOpeningVerifierOpt} from "../src/VelaOpeningOpt.sol";
 
 /// @notice Exposes the generated verifier's opening step so its gas can be separated from the
 /// transcript/sumcheck work the two commitment schemes share.
@@ -37,10 +38,12 @@ contract ShpleminiHarness is HonkVerifier {
 contract PcsGasTest is Test {
     ShpleminiHarness public shplemini;
     VelaOpeningVerifier public vela;
+    VelaOpeningVerifierOpt public velaOpt;
 
     function setUp() public {
         shplemini = new ShpleminiHarness();
         vela = new VelaOpeningVerifier();
+        velaOpt = new VelaOpeningVerifierOpt();
     }
 
     function testShpleminiGas() public view {
@@ -104,6 +107,13 @@ contract PcsGasTest is Test {
         bool ok = vela.verify(o);
         uint256 openingGas = start - gasleft();
         require(ok, "vela opening failed");
+
+        start = gasleft();
+        (bool okOpt, uint256 ecGas) = velaOpt.verifyWithGas(o);
+        uint256 openingGasOpt = start - gasleft();
+        require(okOpt, "optimized vela opening failed");
+        console.log("vela_opening_gas_optimized", openingGasOpt);
+        console.log("vela_opening_ec_gas_optimized", ecGas);
         bytes memory velaProof = vm.readFileBinary(string.concat(dir, "/vela_opening.bin.proof"));
         console.log("vela_claims", numClaims);
         console.log("vela_proof_bytes", velaProof.length);
