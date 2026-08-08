@@ -409,8 +409,13 @@ inline bool poseidon2_pow_is_valid(const fr& seed, uint64_t nonce, size_t pow_bi
         return true;
     }
     BB_ASSERT_LT(pow_bits, size_t(64), "proof of work is capped at 63 bits");
-    using Poseidon2 = crypto::Poseidon2<crypto::Poseidon2Bn254ScalarFieldParams>;
-    const uint256_t digest(Poseidon2::hash({ seed, fr(nonce) }));
+    // `Poseidon2::hash({seed, nonce})` by hand: bb's sponge starts at (0, 0, 0, len << 64), absorbs
+    // the two elements into the rate and permutes once on squeeze. Spelling it out matters because
+    // the prover runs this 2^pow_bits times and `hash` allocates a vector per call, which dominates
+    // the search — 4.9x on this machine.
+    using Permutation = crypto::Poseidon2Permutation<crypto::Poseidon2Bn254ScalarFieldParams>;
+    const std::array<fr, 4> state{ seed, fr(nonce), fr::zero(), fr(uint256_t(2) << 64) };
+    const uint256_t digest(Permutation::permutation(state)[0]);
     return (digest.data[0] & ((uint64_t(1) << pow_bits) - 1)) == 0;
 }
 

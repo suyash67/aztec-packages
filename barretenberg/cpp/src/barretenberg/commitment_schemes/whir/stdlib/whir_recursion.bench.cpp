@@ -124,7 +124,7 @@ void levers()
     add("+ k0 = 1 (narrow first fold)", narrow);
 
     add("cap + grinding", base(2, 20));
-    add("cap + grinding + k0 = 1", base(1, 20));
+    add("cap + grinding + k0 = 1 (recommended)", base(1, 20));
     add("cap + grinding(24) + k0 = 1", base(1, 24));
 
     print_table("Optimization levers - transparent-Honk layout, m=10, lambda=100, rate 2^-4, k=4, repaired list",
@@ -132,7 +132,7 @@ void levers()
                 rows.front().gates);
 
     GateReport report;
-    const WhirConfig best = base(1, 24);
+    const WhirConfig best = base(1, 20);
     const size_t gates = measure(best, HONK_GROUPS, HONK_SHIFTED, &report);
     std::cout << "\nWhere the constraints go in the best configuration (" << gates << " gates)\n";
     for (const std::string& phase : report.phases()) {
@@ -150,7 +150,7 @@ void schedule()
     const size_t lambda = 100;
     std::vector<Row> rows;
     for (const size_t rate : std::vector<size_t>{ 2, 3, 4, 6 }) {
-        for (const size_t pow_bits : { size_t(0), size_t(24) }) {
+        for (const size_t pow_bits : std::vector<size_t>{ size_t(0), size_t(20) }) {
             const WhirConfig config =
                 Harness::config(m, lambda, rate, /*k=*/4, /*k0=*/1, pow_bits, WhirSoundness::REPAIRED_LIST);
             size_t proof_fields = 0;
@@ -168,7 +168,7 @@ void schedule()
     rows.clear();
     for (const size_t vars : std::vector<size_t>{ 8, 10, 12, 14 }) {
         const WhirConfig config = Harness::config(
-            vars, lambda, /*log_inv_rate=*/4, /*k=*/4, /*k0=*/1, /*pow_bits=*/24, WhirSoundness::REPAIRED_LIST);
+            vars, lambda, /*log_inv_rate=*/4, /*k=*/4, /*k0=*/1, /*pow_bits=*/20, WhirSoundness::REPAIRED_LIST);
         size_t proof_fields = 0;
         const size_t gates = measure(config, HONK_GROUPS, HONK_SHIFTED, nullptr, &proof_fields);
         rows.push_back({ "inner circuit 2^" + std::to_string(vars),
@@ -177,7 +177,7 @@ void schedule()
                          proof_fields });
     }
     print_table(
-        "Inner circuit size - transparent-Honk layout, lambda=100, rate 2^-4, k=4, k0=1, 24-bit grind", rows, 0);
+        "Inner circuit size - transparent-Honk layout, lambda=100, rate 2^-4, k=4, k0=1, 20-bit grind", rows, 0);
 }
 
 /** @brief Column count is the round-0 leaf width, and round 0 is where the cost is. */
@@ -198,12 +198,12 @@ void columns()
     };
     for (const Shape& shape : shapes) {
         const WhirConfig config = Harness::config(
-            12, lambda, /*log_inv_rate=*/4, /*k=*/4, /*k0=*/1, /*pow_bits=*/24, WhirSoundness::REPAIRED_LIST);
+            12, lambda, /*log_inv_rate=*/4, /*k=*/4, /*k0=*/1, /*pow_bits=*/20, WhirSoundness::REPAIRED_LIST);
         size_t proof_fields = 0;
         const size_t gates = measure(config, shape.groups, shape.shifted, nullptr, &proof_fields);
         rows.push_back({ shape.label, gates, config.rounds.empty() ? 0 : config.rounds[0].num_queries, proof_fields });
     }
-    print_table("Committed column count - m=12, lambda=100, rate 2^-4, k=4, k0=1, 24-bit grind", rows, 0);
+    print_table("Committed column count - m=12, lambda=100, rate 2^-4, k=4, k0=1, 20-bit grind", rows, 0);
 }
 
 /** @brief How many WHIR proofs fit in one outer UltraHonk circuit. */
@@ -214,10 +214,10 @@ void aggregate()
                                               /*log_inv_rate=*/4,
                                               /*k=*/4,
                                               /*k0=*/1,
-                                              /*pow_bits=*/24,
+                                              /*pow_bits=*/20,
                                               WhirSoundness::REPAIRED_LIST);
 
-    std::cout << "\nAggregation - ProveKit shape (1 column), m=12, lambda=100, rate 2^-4, k0=1, 24-bit grind\n";
+    std::cout << "\nAggregation - ProveKit shape (1 column), m=12, lambda=100, rate 2^-4, k0=1, 20-bit grind\n";
     std::cout << "==========================================================================================\n";
     std::cout << std::left << std::setw(12) << "proofs" << std::right << std::setw(12) << "gates" << std::setw(14)
               << "gates/proof" << std::setw(14) << "outer 2^k" << "\n";
@@ -256,7 +256,7 @@ void outer(size_t count)
                                               /*log_inv_rate=*/4,
                                               /*k=*/4,
                                               /*k0=*/1,
-                                              /*pow_bits=*/24,
+                                              /*pow_bits=*/20,
                                               WhirSoundness::REPAIRED_LIST);
 
     std::cout << "\nOuter proof - " << count

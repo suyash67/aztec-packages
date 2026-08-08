@@ -166,7 +166,14 @@ template <typename Builder> class WhirRecursiveVerifier {
     /**
      * @brief Constrain that the proof behind `transcript` opens `claims` at `u`.
      * @details Every check the native verifier answers with `return false` is an in-circuit
-     * assertion, so a satisfiable circuit is a verifying proof.
+     * assertion, so a satisfiable circuit is a verifying proof. Call it several times on one builder
+     * to aggregate: each proof gets its own transcript and the checks are independent, so a bad
+     * proof anywhere makes the whole circuit unsatisfiable.
+     *
+     * Binding `claims` is the caller's job, and the circuit is only as meaningful as that binding.
+     * A claimed evaluation or a commitment root passed as a bare witness is copy-constrained to the
+     * verifier's own computation and nothing more; to pin it, make it a public input of the outer
+     * circuit or — for a root the aggregator knows when it is built — a circuit constant.
      */
     static void verify(Builder& builder,
                        const WhirConfig& config,
@@ -183,10 +190,16 @@ template <typename Builder> class WhirRecursiveVerifier {
         Phase phase(builder, report);
 
         // ---- Commitments, claims and the batching challenges --------------------------------
+        // All-or-nothing, as the native verifier reads them: either the caller supplies every root
+        // (the Honk integration, where earlier rounds bound them) or they all arrive on the proof
+        // stream. A partial set would leave the two sides reading different offsets.
         std::vector<FF> roots = claims.group_roots;
-        for (size_t g = roots.size(); g < claims.group_num_columns.size(); ++g) {
-            roots.push_back(transcript->template receive_from_prover<FF>(detail::whir_label("root", g)));
+        if (roots.empty()) {
+            for (size_t g = 0; g < claims.group_num_columns.size(); ++g) {
+                roots.push_back(transcript->template receive_from_prover<FF>(detail::whir_label("root", g)));
+            }
         }
+        BB_ASSERT_EQ(roots.size(), claims.group_num_columns.size(), "one root per commitment group required");
 
         // The non-stacked plan of `build_stacked_plan`: one constituent per claimed column, the
         // unshifted ones first, all claimed at the single point u.

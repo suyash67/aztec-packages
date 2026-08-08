@@ -506,6 +506,24 @@ TEST(WhirProofOfWorkTest, NonceIsCheckedAndDeterministic)
     EXPECT_TRUE(detail::pow_is_valid(seed, 12345, 0));
 }
 
+// `poseidon2_pow_is_valid` spells the sponge out as one permutation so the search does not allocate.
+// If that ever drifts from `Poseidon2::hash`, the in-circuit check — which calls the sponge — stops
+// agreeing with the native one and every ground proof fails to recurse.
+TEST(WhirProofOfWorkTest, Poseidon2GrindMatchesTheSponge)
+{
+    using Poseidon2 = crypto::Poseidon2<crypto::Poseidon2Bn254ScalarFieldParams>;
+    for (size_t i = 0; i < 8; ++i) {
+        const fr seed = fr::random_element();
+        const uint64_t nonce = i * 7919;
+        const uint256_t sponge(Poseidon2::hash({ seed, fr(nonce) }));
+        // The predicate accepts exactly when the sponge digest's low bits vanish.
+        for (const size_t bits : { size_t(1), size_t(4), size_t(11) }) {
+            const bool expected = (sponge.data[0] & ((uint64_t(1) << bits) - 1)) == 0;
+            EXPECT_EQ(detail::poseidon2_pow_is_valid(seed, nonce, bits), expected);
+        }
+    }
+}
+
 // The Poseidon2 grind an in-circuit verifier can afford: divisibility of the digest by 2^pow_bits
 // rather than leading zero bytes of a Blake3 digest.
 TEST(WhirProofOfWorkTest, Poseidon2NonceIsCheckedAndDeterministic)

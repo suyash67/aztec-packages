@@ -52,11 +52,11 @@ times, and reusing round 0's cap there costs more than it saves.
 
 **A Poseidon2 grind** (`poseidon2_pow`). Grinding is the cheapest way to buy soundness bits, and
 soundness bits are queries. But bb's grind is Blake3 — the right choice natively, since the prover
-runs it 2^b times — and a Blake3 compression is tens of thousands of constraints in-circuit. There is
-one grind per round, so seven of them would cost more than the ~30,000 gates the removed queries were
-worth. The Poseidon2 form accepts when `Poseidon2(seed, nonce)` is divisible by `2^b`, which is one
-permutation plus two range constraints on the quotient: 1.3 % of the circuit for a 15 % cut in
-queries.
+runs it 2^b times — and a Blake3 compression is tens of thousands of constraints in-circuit, so the
+three grinds in one of these schedules would cost more than the ~30,000 gates the removed queries
+were worth. The Poseidon2 form accepts when `Poseidon2(seed, nonce)` is divisible by `2^b`, which is
+one permutation plus two range constraints on the quotient: 1.3 % of the circuit for a fifth off the
+query count. It is the one lever with a real prover-side price — see §4.
 
 The second range constraint on the quotient is not decorative. `quotient · 2^b = digest` has a
 second solution whenever `digest + r` is divisible by `2^b` and the quotient still fits, which would
@@ -117,63 +117,93 @@ m = 10, λ = 100, rate 2^-4, k = 4, repaired-list soundness.
 
 | configuration | gates | vs base | round-0 queries | proof (Fr) |
 |---|---:|---:|---:|---:|
-| per-query paths only (the base circuit) | 235,639 | 100 % | 26 | 5,187 |
-| + Merkle cap | 196,291 | 83 % | 26 | 4,680 |
-| + Poseidon2 grinding, 20 bits | 193,151 | 82 % | 21 | 4,219 |
-| + k₀ = 1 (narrow first fold) | 215,073 | 91 % | 26 | 3,969 |
-| cap + grinding | 163,659 | 69 % | 21 | 3,840 |
-| cap + grinding + k₀ = 1 | 143,892 | 61 % | 21 | 2,819 |
-| **cap + grinding (24 bits) + k₀ = 1** | **137,967** | **59 %** | 20 | 2,689 |
+| per-query paths only (the base circuit) | 235,887 | 100 % | 26 | 5,187 |
+| + Merkle cap | 196,539 | 83 % | 26 | 4,680 |
+| + Poseidon2 grinding, 20 bits | 193,433 | 82 % | 21 | 4,219 |
+| + k₀ = 1 (narrow first fold) | 215,618 | 91 % | 26 | 3,969 |
+| cap + grinding | 163,941 | 69 % | 21 | 3,840 |
+| **cap + grinding + k₀ = 1** | **144,455** | **61 %** | 21 | 2,819 |
+| cap + grinding (24 bits) + k₀ = 1 | 138,546 | 59 % | 20 | 2,689 |
+
+The bold row is the recommendation. The last row is the gate-minimal point but not the one to ship:
+24 bits of Poseidon2 grinding costs the prover about fifteen times the search for the last 4 % of
+gates — see "Rate and grinding" below.
 
 The levers compose almost independently, because each divides a different factor of the cost
-expression in §1.
+expression in §1. `k₀ = 1` on its own even looks like a regression (91 %) — halving the round-0 leaf
+width also adds a tree level, and the extra path work only turns into a win once a cap is absorbing
+it.
 
 ### Where the constraints go
 
-At the best configuration above (137,967 gates):
+At the recommended configuration above (144,455 gates):
 
 | phase | gates | share |
 |---|---:|---:|
-| merkle: path walk | 59,592 | 43.2 % |
-| merkle: leaf hashing | 44,212 | 32.0 % |
-| merkle: cap fold | 12,580 | 9.1 % |
-| query index extraction | 3,117 | 2.3 % |
-| coset folding | 3,090 | 2.2 % |
-| batched oracle assembly | 3,080 | 2.2 % |
-| final claim | 2,889 | 2.1 % |
-| final oracle consistency | 2,695 | 2.0 % |
-| grinding | 1,830 | 1.3 % |
+| merkle: path walk | 62,712 | 43.4 % |
+| merkle: leaf hashing | 46,626 | 32.3 % |
+| merkle: cap fold | 12,580 | 8.7 % |
+| query index extraction | 3,263 | 2.3 % |
+| coset folding | 3,237 | 2.2 % |
+| batched oracle assembly | 3,234 | 2.2 % |
+| final claim | 3,019 | 2.1 % |
+| final oracle consistency | 2,940 | 2.0 % |
+| grinding | 1,924 | 1.3 % |
 | claims + batching | 1,299 | 0.9 % |
-| whir sumcheck | 1,071 | 0.8 % |
-| merkle: cap lookup | 751 | 0.5 % |
+| whir sumcheck | 1,083 | 0.7 % |
+| merkle: cap lookup | 780 | 0.5 % |
 
 Everything that is not hashing is under 15 %. A verifier optimized past this point is optimizing
 Poseidon2 permutations, not arithmetic.
+
+(The phases are stamped from the builder's in-progress gate count and sum to about 98.7 % of the
+total; the remainder is what finalization adds — the sorted lists backing the range constraints and
+the lookup tables.)
 
 ### Rate and grinding
 
 Lengthening the codeword buys query count directly. m = 10, λ = 100, k = 4, k₀ = 1.
 
-| | no grinding | 24-bit grind |
+| | no grinding | 20-bit grind |
 |---|---:|---:|
-| rate 2^-2 | 259,610 (51 q) | 206,483 (39 q) |
-| rate 2^-3 | 202,110 (34 q) | 159,756 (26 q) |
-| rate 2^-4 | 173,184 (26 q) | 137,967 (20 q) |
-| rate 2^-6 | 138,131 (17 q) | **110,440 (13 q)** |
+| rate 2^-2 | 259,924 (51 q) | 216,664 (41 q) |
+| rate 2^-3 | 201,926 (34 q) | 166,638 (27 q) |
+| rate 2^-4 | 173,729 (26 q) | 144,455 (21 q) |
+| rate 2^-6 | 138,021 (17 q) | **116,183 (14 q)** |
 
-Rate is a prover-side cost (2^-6 quadruples the round-0 codeword against 2^-4) and grinding is a
-one-time 2^24 hash search, so both are cheap for a rollup that proves once and aggregates many.
+Rate is a prover-side cost — 2^-6 quadruples the round-0 codeword against 2^-4 — and cheap for a
+rollup that proves once and aggregates many. **Grinding is not as cheap as it looks**, and it is the
+one place where the recursion profile makes the prover materially worse.
+
+Measured trial rates on this machine (14 threads, `DISABLE_ASM=1`, so a build with field assembly
+would be several times faster):
+
+| | trials/s | 16-bit grind | 20-bit | 24-bit |
+|---|---:|---:|---:|---:|
+| Blake3 (bb's default) | 31.8 M | 0.002 s | 0.03 s | 0.53 s |
+| Poseidon2 (recursion profile) | 0.70 M | 0.09 s | 1.5 s | 24 s |
+
+Poseidon2 is **45x slower to grind** than Blake3 — the same algebraic structure that makes it cheap to
+*verify* in a circuit makes it expensive to *search* natively. These schedules grind three times per
+proof (two fold rounds and the final round), so 24 bits costs the prover about 72 s against a WHIR
+prover that otherwise runs in seconds. **20 bits is the practical setting**: about 4.5 s of grinding
+for 17 % off the circuit, where the last 4 % that 24 bits buys costs fifteen times the search. The
+tables here quote 24 bits because they rank circuits, not provers.
+
+(`poseidon2_pow_is_valid` spells the two-element sponge out as a single permutation rather than
+calling `Poseidon2::hash`, which allocates a vector per trial; that alone was worth 4.9x on the
+search.)
 
 ### Column count is the other big dial
 
-m = 12, λ = 100, rate 2^-4, k₀ = 1, 24-bit grind:
+m = 12, λ = 100, rate 2^-4, k₀ = 1, 20-bit grind:
 
 | shape | gates | proof (Fr) |
 |---|---:|---:|
-| ProveKit: 1 column, 1 group | **87,530** | 1,155 |
-| 4 columns, 1 group | 90,880 | 1,278 |
-| 8 columns, 2 groups | 114,302 | 1,676 |
-| transparent Honk: 29 columns, 4 groups | 174,523 | 3,007 |
+| ProveKit: 1 column, 1 group | **92,094** | 1,211 |
+| 4 columns, 1 group | 95,607 | 1,340 |
+| 8 columns, 2 groups | 120,075 | 1,756 |
+| transparent Honk: 29 columns, 4 groups | 183,034 | 3,149 |
 
 This is the strongest argument for targeting ProveKit-shaped proofs: Spartan reduces the statement to
 **one** committed vector, where transparent Honk opens ~30 columns in four commitment phases. The
@@ -182,11 +212,11 @@ paths per query, and paths are the largest single phase.
 
 ### Growth in the inner circuit is mild
 
-λ = 100, rate 2^-4, k = 4, k₀ = 1, 24-bit grind, transparent-Honk layout:
+λ = 100, rate 2^-4, k = 4, k₀ = 1, 20-bit grind, transparent-Honk layout:
 
 | inner circuit | 2^8 | 2^10 | 2^12 | 2^14 |
 |---|---:|---:|---:|---:|
-| gates | 129,679 | 137,967 | 174,523 | 186,222 |
+| gates | 135,632 | 144,455 | 183,034 | 195,848 |
 
 Doubling the inner circuit adds one Merkle level per query and one sumcheck round — logarithmic, as
 the protocol promises. A verifier for a 2^20 inner circuit is not far above these numbers.
@@ -199,24 +229,24 @@ little amortization (the range-constraint tables and the lookup machinery are sh
 
 | proofs in one circuit | gates | gates/proof | smallest outer circuit |
 |---:|---:|---:|---|
-| 1 | 87,530 | 87,530 | 2^17 |
-| 2 | 171,583 | 85,791 | 2^18 |
-| 4 | 339,689 | 84,922 | 2^19 |
+| 1 | 92,094 | 92,094 | 2^17 |
+| 2 | 180,817 | 90,408 | 2^18 |
+| 4 | 358,268 | 89,567 | 2^19 |
 
-At ~85k gates per proof a 2^21 outer circuit holds about **24 ProveKit-shape WHIR proofs**, or about
-12 transparent-Honk ones.
+At ~90k gates per proof a 2^21 outer circuit holds about **23 ProveKit-shape WHIR proofs**, or about
+11 transparent-Honk ones.
 
 `whir_recursion_bench outer N` then proves that circuit with UltraHonk + KZG. The output is a
 13,120-byte pairing-based proof whose size does not depend on N.
 
 | proofs | outer circuit | key generation | prove | verify | proof |
 |---:|---|---:|---:|---:|---:|
-| 1 | 2^17 rows | 183 ms | 556 ms | 5 ms | 13,120 B |
-| 4 | 2^19 rows | 1,000 ms | 2,864 ms | 7 ms | 13,120 B |
-| 8 | 2^20 rows | 1,799 ms | 5,166 ms | 5 ms | 13,120 B |
+| 1 | 2^17 rows | 102 ms | 266 ms | 3 ms | 13,120 B |
+| 4 | 2^19 rows | 303 ms | 923 ms | 5 ms | 13,120 B |
+| 8 | 2^20 rows | 746 ms | 2,496 ms | 6 ms | 13,120 B |
 
-Roughly 640 ms of outer proving per aggregated WHIR proof, and the proof and verification cost do not
-move.
+About 310 ms of outer proving per aggregated WHIR proof, and neither the proof size nor the
+verification cost moves with N.
 
 On Ethereum that proof is checked by the `--optimized` Solidity verifier for **630,067 execution gas
 / 781,543 as a transaction** — measured on a 2^19 proof in `commitment_schemes/recursion/README.md`
@@ -287,10 +317,25 @@ still pay is the domain-point exponentiation `ω^idx`: a 2^k-entry table of `ω`
 multiplications with one lookup. At 2.2 % of the circuit for coset folding and exponentiation
 combined, it is not where the remaining gates are.
 
-## 6. Scope
+## 6. Scope, and running it
 
 The verifier covers the shape transparent Honk and ProveKit both use: interleaved columns (no
 stacking), no zero knowledge, every claim at the single sumcheck point. `zk`, `stack_columns` and
-multi-point claim plans are rejected with an assertion rather than silently mis-verified. The Honk
-shell around the opening — sumcheck and the flavor's subrelations — is not included here; the Noir
-verifier in `commitment_schemes/recursion/` has it, and its cost is a constant independent of the PCS.
+multi-point claim plans are rejected with an assertion rather than silently mis-verified.
+
+**What is verified here is the WHIR opening, not a whole Honk proof.** The shell around it — sumcheck
+and the flavor's subrelations — is the same work for any PCS and is not included; the Noir verifier
+in `commitment_schemes/recursion/` has it. Its figures therefore bundle the two, which is why the
+numbers above are not directly comparable to that README's 501,884.
+
+```bash
+cd barretenberg/cpp
+cmake --build build --target commitment_schemes_tests whir_recursion_bench
+./build/bin/commitment_schemes_tests --gtest_filter='WhirRecursiveVerifierTest.*:WhirRecursionProfileTest.*'
+./build/bin/whir_recursion_bench            # every table in §4
+./build/bin/whir_recursion_bench outer 8    # aggregate 8 proofs and prove the result
+```
+
+The tests cover completeness over fresh randomness, aggregation of several proofs in one circuit, and
+soundness: corrupting any sampled element of the proof stream, any claimed evaluation, any coordinate
+of the opening point, or any commitment root makes the circuit unsatisfiable.

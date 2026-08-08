@@ -19,6 +19,12 @@ Everything here verifies real proofs: the Noir circuits are driven by proofs `Wh
 | `sol/` | Foundry harness: gas for the generated UltraHonk verifier (default and `--optimized`), the Vela opening in both plain and assembly form, and an IPA verifier's size-n MSM |
 | `driver.sh` | `sizes`, `outer`, `gas`, `ipa-gas` — regenerates every measurement below |
 
+> A second WHIR verifier lives in `commitment_schemes/whir/stdlib/`, written directly against
+> barretenberg's circuit stdlib rather than in Noir. It covers the WHIR opening only — no Honk shell —
+> but has gate-level control the Noir path does not, and comes with the protocol settings
+> (`WhirConfig::enable_recursion_profile`) that make a WHIR opening cheap to verify in-circuit. The
+> figures in the two READMEs are therefore not directly comparable: this one bundles the shell.
+
 The inner circuit is a small UltraHonk circuit that exercises every relation the flavor keeps —
 arithmetic gates, public inputs, a lookup, and a ROM table — so the recursive verifier really
 evaluates all twenty subrelations rather than a degenerate subset. It runs on `UltraProveKitFlavor`
