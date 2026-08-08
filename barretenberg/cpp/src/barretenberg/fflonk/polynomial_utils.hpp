@@ -51,6 +51,13 @@ bool divide_by_vanishing(std::span<const FF> poly, size_t n, std::vector<FF>& qu
 /** @brief `poly(x)` by Horner, over however many coefficients the span holds. */
 FF evaluate(std::span<const FF> poly, const FF& x);
 
+/**
+ * @brief Drop structurally-zero leading coefficients, keeping at least one.
+ * @details Division routines here size their output by the dividend rather than by the true degree,
+ * so callers that need the degree - to bound a commitment, or to check a split fits - must trim.
+ */
+void trim(std::vector<FF>& poly);
+
 /** @brief Coefficients -> evaluations over `domain`. `coefficients` may be shorter than the domain. */
 std::vector<FF> coefficients_to_evaluations(std::span<const FF> coefficients, const EvaluationDomain<FF>& domain);
 

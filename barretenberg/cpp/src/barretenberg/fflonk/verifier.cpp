@@ -77,11 +77,7 @@ VerificationReport verify_detailed(const VerificationKey& key, const Proof& proo
     // slope, and the four Shplonk denominators.
     // -------------------------------------------------------------------------------------------
     const size_t num_public = public_inputs.size();
-    std::array<FF, NUM_GROUPS> group_vanishing{};
-    group_vanishing[0] = y.pow(static_cast<uint64_t>(PACK_PREPROCESSED)) - xi;
-    group_vanishing[1] = y.pow(static_cast<uint64_t>(PACK_WIRES)) - xi;
-    group_vanishing[2] = (y - xi) * (y - xi_omega);
-    group_vanishing[3] = y.pow(static_cast<uint64_t>(PACK_QUOTIENTS)) - xi;
+    const std::vector<FF> group_vanishing = group_vanishing_at(GROUP_SHAPES, y, xi, xi_omega);
 
     // Layout: [ xi - w^i for i < l ] [ xi - 1 ] [ xi*w - xi ] [ Z_g(y) for g < 4 ]
     const size_t offset_lagrange_first = num_public;
@@ -149,50 +145,28 @@ VerificationReport verify_detailed(const VerificationKey& key, const Proof& proo
     // coefficients are the claimed evaluations themselves; only the grand product, opened at two
     // points, needs an interpolant, and that one is linear.
     // -------------------------------------------------------------------------------------------
-    const FF interpolant_slope = (e[EVAL_Z_OMEGA] - e[EVAL_Z]) * denominators[offset_interpolant];
-    const FF interpolant_constant = e[EVAL_Z] - xi * interpolant_slope;
-
-    FF total_vanishing = FF::one();
-    for (const FF& value : group_vanishing) {
-        total_vanishing *= value;
-    }
-
-    const std::array<const FF*, NUM_GROUPS> residues = {
-        &e[EVAL_Q_L],
-        &e[EVAL_A],
-        nullptr,
-        &e[EVAL_T1],
-    };
-    constexpr std::array<size_t, NUM_GROUPS> packs = {
-        PACK_PREPROCESSED, PACK_WIRES, PACK_GRAND_PRODUCT, PACK_QUOTIENTS
+    const std::array<GroupEvaluations, NUM_GROUPS> group_evaluations = {
+        GroupEvaluations{ std::vector<FF>(e.begin() + EVAL_Q_L, e.begin() + EVAL_Q_L + PACK_PREPROCESSED), {} },
+        GroupEvaluations{ std::vector<FF>(e.begin() + EVAL_A, e.begin() + EVAL_A + PACK_WIRES), {} },
+        GroupEvaluations{ { e[EVAL_Z] }, { e[EVAL_Z_OMEGA] } },
+        GroupEvaluations{ std::vector<FF>(e.begin() + EVAL_T1, e.begin() + EVAL_T1 + PACK_QUOTIENTS), {} },
     };
     const std::array<Commitment, NUM_GROUPS> commitments = { key.c0, proof.c1, proof.c2, proof.c3 };
 
-    GroupElement accumulator = GroupElement::infinity();
-    FF constant_term = FF::zero();
-    FF nu_power = FF::one();
-    for (size_t g = 0; g < NUM_GROUPS; ++g) {
-        const FF scalar = nu_power * total_vanishing * denominators[offset_groups + g];
+    const OpeningClaim claim{ .commitments = commitments,
+                              .shapes = GROUP_SHAPES,
+                              .evaluations = group_evaluations,
+                              .w = proof.w,
+                              .w_prime = proof.w_prime,
+                              .xi = xi,
+                              .xi_omega = xi_omega,
+                              .nu = nu,
+                              .y = y,
+                              .inverse_xi_omega_minus_xi = denominators[offset_interpolant] };
 
-        FF interpolant_at_y = FF::zero();
-        if (g == 2) {
-            interpolant_at_y = interpolant_constant + interpolant_slope * y;
-        } else {
-            for (size_t i = packs[g]; i-- > 0;) {
-                interpolant_at_y = interpolant_at_y * y + residues[g][i];
-            }
-        }
-
-        accumulator += GroupElement(commitments[g]) * scalar;
-        constant_term += scalar * interpolant_at_y;
-        nu_power *= nu;
-    }
-    accumulator -= GroupElement(Commitment::one()) * constant_term;
-    accumulator -= GroupElement(proof.w) * total_vanishing;
-    accumulator += GroupElement(proof.w_prime) * y;
-
-    const PairingPoints<Curve> pairing_points{ Commitment(accumulator), Commitment(-GroupElement(proof.w_prime)) };
-    report.opening = pairing_points.check();
+    report.opening =
+        fold_opening(claim, group_vanishing, std::span<const FF>(denominators).subspan(offset_groups, NUM_GROUPS))
+            .check();
 
     return report;
 }

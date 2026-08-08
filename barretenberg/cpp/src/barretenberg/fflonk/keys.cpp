@@ -2,9 +2,11 @@
 
 #include "barretenberg/common/throw_or_abort.hpp"
 #include "barretenberg/crypto/keccak/keccak.hpp"
+#include "barretenberg/fflonk/encoding.hpp"
 #include "barretenberg/numeric/bitop/get_msb.hpp"
 
 #include <algorithm>
+#include <limits>
 
 namespace bb::fflonk_plonk {
 
@@ -16,6 +18,45 @@ FF VerificationKey::hash() const
                                   static_cast<uint256_t>(k2),
                                   c0.is_point_at_infinity() ? uint256_t(0) : static_cast<uint256_t>(c0.x),
                                   c0.is_point_at_infinity() ? uint256_t(0) : static_cast<uint256_t>(c0.y) });
+}
+
+std::vector<uint8_t> VerificationKey::to_buffer() const
+{
+    std::vector<uint8_t> buffer;
+    buffer.reserve(SIZE_IN_BYTES);
+    append_word(buffer, uint256_t(circuit_size));
+    append_word(buffer, uint256_t(num_public_inputs));
+    append_word(buffer, static_cast<uint256_t>(omega));
+    append_word(buffer, static_cast<uint256_t>(k1));
+    append_word(buffer, static_cast<uint256_t>(k2));
+    append_point(buffer, c0);
+    return buffer;
+}
+
+bool VerificationKey::from_buffer(std::span<const uint8_t> buffer, VerificationKey& key)
+{
+    if (buffer.size() != SIZE_IN_BYTES) {
+        return false;
+    }
+
+    const uint256_t circuit_size = read_word(buffer, 0);
+    const uint256_t num_public_inputs = read_word(buffer, 32);
+    // The sizes index into buffers and drive loop bounds, so anything that would not round-trip
+    // through `size_t` is rejected here rather than truncated into something plausible.
+    if (circuit_size > uint256_t(std::numeric_limits<uint32_t>::max()) ||
+        num_public_inputs > uint256_t(std::numeric_limits<uint32_t>::max())) {
+        return false;
+    }
+    key.circuit_size = static_cast<size_t>(static_cast<uint64_t>(circuit_size));
+    key.num_public_inputs = static_cast<size_t>(static_cast<uint64_t>(num_public_inputs));
+
+    size_t offset = 64;
+    for (FF* scalar : { &key.omega, &key.k1, &key.k2 }) {
+        if (!read_scalar(buffer, offset, *scalar)) {
+            return false;
+        }
+    }
+    return read_point(buffer, offset, key.c0);
 }
 
 namespace {

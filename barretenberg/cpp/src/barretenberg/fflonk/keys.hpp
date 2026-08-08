@@ -1,6 +1,7 @@
 #pragma once
 
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
+#include "barretenberg/fflonk/batched_opening.hpp"
 #include "barretenberg/fflonk/circuit_builder.hpp"
 #include "barretenberg/fflonk/polynomial_utils.hpp"
 #include "barretenberg/polynomials/evaluation_domain.hpp"
@@ -20,6 +21,18 @@ static constexpr size_t PACK_QUOTIENTS = 4; // t1 t2_lo t2_mid t2_hi
 static constexpr size_t PREPROCESSED_SIGMA_OFFSET = 5;
 
 static constexpr size_t NUM_GROUPS = 4;
+
+/**
+ * @brief The four groups, in the order the `nu` powers of the batched opening apply to them.
+ * @details Only the grand product is opened at two points; it is alone in its group for exactly that
+ * reason - see PROTOCOL.md section 7.
+ */
+static constexpr std::array<GroupShape, NUM_GROUPS> GROUP_SHAPES = {
+    GroupShape{ .pack = PACK_PREPROCESSED, .two_point = false },
+    GroupShape{ .pack = PACK_WIRES, .two_point = false },
+    GroupShape{ .pack = PACK_GRAND_PRODUCT, .two_point = true },
+    GroupShape{ .pack = PACK_QUOTIENTS, .two_point = false },
+};
 
 /** @brief The quotient FFT runs at this multiple of the circuit size; see PROTOCOL.md section 9. */
 static constexpr size_t QUOTIENT_DOMAIN_FACTOR = 8;
@@ -46,6 +59,12 @@ struct VerificationKey {
 
     /** @brief The single word that binds a proof to this circuit, absorbed first in the transcript. */
     [[nodiscard]] FF hash() const;
+
+    /** @brief Five metadata words then `C0`, in the proof's wire format. */
+    static constexpr size_t NUM_METADATA_WORDS = 5;
+    static constexpr size_t SIZE_IN_BYTES = (NUM_METADATA_WORDS * 32) + 64;
+    [[nodiscard]] std::vector<uint8_t> to_buffer() const;
+    [[nodiscard]] static bool from_buffer(std::span<const uint8_t> buffer, VerificationKey& key);
 
     bool operator==(const VerificationKey& other) const = default;
 };

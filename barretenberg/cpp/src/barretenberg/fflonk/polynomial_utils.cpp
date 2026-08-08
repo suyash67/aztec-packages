@@ -84,6 +84,13 @@ bool divide_by_vanishing(std::span<const FF> poly, const size_t n, std::vector<F
     return true;
 }
 
+void trim(std::vector<FF>& poly)
+{
+    while (poly.size() > 1 && poly.back().is_zero()) {
+        poly.pop_back();
+    }
+}
+
 FF evaluate(std::span<const FF> poly, const FF& x)
 {
     FF accumulator = FF::zero();

@@ -12,14 +12,6 @@ namespace {
 /** @brief Ranges shorter than this are not worth handing to the thread pool. */
 constexpr size_t PARALLEL_THRESHOLD = 1 << 12;
 
-/** @brief Drop structurally-zero leading coefficients, keeping at least one. */
-void trim(std::vector<FF>& poly)
-{
-    while (poly.size() > 1 && poly.back().is_zero()) {
-        poly.pop_back();
-    }
-}
-
 /** @brief `poly += scalar * X^power`, growing the polynomial if it has to. */
 void add_monomial(std::vector<FF>& poly, size_t power, const FF& scalar)
 {
@@ -64,10 +56,6 @@ FF prover_detail::open_and_batch(const ProvingKey& key,
     const size_t n = vk.circuit_size;
     const CommitmentKey<Curve>& commitment_key = *key.commitment_key;
 
-    constexpr std::array<size_t, NUM_GROUPS> packs = {
-        PACK_PREPROCESSED, PACK_WIRES, PACK_GRAND_PRODUCT, PACK_QUOTIENTS
-    };
-
     const FF xi = transcript.squeeze();
     if (xi.is_zero() || xi.pow(static_cast<uint64_t>(n)) == FF::one()) {
         throw_or_abort("fflonk: degenerate evaluation challenge");
@@ -76,25 +64,19 @@ FF prover_detail::open_and_batch(const ProvingKey& key,
 
     // Every group's evaluations are the residue of its packed polynomial modulo the group's
     // vanishing polynomial, so the division that builds W also produces what is sent.
-    std::array<std::vector<FF>, NUM_GROUPS> quotients;
-    std::array<std::vector<FF>, NUM_GROUPS> residues;
-    for (size_t g = 0; g < NUM_GROUPS; ++g) {
-        divide_by_power_minus(*packed_groups[g], packs[g], xi, quotients[g], residues[g]);
-    }
-
-    const FF z_at_xi = residues[2][0];
-    const FF z_at_xi_omega = evaluate(*packed_groups[2], xi_omega);
+    BatchedOpeningProver opening(packed_groups, GROUP_SHAPES, xi, xi_omega);
+    const std::vector<GroupEvaluations>& evaluations = opening.evaluations();
 
     for (size_t i = 0; i < PACK_PREPROCESSED; ++i) {
-        proof.evaluations[EVAL_Q_L + i] = residues[0][i];
+        proof.evaluations[EVAL_Q_L + i] = evaluations[0].at_xi[i];
     }
     for (size_t i = 0; i < PACK_WIRES; ++i) {
-        proof.evaluations[EVAL_A + i] = residues[1][i];
+        proof.evaluations[EVAL_A + i] = evaluations[1].at_xi[i];
     }
-    proof.evaluations[EVAL_Z] = z_at_xi;
-    proof.evaluations[EVAL_Z_OMEGA] = z_at_xi_omega;
+    proof.evaluations[EVAL_Z] = evaluations[2].at_xi[0];
+    proof.evaluations[EVAL_Z_OMEGA] = evaluations[2].at_xi_omega[0];
     for (size_t i = 0; i < PACK_QUOTIENTS; ++i) {
-        proof.evaluations[EVAL_T1 + i] = residues[3][i];
+        proof.evaluations[EVAL_T1 + i] = evaluations[3].at_xi[i];
     }
 
     for (const FF& evaluation : proof.evaluations) {
@@ -102,94 +84,13 @@ FF prover_detail::open_and_batch(const ProvingKey& key,
     }
     const FF nu = transcript.squeeze();
 
-    // W = sum_g nu^g (g_g - R_g) / Z_g. The grand product is the one group opened at two points, so
-    // its quotient is redone here against the linear interpolant rather than a single evaluation.
-    const FF interpolant_slope = (z_at_xi_omega - z_at_xi) * (xi_omega - xi).invert();
-    const FF interpolant_constant = z_at_xi - xi * interpolant_slope;
-    {
-        std::vector<FF> shifted = *packed_groups[2];
-        shifted.resize(std::max(shifted.size(), static_cast<size_t>(2)), FF::zero());
-        shifted[0] -= interpolant_constant;
-        shifted[1] -= interpolant_slope;
-
-        FF remainder = FF::zero();
-        const std::vector<FF> once = divide_by_linear(shifted, xi, remainder);
-        if (!remainder.is_zero()) {
-            throw_or_abort("fflonk: the grand product does not match its claimed evaluation at xi");
-        }
-        quotients[2] = divide_by_linear(once, xi_omega, remainder);
-        if (!remainder.is_zero()) {
-            throw_or_abort("fflonk: the grand product does not match its claimed evaluation at xi*omega");
-        }
-    }
-
-    std::vector<FF> w_polynomial;
-    {
-        size_t widest = 0;
-        for (const std::vector<FF>& quotient : quotients) {
-            widest = std::max(widest, quotient.size());
-        }
-        w_polynomial.assign(widest, FF::zero());
-        FF nu_power = FF::one();
-        for (size_t g = 0; g < NUM_GROUPS; ++g) {
-            for (size_t i = 0; i < quotients[g].size(); ++i) {
-                w_polynomial[i] += nu_power * quotients[g][i];
-            }
-            nu_power *= nu;
-        }
-    }
+    const std::vector<FF> w_polynomial = opening.compute_w(nu);
     proof.w = commitment_key.commit(Polynomial<FF>(std::span<const FF>(w_polynomial)));
 
     transcript.absorb(proof.w);
     const FF y = transcript.squeeze();
 
-    // W' = L / (X - y), with L = sum_g nu^g (Z_T(y)/Z_g(y)) (g_g - R_g(y)) - Z_T(y) W.
-    std::array<FF, NUM_GROUPS> vanishing_at_y{};
-    vanishing_at_y[0] = y.pow(static_cast<uint64_t>(PACK_PREPROCESSED)) - xi;
-    vanishing_at_y[1] = y.pow(static_cast<uint64_t>(PACK_WIRES)) - xi;
-    vanishing_at_y[2] = (y - xi) * (y - xi_omega);
-    vanishing_at_y[3] = y.pow(static_cast<uint64_t>(PACK_QUOTIENTS)) - xi;
-
-    FF total_vanishing = FF::one();
-    for (const FF& value : vanishing_at_y) {
-        if (value.is_zero()) {
-            throw_or_abort("fflonk: the batching challenge collides with an opening point");
-        }
-        total_vanishing *= value;
-    }
-
-    std::vector<FF> linearization;
-    {
-        size_t widest = w_polynomial.size();
-        for (const std::vector<FF>* packed : packed_groups) {
-            widest = std::max(widest, packed->size());
-        }
-        linearization.assign(widest, FF::zero());
-
-        FF nu_power = FF::one();
-        FF constant_term = FF::zero();
-        for (size_t g = 0; g < NUM_GROUPS; ++g) {
-            const FF scalar = nu_power * total_vanishing * vanishing_at_y[g].invert();
-            const std::vector<FF>& packed = *packed_groups[g];
-            for (size_t i = 0; i < packed.size(); ++i) {
-                linearization[i] += scalar * packed[i];
-            }
-            const FF interpolant_at_y =
-                g == 2 ? interpolant_constant + interpolant_slope * y : evaluate(residues[g], y);
-            constant_term += scalar * interpolant_at_y;
-            nu_power *= nu;
-        }
-        linearization[0] -= constant_term;
-        for (size_t i = 0; i < w_polynomial.size(); ++i) {
-            linearization[i] -= total_vanishing * w_polynomial[i];
-        }
-    }
-
-    FF remainder = FF::zero();
-    const std::vector<FF> w_prime_polynomial = divide_by_linear(linearization, y, remainder);
-    if (!remainder.is_zero()) {
-        throw_or_abort("fflonk: the batched opening polynomial does not vanish at y");
-    }
+    const std::vector<FF> w_prime_polynomial = opening.compute_w_prime(nu, y, w_polynomial);
     proof.w_prime = commitment_key.commit(Polynomial<FF>(std::span<const FF>(w_prime_polynomial)));
 
     return xi;
