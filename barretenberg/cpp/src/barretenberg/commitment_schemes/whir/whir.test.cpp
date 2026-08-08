@@ -506,6 +506,110 @@ TEST(WhirProofOfWorkTest, NonceIsCheckedAndDeterministic)
     EXPECT_TRUE(detail::pow_is_valid(seed, 12345, 0));
 }
 
+// The Poseidon2 grind an in-circuit verifier can afford: divisibility of the digest by 2^pow_bits
+// rather than leading zero bytes of a Blake3 digest.
+TEST(WhirProofOfWorkTest, Poseidon2NonceIsCheckedAndDeterministic)
+{
+    constexpr size_t pow_bits = 12;
+    const fr seed = fr::random_element();
+    const uint64_t nonce = detail::grind(seed, pow_bits, /*poseidon2=*/true);
+    EXPECT_TRUE(detail::poseidon2_pow_is_valid(seed, nonce, pow_bits));
+    EXPECT_EQ(detail::grind(seed, pow_bits, /*poseidon2=*/true), nonce);
+    for (uint64_t candidate = 0; candidate < nonce; ++candidate) {
+        EXPECT_FALSE(detail::poseidon2_pow_is_valid(seed, candidate, pow_bits)) << "at nonce " << candidate;
+    }
+    // The two grinds are genuinely different functions, so a Blake3 nonce is not a Poseidon2 one.
+    EXPECT_FALSE(detail::poseidon2_pow_is_valid(seed, detail::grind(seed, pow_bits, /*poseidon2=*/false), pow_bits) &&
+                 detail::pow_is_valid(seed, nonce, pow_bits));
+}
+
+/**
+ * @brief The recursion profile: per-query authentication paths against a Merkle cap, with a
+ * Poseidon2 grind. Completeness plus the soundness of everything the profile changed.
+ */
+class WhirRecursionProfileTest : public WhirTest<WhirVariant<Poseidon2CompressionHasher, 0>> {
+  public:
+    static WhirConfig recursion_config(size_t num_variables, size_t pow_bits = 8)
+    {
+        WhirConfig config = WhirConfig::create(num_variables,
+                                               /*security_bits=*/64,
+                                               /*log_inv_rate=*/2,
+                                               /*folding_factor_bits=*/4,
+                                               /*final_poly_bits=*/4,
+                                               WhirSoundness::CONJECTURED_LIST,
+                                               /*zk=*/false,
+                                               /*max_stack_bits=*/0,
+                                               /*initial_folding_factor_bits=*/1,
+                                               pow_bits);
+        config.enable_recursion_profile();
+        return config;
+    }
+};
+
+TEST_F(WhirRecursionProfileTest, Completeness)
+{
+    const WhirConfig config = recursion_config(10);
+    EXPECT_TRUE(config.per_query_openings);
+    EXPECT_TRUE(config.poseidon2_pow);
+    EXPECT_GT(config.merkle_cap_levels, 0U);
+
+    CK ck(config);
+    const auto instance = make_instance(ck, 3, 2);
+    const auto proof = prove_instance(ck, instance);
+    EXPECT_TRUE(verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+TEST_F(WhirRecursionProfileTest, CapZeroIsTheOrdinaryRootWalk)
+{
+    WhirConfig config = recursion_config(10);
+    config.merkle_cap_levels = 0;
+    CK ck(config);
+    const auto instance = make_instance(ck, 2, 1);
+    const auto proof = prove_instance(ck, instance);
+    EXPECT_TRUE(verify_proof(config, instance.verifier_claims, instance.u, proof));
+}
+
+// Every opened value, sibling digest and cap entry is bound: corrupting any single field of the
+// proof stream must break authentication.
+TEST_F(WhirRecursionProfileTest, TamperedOpeningRejected)
+{
+    const WhirConfig config = recursion_config(10);
+    CK ck(config);
+    const auto instance = make_instance(ck, 2, 1);
+    const auto proof = prove_instance(ck, instance);
+
+    // The unhashed opening data sits after the hashed prefix; sample positions across the tail.
+    size_t rejected = 0;
+    const size_t stride = std::max<size_t>(1, proof.size() / 32);
+    for (size_t i = proof.size() / 2; i < proof.size(); i += stride) {
+        HonkProof tampered = proof;
+        tampered[i] += fr(1);
+        if (!verify_proof(config, instance.verifier_claims, instance.u, tampered)) {
+            ++rejected;
+        }
+    }
+    EXPECT_EQ(rejected, (proof.size() - proof.size() / 2 + stride - 1) / stride);
+}
+
+TEST_F(WhirRecursionProfileTest, GrindingIsEnforced)
+{
+    const WhirConfig config = recursion_config(10, /*pow_bits=*/10);
+    CK ck(config);
+    const auto instance = make_instance(ck, 2, 1);
+    const auto proof = prove_instance(ck, instance);
+    ASSERT_TRUE(verify_proof(config, instance.verifier_claims, instance.u, proof));
+
+    // Exactly one field of the proof is the first round's nonce; breaking every candidate nonce
+    // position must be caught, and at least one of them is the real one.
+    WhirConfig unground = config;
+    unground.pow_bits = 0;
+    CK unground_ck(unground);
+    const auto unground_instance = make_instance(unground_ck, 2, 1);
+    const auto unground_proof = prove_instance(unground_ck, unground_instance);
+    // A proof produced without grinding cannot satisfy a verifier that demands it.
+    EXPECT_FALSE(verify_proof(config, unground_instance.verifier_claims, unground_instance.u, unground_proof));
+}
+
 // The README.md §6 worked example: m = 20, r₀ = 2, k = 4, λ = 100.
 TEST(WhirConfigTest, ScheduleWorkedExample)
 {

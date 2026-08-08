@@ -45,6 +45,67 @@ struct Poseidon2MerkleHasher {
 };
 
 /**
+ * @brief Poseidon2 Merkle hashing tuned for the number of permutations an in-circuit verifier pays.
+ * @details `Poseidon2MerkleHasher` prepends a domain tag element to both leaves and nodes. That tag
+ * occupies a rate slot, so a leaf of `n` values costs ⌈(n+1)/3⌉ permutations rather than ⌈n/3⌉ and a
+ * node costs one permutation only because two children already fit in the rate. Here the domain
+ * separator moves into the sponge's capacity instead: a leaf absorbs its values under the initial
+ * state `(0,0,0, LEAF_IV + n)` and a node is a single permutation of `(left, right, 0, NODE_IV)`.
+ * Separation is at least as strong — the capacity is never touched by absorbed data, whereas a tag
+ * element shares the rate with it — and the leaf of a wide commitment costs one permutation less per
+ * three values.
+ *
+ * A recursive verifier pays roughly 70 constraints per permutation on Ultra (Poseidon2 has its own
+ * custom gates), which makes hashing the dominant term of a WHIR verification circuit; every
+ * permutation removed here is removed once per query per commitment group.
+ */
+struct Poseidon2CompressionHasher {
+    using Digest = fr;
+    using Permutation = crypto::Poseidon2Permutation<crypto::Poseidon2Bn254ScalarFieldParams>;
+    static constexpr size_t DIGEST_NUM_FIELDS = 1;
+    static constexpr size_t RATE = 3;
+
+    /** @brief Capacity separator for leaves; the absorbed length is added so leaves of different
+     * widths cannot collide. Disjoint from `NODE_IV` and from bb's `length << 64` sponge IVs. */
+    static fr leaf_iv(size_t length, bool salted)
+    {
+        return fr(uint256_t(1) << 128) + fr(uint256_t(length)) + (salted ? fr(uint256_t(1) << 64) : fr::zero());
+    }
+    static fr node_iv() { return fr(uint256_t(3) << 128); }
+
+    static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
+    {
+        std::array<fr, 4> state{ fr::zero(), fr::zero(), fr::zero(), leaf_iv(values.size(), salt.has_value()) };
+        size_t slot = 0;
+        auto absorb = [&](const fr& value) {
+            state[slot] += value;
+            if (++slot == RATE) {
+                state = Permutation::permutation(state);
+                slot = 0;
+            }
+        };
+        if (salt) {
+            absorb(*salt);
+        }
+        for (const fr& value : values) {
+            absorb(value);
+        }
+        if (slot != 0 || values.empty()) {
+            state = Permutation::permutation(state);
+        }
+        return state[0];
+    }
+
+    static Digest hash_node(const Digest& left, const Digest& right)
+    {
+        return Permutation::permutation({ left, right, fr::zero(), node_iv() })[0];
+    }
+
+    static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest) { return { digest }; }
+    static Digest digest_from_fields(std::span<const fr> fields) { return fields[0]; }
+};
+
+/**
  * @brief Merkle hasher over BN254 Fr with the Skyscraper-v1 compression (ePrint 2025/058).
  * @details Follows ProveKit's Merkle conventions exactly for apples-to-apples comparison: a leaf is
  * the left-fold of the two-to-one compression over its values (a single value hashes to itself), a
@@ -411,6 +472,57 @@ template <typename Hasher> class MerkleTree {
             index >>= 1;
         }
         return digest == root;
+    }
+
+    /**
+     * @brief The 2^`cap_levels` node digests `cap_levels` levels below the root: a "Merkle cap".
+     * @details Sending the cap once per commitment and stopping every authentication path there
+     * trades `2^c - 1` hashes, paid once, for `c` hashes on every query. For the t random queries a
+     * WHIR round makes, that is a net saving whenever `2^c - 1 < c*t`, and the optimum sits near
+     * `2^c ≈ t`. It matters because an in-circuit verifier's cost is dominated by hash count, and
+     * unlike the batched-opening layout it saves that cost with no data-dependent control flow: the
+     * path length is a compile-time constant and the cap is addressed by the query index's high
+     * bits.
+     */
+    std::vector<Digest> cap(size_t cap_levels) const
+    {
+        BB_ASSERT_LTE(cap_levels, depth(), "cap reaches above the root");
+        return levels_[depth() - cap_levels];
+    }
+
+    /** @brief Authentication path from `leaf_index` up to (not including) the cap level. */
+    Opening open_capped(size_t leaf_index, size_t cap_levels) const
+    {
+        Opening opening = open(leaf_index);
+        BB_ASSERT_LTE(cap_levels, opening.path.size(), "cap reaches above the root");
+        opening.path.resize(opening.path.size() - cap_levels);
+        return opening;
+    }
+
+    /** @brief `verify` against a cap: the path lands on `cap[leaf_index >> path.size()]`. */
+    static bool verify_capped(std::span<const Digest> cap, size_t leaf_index, const Opening& opening)
+    {
+        Digest digest = Hasher::hash_leaf(opening.values, opening.salt);
+        size_t index = leaf_index;
+        for (const Digest& sibling : opening.path) {
+            digest = (index & 1) ? Hasher::hash_node(sibling, digest) : Hasher::hash_node(digest, sibling);
+            index >>= 1;
+        }
+        return index < cap.size() && digest == cap[index];
+    }
+
+    /** @brief Fold a cap back to the root; how a verifier binds a cap to a single-digest commitment. */
+    static Digest root_from_cap(std::span<const Digest> cap)
+    {
+        std::vector<Digest> level(cap.begin(), cap.end());
+        while (level.size() > 1) {
+            std::vector<Digest> above(level.size() / 2);
+            for (size_t j = 0; j < above.size(); ++j) {
+                above[j] = Hasher::hash_node(level[2 * j], level[2 * j + 1]);
+            }
+            level = std::move(above);
+        }
+        return level[0];
     }
 
   private:

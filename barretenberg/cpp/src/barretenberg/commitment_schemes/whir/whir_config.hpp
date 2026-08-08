@@ -71,6 +71,67 @@ struct WhirConfig {
     // and the query counts are derived at `security_bits - pow_bits`. The reference implementation
     // and ProveKit both take 10 bits this way; zero here means every bit comes from queries.
     size_t pow_bits = 0;
+
+    // ---- Recursion profile ----------------------------------------------------------------
+    // Three settings that leave the protocol's soundness argument untouched but change what an
+    // in-circuit verifier has to do. None of them affect the schedule, so they can be flipped on a
+    // config `create` already returned.
+
+    // Grind with Poseidon2 rather than Blake3. Blake3 is the right choice natively — the prover runs
+    // it 2^pow_bits times — but it costs tens of thousands of constraints per round in-circuit,
+    // which wipes out everything grinding buys. Poseidon2 costs one permutation.
+    bool poseidon2_pow = false;
+
+    // Send each query its own authentication path instead of one batch per round. The batched form
+    // is smaller on the wire, but its walk is over the *distinct* leaf set the queries induce, whose
+    // shape is data-dependent; in-circuit that forces witness-indexed reads at every step. Per-query
+    // paths make every index a compile-time constant. Openings are unhashed, so the extra digests
+    // cost a recursive verifier nothing but proof bytes.
+    bool per_query_openings = false;
+
+    // Stop every authentication path `merkle_cap_levels` below the root and commit to that whole
+    // level (a "Merkle cap") instead. See `MerkleTree::cap`. Only meaningful with per-query openings.
+    size_t merkle_cap_levels = 0;
+
+    /**
+     * @brief The cap height this tree actually uses: right-sized for its own query count.
+     * @details `merkle_cap_levels` is set from round 0, which makes the most queries against the
+     * deepest tree. A later round queries a smaller oracle fewer times, where the same cap would
+     * cost more to fold than the path levels it removes, so each tree takes the height optimal for
+     * its own shape. Both parties derive it from the schedule, so nothing is transmitted.
+     */
+    size_t cap_levels_for(size_t num_queries, size_t depth) const
+    {
+        if (merkle_cap_levels == 0) {
+            return 0;
+        }
+        return std::min(std::min(merkle_cap_levels, depth), best_cap_levels(num_queries, depth));
+    }
+
+    /** @brief Cap height minimizing `2^c - 1 + c*t` hashes for `t` queries against a depth-`d` tree. */
+    static size_t best_cap_levels(size_t num_queries, size_t depth)
+    {
+        size_t best = 0;
+        size_t best_cost = num_queries * depth;
+        for (size_t c = 1; c <= depth; ++c) {
+            const size_t cost = (size_t(1) << c) - 1 + num_queries * (depth - c);
+            if (cost < best_cost) {
+                best_cost = cost;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    /** @brief Turn on every recursion-profile setting, sizing the cap from the round-0 query count. */
+    void enable_recursion_profile()
+    {
+        poseidon2_pow = true;
+        per_query_openings = true;
+        const WhirRound& first = rounds.empty() ? final_round : rounds[0];
+        const size_t depth = first.log_domain_size - first.folding_factor_bits;
+        merkle_cap_levels = best_cap_levels(first.num_queries, depth);
+    }
     // Out-of-domain samples taken against every committed oracle, the initial one included
     // (README.md §4.2, §6). Zero in unique decoding, where the list holds a single codeword.
     size_t num_ood_samples = 1;

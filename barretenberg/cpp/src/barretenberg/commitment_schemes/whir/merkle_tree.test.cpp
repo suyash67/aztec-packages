@@ -181,6 +181,51 @@ TYPED_TEST(WhirMerkleTreeTest, BatchOpeningClimbsToTheRootFromAnySubtree)
     }
 }
 
+// A cap is the level `c` below the root: every path stops there, and folding the cap reproduces the
+// root, so a capped opening is exactly as binding as a full one.
+TYPED_TEST(WhirMerkleTreeTest, CappedOpeningsAuthenticateAgainstTheCap)
+{
+    using Tree = MerkleTree<TypeParam>;
+    const std::vector<fr> codeword = random_codeword(256);
+    Tree tree(codeword, 2); // 64 leaves, depth 6
+
+    for (size_t cap_levels = 0; cap_levels <= tree.depth(); ++cap_levels) {
+        const std::vector<typename TypeParam::Digest> cap = tree.cap(cap_levels);
+        ASSERT_EQ(cap.size(), size_t(1) << cap_levels) << "cap level " << cap_levels;
+        EXPECT_EQ(Tree::root_from_cap(cap), tree.root()) << "cap level " << cap_levels;
+
+        for (size_t j = 0; j < tree.num_leaves(); ++j) {
+            const auto opening = tree.open_capped(j, cap_levels);
+            EXPECT_EQ(opening.path.size(), tree.depth() - cap_levels);
+            EXPECT_TRUE(Tree::verify_capped(cap, j, opening)) << "leaf " << j << " at cap level " << cap_levels;
+        }
+    }
+}
+
+TYPED_TEST(WhirMerkleTreeTest, CappedOpeningTamperingRejected)
+{
+    using Tree = MerkleTree<TypeParam>;
+    constexpr size_t cap_levels = 2;
+    const std::vector<fr> codeword = random_codeword(256);
+    Tree tree(codeword, 2);
+    const std::vector<typename TypeParam::Digest> cap = tree.cap(cap_levels);
+    const size_t leaf = 37;
+    ASSERT_TRUE(Tree::verify_capped(cap, leaf, tree.open_capped(leaf, cap_levels)));
+
+    // A wrong leaf index lands on a different cap entry.
+    EXPECT_FALSE(Tree::verify_capped(cap, leaf ^ 1, tree.open_capped(leaf, cap_levels)));
+
+    auto corrupted_value = tree.open_capped(leaf, cap_levels);
+    corrupted_value.values[0] += fr(1);
+    EXPECT_FALSE(Tree::verify_capped(cap, leaf, corrupted_value));
+
+    for (size_t level = 0; level < tree.depth() - cap_levels; ++level) {
+        auto corrupted_path = tree.open_capped(leaf, cap_levels);
+        corrupted_path.path[level] = tree.open_capped(leaf ^ 1, cap_levels).path[0];
+        EXPECT_FALSE(Tree::verify_capped(cap, leaf, corrupted_path)) << "sibling " << level << " is unconstrained";
+    }
+}
+
 TYPED_TEST(WhirMerkleTreeTest, DigestFieldRoundTrip)
 {
     const std::vector<fr> codeword = random_codeword(16);

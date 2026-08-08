@@ -1,4 +1,4 @@
-barretenberg_module(commitment_schemes common transcript polynomials ecc numeric srs crypto_blake3s crypto_poseidon2 crypto_sha256 crypto_skyscraper)
+barretenberg_module(commitment_schemes common transcript polynomials ecc numeric srs crypto_blake3s crypto_poseidon2 crypto_sha256 crypto_skyscraper stdlib_primitives stdlib_poseidon2 circuit_checker)
 
 # pcs_acir_bench (from pcs_acir.bench.cpp) drives an ACIR circuit through every PCS backend; it
 # needs the dsl frontend (and its vm2 stub), which the commitment_schemes library itself must not
@@ -36,4 +36,9 @@ if(TARGET whir_differential_bench)
         message(STATUS "whir_rs_ffi not built; excluding whir_differential_bench")
         set_target_properties(whir_differential_bench PROPERTIES EXCLUDE_FROM_ALL TRUE)
     endif()
+endif()
+# whir_recursion_bench measures the in-circuit WHIR verifier; its `outer` mode additionally proves
+# the aggregation circuit with UltraHonk + KZG, which needs the prover.
+if(TARGET whir_recursion_bench)
+    target_link_libraries(whir_recursion_bench PRIVATE ultra_honk)
 endif()

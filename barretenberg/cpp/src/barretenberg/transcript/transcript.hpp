@@ -431,6 +431,21 @@ template <typename Codec_, typename HashFunction_> class BaseTranscript {
         if (num_frs_read + count > proof_data.size()) {
             throw_or_abort("Transcript: receive_unhashed_from_prover out of bounds (proof too short)");
         }
+        // Not absorbed, but still prover data of this round: a recursive verifier combines it with
+        // challenges of the same round (a Merkle path is hashed against a queried index), so it
+        // needs the same origin tag `receive_from_prover` assigns or the tag mechanism reads it as
+        // a free witness meeting the transcript. Only in-circuit — natively the tags are inert, and
+        // a scheme that reads unhashed data once per query would otherwise run the round counter
+        // past the 256 rounds a tag's provenance mask can represent.
+        if constexpr (in_circuit) {
+            if (challenge_generation_phase) {
+                challenge_generation_phase = false;
+                round_index++;
+            }
+            auto element_frs = std::span{ proof_data }.subspan(num_frs_read, count);
+            bb::assign_origin_tag<in_circuit>(element_frs,
+                                              OriginTag(transcript_index, round_index, /*is_submitted=*/true));
+        }
         std::vector<DataType> elements(proof_data.begin() + static_cast<std::ptrdiff_t>(num_frs_read),
                                        proof_data.begin() + static_cast<std::ptrdiff_t>(num_frs_read + count));
         num_frs_read += count;
