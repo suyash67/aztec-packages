@@ -1,0 +1,560 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity >=0.8.21;
+
+/**
+ * @title fflonk over a plonkish arithmetization: an L1 verifier for wrapped proofs.
+ *
+ * @notice A universal-setup replacement for Groth16 as the last hop to Ethereum. A project proving
+ * with a hash-based commitment scheme cannot verify that proof on chain; it wraps it in a second
+ * circuit whose verifier is cheap. Groth16 is cheap but needs a per-circuit ceremony. fflonk is the
+ * same order of gas from a single universal powers-of-tau.
+ *
+ * @dev The verifier is the mirror of `barretenberg/fflonk`; `PROTOCOL.md` in that directory is the
+ * specification both implement, and the two are cross-checked against the same proofs.
+ *
+ * What makes it cheap. A group of `t` polynomials is committed as one interleaved polynomial
+ * `g(X) = sum_i f_i(X^t) X^i`, for which `g mod (X^t - z) = sum_i f_i(z) X^i` - so one opening
+ * certifies every column's evaluation at `z`, and the residue's coefficients *are* those
+ * evaluations. Because the preprocessed selectors are therefore opened rather than reconstructed in
+ * the group, all three constraint identities are checked in the field. There is no linearisation
+ * MSM: the verifier's group work is seven scalar multiplications and one pairing, and it does not
+ * grow with the number of selectors or the size of the circuit.
+ */
+contract FflonkVerifier {
+    /// BN254 base field.
+    uint256 internal constant Q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
+    /// BN254 scalar field.
+    uint256 internal constant R = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
+
+    uint256 internal constant PROOF_LENGTH = 928;
+    uint256 internal constant NUM_EVALUATIONS = 19;
+    uint256 internal constant NUM_GROUPS = 4;
+
+    // Byte offsets into the proof blob.
+    uint256 internal constant OFF_C1 = 0;
+    uint256 internal constant OFF_C2 = 64;
+    uint256 internal constant OFF_C3 = 128;
+    uint256 internal constant OFF_W = 192;
+    uint256 internal constant OFF_WP = 256;
+    uint256 internal constant OFF_EVALUATIONS = 320;
+
+    // Indices into the evaluation vector; the order is protocol.
+    uint256 internal constant EVAL_Q_L = 0;
+    uint256 internal constant EVAL_Q_R = 1;
+    uint256 internal constant EVAL_Q_O = 2;
+    uint256 internal constant EVAL_Q_M = 3;
+    uint256 internal constant EVAL_Q_C = 4;
+    uint256 internal constant EVAL_S_1 = 5;
+    uint256 internal constant EVAL_S_2 = 6;
+    uint256 internal constant EVAL_S_3 = 7;
+    uint256 internal constant EVAL_A = 8;
+    uint256 internal constant EVAL_B = 9;
+    uint256 internal constant EVAL_C = 10;
+    uint256 internal constant EVAL_T0_LO = 11;
+    uint256 internal constant EVAL_T0_HI = 12;
+    uint256 internal constant EVAL_Z = 13;
+    uint256 internal constant EVAL_Z_OMEGA = 14;
+    uint256 internal constant EVAL_T1 = 15;
+    uint256 internal constant EVAL_T2_LO = 16;
+    uint256 internal constant EVAL_T2_MID = 17;
+    uint256 internal constant EVAL_T2_HI = 18;
+
+    // The BN254 G2 generator and the SRS's [x]_2, in the (c1, c0) ordering the pairing precompile
+    // expects. These are the same points barretenberg's verifier pairs against.
+    uint256 internal constant G2_GEN_X_C1 = 0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2;
+    uint256 internal constant G2_GEN_X_C0 = 0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed;
+    uint256 internal constant G2_GEN_Y_C1 = 0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b;
+    uint256 internal constant G2_GEN_Y_C0 = 0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa;
+    uint256 internal constant G2_TAU_X_C1 = 0x260e01b251f6f1c7e7ff4e580791dee8ea51d87a358e038b4efe30fac09383c1;
+    uint256 internal constant G2_TAU_X_C0 = 0x0118c4d5b837bcc2bc89b5b398b5974e9f5944073b32078b7e231fec938883b0;
+    uint256 internal constant G2_TAU_Y_C1 = 0x04fc6369f7110fe3d25156c1bb9a72859cf2a04641f99ba4ee413c80da6a5fe4;
+    uint256 internal constant G2_TAU_Y_C0 = 0x22febda3c0c0632a56475b4214e5615e11e6dd3f96e6cea2854a87d4dacc5e55;
+
+    // The verification key, inlined into the bytecode at deployment.
+    uint256 public immutable CIRCUIT_SIZE;
+    uint256 public immutable LOG_CIRCUIT_SIZE;
+    uint256 public immutable NUM_PUBLIC_INPUTS;
+    uint256 public immutable OMEGA;
+    uint256 public immutable K1;
+    uint256 public immutable K2;
+    uint256 public immutable C0_X;
+    uint256 public immutable C0_Y;
+    uint256 public immutable VK_HASH;
+    uint256 internal immutable N_INVERSE;
+
+    /// @dev The Fiat-Shamir challenges and the values derived from them, kept off the stack.
+    struct Context {
+        uint256 beta;
+        uint256 gamma;
+        uint256 xi;
+        uint256 nu;
+        uint256 y;
+        uint256 xiPowN;
+        uint256 vanishing;
+        uint256 xiOmega;
+        uint256 slope; // the grand product's interpolant, which is linear: intercept + slope * Y
+        uint256 intercept;
+        uint256 totalVanishing; // Z_T(y) = prod_g Z_g(y)
+    }
+
+    error InvalidVerificationKey();
+
+    /**
+     * @param circuitSize the number of rows, a power of two
+     * @param numPublicInputs how many public inputs the circuit exposes
+     * @param omega a primitive `circuitSize`-th root of unity
+     * @param k1 the second coset shift
+     * @param k2 the third coset shift
+     * @param c0x commitment to the preprocessed group, x
+     * @param c0y commitment to the preprocessed group, y
+     */
+    constructor(
+        uint256 circuitSize,
+        uint256 numPublicInputs,
+        uint256 omega,
+        uint256 k1,
+        uint256 k2,
+        uint256 c0x,
+        uint256 c0y
+    ) {
+        if (circuitSize < 8 || (circuitSize & (circuitSize - 1)) != 0) revert InvalidVerificationKey();
+        if (numPublicInputs >= circuitSize) revert InvalidVerificationKey();
+        if (omega == 0 || omega >= R || k1 == 0 || k1 >= R || k2 == 0 || k2 >= R) revert InvalidVerificationKey();
+        if (!_onCurve(c0x, c0y)) revert InvalidVerificationKey();
+
+        uint256 logN = 0;
+        while ((uint256(1) << logN) != circuitSize) {
+            logN++;
+        }
+
+        // omega must have order exactly circuitSize, or the domain this verifier evaluates the
+        // Lagrange basis and the vanishing polynomial over is not the one the prover committed to.
+        {
+            uint256 half = omega;
+            for (uint256 i = 0; i + 1 < logN; ++i) {
+                half = mulmod(half, half, R);
+            }
+            if (half == 1 || mulmod(half, half, R) != 1) revert InvalidVerificationKey();
+        }
+
+        // H, k1 H and k2 H must be pairwise disjoint. If two of the cosets met, distinct wire slots
+        // would share a permutation label and the grand product would accept a non-permutation -
+        // which is a soundness break, not a liveness one, so it is checked rather than assumed.
+        if (_inDomain(k1, logN) || _inDomain(k2, logN) || _inDomain(mulmod(k1, _inverse(k2), R), logN)) {
+            revert InvalidVerificationKey();
+        }
+
+        CIRCUIT_SIZE = circuitSize;
+        LOG_CIRCUIT_SIZE = logN;
+        NUM_PUBLIC_INPUTS = numPublicInputs;
+        OMEGA = omega;
+        K1 = k1;
+        K2 = k2;
+        C0_X = c0x;
+        C0_Y = c0y;
+        VK_HASH = uint256(keccak256(abi.encodePacked(circuitSize, numPublicInputs, k1, k2, c0x, c0y))) % R;
+        N_INVERSE = _inverse(circuitSize % R);
+    }
+
+    /**
+     * @notice Verify a proof of this circuit for these public inputs.
+     * @dev Never reverts: a malformed proof, a bad point or a failed check all return false.
+     */
+    function verify(bytes calldata proof, uint256[] calldata publicInputs) external view returns (bool) {
+        if (proof.length != PROOF_LENGTH) return false;
+        if (publicInputs.length != NUM_PUBLIC_INPUTS) return false;
+
+        uint256[NUM_EVALUATIONS] memory e;
+        uint256[10] memory points; // c1, c2, c3, w, w' as (x, y)
+        if (!_parse(proof, publicInputs, e, points)) return false;
+
+        Context memory ctx;
+        if (!_challenges(proof, publicInputs, points, ctx)) return false;
+
+        uint256[] memory inverses = _denominators(publicInputs.length, ctx);
+        if (!_batchInvert(inverses)) return false;
+
+        if (!_checkConstraints(e, publicInputs, ctx, inverses)) return false;
+        return _checkOpening(e, points, inverses, publicInputs.length, ctx);
+    }
+
+    /**
+     * @dev Fiat-Shamir: `state <- keccak256(state || absorbed words) mod R`, from `state = 0`.
+     * Returns false if the evaluation challenge is degenerate - it has to miss the domain, or the
+     * vanishing polynomial is zero and every quotient claim comes for free.
+     */
+    function _challenges(
+        bytes calldata proof,
+        uint256[] calldata publicInputs,
+        uint256[10] memory points,
+        Context memory ctx
+    ) internal view returns (bool) {
+        ctx.beta = _challengeOpening(proof, publicInputs);
+        ctx.gamma = uint256(keccak256(abi.encodePacked(ctx.beta))) % R;
+        ctx.xi = uint256(keccak256(abi.encodePacked(ctx.gamma, points[2], points[3], points[4], points[5]))) % R;
+        ctx.nu = _challengeEvaluations(proof, ctx.xi);
+        ctx.y = uint256(keccak256(abi.encodePacked(ctx.nu, points[6], points[7]))) % R;
+
+        uint256 xiPowN = ctx.xi;
+        for (uint256 i = 0; i < LOG_CIRCUIT_SIZE; ++i) {
+            xiPowN = mulmod(xiPowN, xiPowN, R);
+        }
+        if (ctx.xi == 0 || xiPowN == 1) return false;
+
+        ctx.xiPowN = xiPowN;
+        ctx.vanishing = addmod(xiPowN, R - 1, R);
+        ctx.xiOmega = mulmod(ctx.xi, OMEGA, R);
+        return true;
+    }
+
+    /**
+     * @dev Everything the protocol has to invert, in one vector: the Lagrange denominators
+     * `xi - w^i`, then `xi - 1`, then `xi w - xi`, then the four Shplonk denominators `Z_g(y)`.
+     * Montgomery's trick then turns all of them into one modular exponentiation.
+     */
+    function _denominators(uint256 numPublic, Context memory ctx) internal view returns (uint256[] memory inverses) {
+        inverses = new uint256[](numPublic + 2 + NUM_GROUPS);
+
+        uint256 rootPower = 1;
+        for (uint256 i = 0; i < numPublic; ++i) {
+            inverses[i] = addmod(ctx.xi, R - rootPower, R);
+            rootPower = mulmod(rootPower, OMEGA, R);
+        }
+        inverses[numPublic] = addmod(ctx.xi, R - 1, R);
+        inverses[numPublic + 1] = addmod(ctx.xiOmega, R - ctx.xi, R);
+
+        uint256 y2 = mulmod(ctx.y, ctx.y, R);
+        uint256 y4 = mulmod(y2, y2, R);
+        inverses[numPublic + 2] = addmod(mulmod(y4, y4, R), R - ctx.xi, R); // y^8 - xi
+        inverses[numPublic + 3] = addmod(mulmod(y4, ctx.y, R), R - ctx.xi, R); // y^5 - xi
+        inverses[numPublic + 4] = mulmod(addmod(ctx.y, R - ctx.xi, R), addmod(ctx.y, R - ctx.xiOmega, R), R);
+        inverses[numPublic + 5] = addmod(y4, R - ctx.xi, R); // y^4 - xi
+    }
+
+    /**
+     * @dev The three constraint identities, in the field over the claimed evaluations. This is what
+     * replaces PlonK's linearisation, and why the group work below does not grow with the number of
+     * selectors.
+     */
+    function _checkConstraints(
+        uint256[NUM_EVALUATIONS] memory e,
+        uint256[] calldata publicInputs,
+        Context memory ctx,
+        uint256[] memory inverses
+    ) internal view returns (bool) {
+        uint256 numPublic = publicInputs.length;
+
+        // PI(xi) = - sum_i x_i L_i(xi), with L_i(X) = w^i (X^n - 1) / (n (X - w^i)).
+        uint256 publicInputEvaluation = 0;
+        {
+            uint256 rootPower = 1;
+            uint256 scale = mulmod(ctx.vanishing, N_INVERSE, R);
+            for (uint256 i = 0; i < numPublic; ++i) {
+                uint256 lagrange = mulmod(mulmod(rootPower, scale, R), inverses[i], R);
+                publicInputEvaluation = addmod(publicInputEvaluation, R - mulmod(publicInputs[i], lagrange, R), R);
+                rootPower = mulmod(rootPower, OMEGA, R);
+            }
+        }
+
+        {
+            uint256 gate = addmod(
+                addmod(mulmod(e[EVAL_Q_L], e[EVAL_A], R), mulmod(e[EVAL_Q_R], e[EVAL_B], R), R),
+                addmod(mulmod(e[EVAL_Q_O], e[EVAL_C], R), mulmod(mulmod(e[EVAL_Q_M], e[EVAL_A], R), e[EVAL_B], R), R),
+                R
+            );
+            gate = addmod(gate, addmod(e[EVAL_Q_C], publicInputEvaluation, R), R);
+            uint256 t0 = addmod(e[EVAL_T0_LO], mulmod(ctx.xiPowN, e[EVAL_T0_HI], R), R);
+            if (gate != mulmod(t0, ctx.vanishing, R)) return false;
+        }
+
+        {
+            uint256 lagrangeFirst = mulmod(mulmod(ctx.vanishing, N_INVERSE, R), inverses[numPublic], R);
+            uint256 left = mulmod(addmod(e[EVAL_Z], R - 1, R), lagrangeFirst, R);
+            if (left != mulmod(e[EVAL_T1], ctx.vanishing, R)) return false;
+        }
+
+        return _checkPermutation(e, ctx);
+    }
+
+    function _checkPermutation(uint256[NUM_EVALUATIONS] memory e, Context memory ctx) internal view returns (bool) {
+        uint256 identitySide;
+        {
+            uint256 first = addmod(e[EVAL_A], addmod(mulmod(ctx.beta, ctx.xi, R), ctx.gamma, R), R);
+            uint256 second = addmod(e[EVAL_B], addmod(mulmod(mulmod(ctx.beta, K1, R), ctx.xi, R), ctx.gamma, R), R);
+            uint256 third = addmod(e[EVAL_C], addmod(mulmod(mulmod(ctx.beta, K2, R), ctx.xi, R), ctx.gamma, R), R);
+            identitySide = mulmod(mulmod(mulmod(first, second, R), third, R), e[EVAL_Z], R);
+        }
+
+        uint256 sigmaSide;
+        {
+            uint256 first = addmod(e[EVAL_A], addmod(mulmod(ctx.beta, e[EVAL_S_1], R), ctx.gamma, R), R);
+            uint256 second = addmod(e[EVAL_B], addmod(mulmod(ctx.beta, e[EVAL_S_2], R), ctx.gamma, R), R);
+            uint256 third = addmod(e[EVAL_C], addmod(mulmod(ctx.beta, e[EVAL_S_3], R), ctx.gamma, R), R);
+            sigmaSide = mulmod(mulmod(mulmod(first, second, R), third, R), e[EVAL_Z_OMEGA], R);
+        }
+
+        uint256 t2 = addmod(
+            addmod(e[EVAL_T2_LO], mulmod(ctx.xiPowN, e[EVAL_T2_MID], R), R),
+            mulmod(mulmod(ctx.xiPowN, ctx.xiPowN, R), e[EVAL_T2_HI], R),
+            R
+        );
+        return addmod(identitySide, R - sigmaSide, R) == mulmod(t2, ctx.vanishing, R);
+    }
+
+    /**
+     * @dev `F = sum_g s_g C_g - (sum_g s_g R_g(y)) [1] - Z_T(y) W`, then
+     * `e(F + y W', [1]_2) = e(W', [x]_2)`, with `s_g = nu^g Z_T(y)/Z_g(y)`.
+     *
+     * `R_g` is the residue of the group's packed polynomial modulo `Z_g`, so its coefficients are
+     * the claimed evaluations themselves. Only the grand product, opened at two points, needs an
+     * interpolant, and that one is linear.
+     *
+     * Seven scalar multiplications and one pairing, whatever the circuit contains.
+     */
+    function _checkOpening(
+        uint256[NUM_EVALUATIONS] memory e,
+        uint256[10] memory points,
+        uint256[] memory inverses,
+        uint256 numPublic,
+        Context memory ctx
+    ) internal view returns (bool) {
+        ctx.slope = mulmod(addmod(e[EVAL_Z_OMEGA], R - e[EVAL_Z], R), inverses[numPublic + 1], R);
+        ctx.intercept = addmod(e[EVAL_Z], R - mulmod(ctx.xi, ctx.slope, R), R);
+
+        // Z_T(y) recovered from the inverses rather than recomputed from the vanishing values.
+        {
+            uint256 inverseTotal = 1;
+            for (uint256 g = 0; g < NUM_GROUPS; ++g) {
+                inverseTotal = mulmod(inverseTotal, inverses[numPublic + 2 + g], R);
+            }
+            ctx.totalVanishing = _inverse(inverseTotal);
+        }
+
+        uint256[3] memory accumulator;
+        uint256 constantTerm = 0;
+        {
+            uint256 nuPower = 1;
+            for (uint256 g = 0; g < NUM_GROUPS; ++g) {
+                uint256 scalar = mulmod(mulmod(nuPower, ctx.totalVanishing, R), inverses[numPublic + 2 + g], R);
+                constantTerm = addmod(constantTerm, mulmod(scalar, _interpolantAt(e, g, ctx), R), R);
+                if (!_accumulateGroup(accumulator, points, g, scalar)) return false;
+                nuPower = mulmod(nuPower, ctx.nu, R);
+            }
+        }
+
+        // - constantTerm * [1]  -  Z_T(y) * W  +  y * W'
+        if (!_accumulate(accumulator, 1, 2, R - constantTerm)) return false;
+        if (!_accumulate(accumulator, points[6], points[7], R - ctx.totalVanishing)) return false;
+        if (!_accumulate(accumulator, points[8], points[9], ctx.y)) return false;
+
+        // -W'. Negating zero has to stay zero: Q would not be a canonical coordinate, and the
+        // precompile would reject a proof the native verifier accepts.
+        uint256 negatedY = points[9] == 0 ? 0 : Q - points[9];
+        return _pairing(accumulator[0], accumulator[1], points[8], negatedY);
+    }
+
+    /// @dev Group 0 is the preprocessed group, whose commitment lives in the verification key.
+    function _accumulateGroup(uint256[3] memory accumulator, uint256[10] memory points, uint256 group, uint256 scalar)
+        internal
+        view
+        returns (bool)
+    {
+        if (group == 0) return _accumulate(accumulator, C0_X, C0_Y, scalar);
+        return _accumulate(accumulator, points[2 * (group - 1)], points[2 * (group - 1) + 1], scalar);
+    }
+
+    function _interpolantAt(uint256[NUM_EVALUATIONS] memory e, uint256 group, Context memory ctx)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (group == 2) return addmod(ctx.intercept, mulmod(ctx.slope, ctx.y, R), R);
+        return _residueAt(e, group, ctx.y);
+    }
+
+    /// @dev `R_g(y)` by Horner over the group's claimed evaluations, which are its coefficients.
+    function _residueAt(uint256[NUM_EVALUATIONS] memory e, uint256 group, uint256 y)
+        internal
+        pure
+        returns (uint256 result)
+    {
+        (uint256 first, uint256 count) =
+            group == 0 ? (EVAL_Q_L, uint256(8)) : (group == 1 ? (EVAL_A, uint256(5)) : (EVAL_T1, uint256(4)));
+        for (uint256 i = count; i > 0; --i) {
+            result = addmod(mulmod(result, y, R), e[first + i - 1], R);
+        }
+    }
+
+    /**
+     * @dev Read the proof, rejecting non-canonical scalars and points that are not on the curve.
+     *
+     * Read with `calldataload` rather than by slicing: at 29 words the per-slice bounds checking is
+     * the largest non-cryptographic cost in the verifier. The length was already checked by the
+     * caller, which is what makes the unchecked reads safe.
+     */
+    function _parse(
+        bytes calldata proof,
+        uint256[] calldata publicInputs,
+        uint256[NUM_EVALUATIONS] memory e,
+        uint256[10] memory points
+    ) internal pure returns (bool) {
+        for (uint256 i = 0; i < publicInputs.length; ++i) {
+            if (publicInputs[i] >= R) return false;
+        }
+
+        uint256 canonical;
+        assembly {
+            let cursor := proof.offset
+            for { let i := 0 } lt(i, 10) { i := add(i, 1) } {
+                mstore(add(points, mul(i, 0x20)), calldataload(add(cursor, mul(i, 0x20))))
+            }
+            cursor := add(cursor, OFF_EVALUATIONS)
+            canonical := 1
+            for { let i := 0 } lt(i, NUM_EVALUATIONS) { i := add(i, 1) } {
+                let value := calldataload(add(cursor, mul(i, 0x20)))
+                // A scalar at or above the modulus must be rejected rather than reduced, or a proof
+                // would have many encodings and the transcript would not bind it.
+                if iszero(lt(value, R)) { canonical := 0 }
+                mstore(add(e, mul(i, 0x20)), value)
+            }
+        }
+        if (canonical != 1) return false;
+
+        for (uint256 i = 0; i < 5; ++i) {
+            // The point at infinity is not accepted. An honest prover never produces one - it would
+            // mean a committed polynomial was identically zero - and rejecting it keeps this
+            // verifier and the native one identical on every input.
+            if (!_onCurve(points[2 * i], points[2 * i + 1])) return false;
+        }
+        return true;
+    }
+
+    /// @dev keccak256(0 || vkHash || publicInputs || C1), the first challenge.
+    function _challengeOpening(bytes calldata proof, uint256[] calldata publicInputs)
+        internal
+        view
+        returns (uint256 beta)
+    {
+        uint256 vkHash = VK_HASH;
+        assembly {
+            let length := mul(publicInputs.length, 0x20)
+            let ptr := mload(0x40)
+            mstore(ptr, 0)
+            mstore(add(ptr, 0x20), vkHash)
+            calldatacopy(add(ptr, 0x40), publicInputs.offset, length)
+            calldatacopy(add(add(ptr, 0x40), length), add(proof.offset, OFF_C1), 0x40)
+            mstore(0x40, add(add(ptr, 0x80), length))
+            beta := mod(keccak256(ptr, add(0x80, length)), R)
+        }
+    }
+
+    /// @dev keccak256(xi || the nineteen evaluations), copied straight out of calldata.
+    function _challengeEvaluations(bytes calldata proof, uint256 xi) internal pure returns (uint256 nu) {
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr, xi)
+            calldatacopy(add(ptr, 0x20), add(proof.offset, OFF_EVALUATIONS), mul(NUM_EVALUATIONS, 0x20))
+            mstore(0x40, add(ptr, add(0x20, mul(NUM_EVALUATIONS, 0x20))))
+            nu := mod(keccak256(ptr, add(0x20, mul(NUM_EVALUATIONS, 0x20))), R)
+        }
+    }
+
+    /**
+     * @dev `accumulator += (px, py) * scalar`, laid out so that ecMul writes its result exactly
+     * where ecAdd expects its second operand. Two staticcalls, no copying.
+     */
+    function _accumulate(uint256[3] memory accumulator, uint256 px, uint256 py, uint256 scalar)
+        internal
+        view
+        returns (bool ok)
+    {
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr, mload(accumulator))
+            mstore(add(ptr, 0x20), mload(add(accumulator, 0x20)))
+            mstore(add(ptr, 0x40), px)
+            mstore(add(ptr, 0x60), py)
+            mstore(add(ptr, 0x80), scalar)
+
+            ok := staticcall(gas(), 0x07, add(ptr, 0x40), 0x60, add(ptr, 0x40), 0x40)
+            ok := and(ok, staticcall(gas(), 0x06, ptr, 0x80, ptr, 0x40))
+
+            mstore(accumulator, mload(ptr))
+            mstore(add(accumulator, 0x20), mload(add(ptr, 0x20)))
+        }
+    }
+
+    /// @dev e(a, [1]_2) * e(b, [x]_2) == 1: two pairs, 384 bytes, written straight into scratch.
+    function _pairing(uint256 ax, uint256 ay, uint256 bx, uint256 by) internal view returns (bool ok) {
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr, ax)
+            mstore(add(ptr, 0x20), ay)
+            mstore(add(ptr, 0x40), G2_GEN_X_C1)
+            mstore(add(ptr, 0x60), G2_GEN_X_C0)
+            mstore(add(ptr, 0x80), G2_GEN_Y_C1)
+            mstore(add(ptr, 0xa0), G2_GEN_Y_C0)
+            mstore(add(ptr, 0xc0), bx)
+            mstore(add(ptr, 0xe0), by)
+            mstore(add(ptr, 0x100), G2_TAU_X_C1)
+            mstore(add(ptr, 0x120), G2_TAU_X_C0)
+            mstore(add(ptr, 0x140), G2_TAU_Y_C1)
+            mstore(add(ptr, 0x160), G2_TAU_Y_C0)
+            mstore(0x40, add(ptr, 0x180))
+            ok := staticcall(gas(), 0x08, ptr, 0x180, ptr, 0x20)
+            ok := and(ok, eq(mload(ptr), 1))
+        }
+    }
+
+    /// @dev Montgomery's trick: one modular exponentiation for the whole vector.
+    function _batchInvert(uint256[] memory values) internal view returns (bool) {
+        uint256 length = values.length;
+        uint256[] memory prefix = new uint256[](length);
+        uint256 running = 1;
+        for (uint256 i = 0; i < length; ++i) {
+            if (values[i] == 0) return false;
+            running = mulmod(running, values[i], R);
+            prefix[i] = running;
+        }
+
+        uint256 inverse = _inverse(running);
+        for (uint256 i = length; i > 1; --i) {
+            uint256 value = values[i - 1];
+            values[i - 1] = mulmod(inverse, prefix[i - 2], R);
+            inverse = mulmod(inverse, value, R);
+        }
+        values[0] = inverse;
+        return true;
+    }
+
+    /// @dev `value^(R-2) mod R` via the modexp precompile.
+    function _inverse(uint256 value) internal view returns (uint256 result) {
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr, 0x20)
+            mstore(add(ptr, 0x20), 0x20)
+            mstore(add(ptr, 0x40), 0x20)
+            mstore(add(ptr, 0x60), value)
+            mstore(add(ptr, 0x80), sub(R, 2))
+            mstore(add(ptr, 0xa0), R)
+            if iszero(staticcall(gas(), 0x05, ptr, 0xc0, ptr, 0x20)) { revert(0, 0) }
+            result := mload(ptr)
+        }
+    }
+
+    /// @dev Whether `value^(2^logN) == 1`, i.e. whether `value` lies in the evaluation domain.
+    function _inDomain(uint256 value, uint256 logN) internal pure returns (bool) {
+        uint256 power = value;
+        for (uint256 i = 0; i < logN; ++i) {
+            power = mulmod(power, power, R);
+        }
+        return power == 1;
+    }
+
+    /// @dev `y^2 == x^3 + 3` over the base field, with canonical coordinates. Rejects infinity.
+    function _onCurve(uint256 x, uint256 y) internal pure returns (bool) {
+        if (x >= Q || y >= Q) return false;
+        if (x == 0 && y == 0) return false;
+        return mulmod(y, y, Q) == addmod(mulmod(mulmod(x, x, Q), x, Q), 3, Q);
+    }
+}
