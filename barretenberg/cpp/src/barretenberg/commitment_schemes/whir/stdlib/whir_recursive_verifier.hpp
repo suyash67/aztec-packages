@@ -397,8 +397,8 @@ template <typename Builder> class WhirRecursiveVerifier {
         phase.mark("final claim");
     }
 
-  private:
-    /** @brief RAII-free helper that stamps the builder's gate count at each phase boundary. */
+    /** @brief Stamps the builder's gate count at each phase boundary. Public so a verifier that
+     * wraps this one — the Honk shell around the opening — reports into the same breakdown. */
     class Phase {
       public:
         Phase(Builder& builder, GateReport* report)
@@ -421,6 +421,7 @@ template <typename Builder> class WhirRecursiveVerifier {
         GateReport* report_;
     };
 
+  private:
     /**
      * @brief A query index: its value, its bits, and the powers of a domain generator it induces.
      * @details The bits are needed anyway — one per Merkle level to place the sibling, and one per

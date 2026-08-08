@@ -43,6 +43,8 @@ template <typename T> concept UseRowDisablingPolynomial = !IsTranslatorFlavor<T>
 template <typename T>
 concept IsRecursiveFlavor = IsAnyOf<T, UltraRecursiveFlavor_<UltraCircuitBuilder>,
                                        UltraRecursiveFlavor_<MegaCircuitBuilder>,
+                                       UltraProveKitRecursiveFlavor_<UltraCircuitBuilder>,
+                                       UltraProveKitRecursiveFlavor_<MegaCircuitBuilder>,
                                        UltraZKRecursiveFlavor_<UltraCircuitBuilder>,
                                        UltraZKRecursiveFlavor_<MegaCircuitBuilder>,
                                        MegaRecursiveFlavor_<UltraCircuitBuilder>,

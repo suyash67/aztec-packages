@@ -41,6 +41,7 @@ template <typename CurveType, bool HasZK_, bool UseShortMonomials_> class Sumche
 using SumcheckTestFlavorGrumpkinZK = SumcheckTestFlavor_<curve::Grumpkin, true, true>;
 
 template <typename BuilderType> class UltraRecursiveFlavor_;
+template <typename BuilderType> class UltraProveKitRecursiveFlavor_;
 template <typename BuilderType> class UltraZKRecursiveFlavor_;
 template <typename BuilderType> class UltraKeccakRecursiveFlavor_;
 template <typename BuilderType> class MegaRecursiveFlavor_;

@@ -313,7 +313,10 @@ class TransparentHonk {
         return Pcs::verify_opening(config, claims, sumcheck_output.challenge, transcript);
     }
 
-  private:
+    // The entity -> (commitment group, column) mapping is public so a recursive verifier can reuse
+    // it rather than restate it: the two must agree exactly or the opening addresses the wrong
+    // columns, and a restatement is free to drift.
+  public:
     /**
      * @brief (group, column) of every opened unshifted entity, in `get_unshifted()` entity order:
      * the committed precomputed columns (virtual ones skipped, the rest packed densely), then
@@ -338,8 +341,8 @@ class TransparentHonk {
     }
 
     /** @brief The claimed evaluations of the opened unshifted entities: virtual columns skipped. */
-    template <typename EvalsIn>
-    static void append_unshifted_evaluations(std::vector<FF>& out, const EvalsIn& evaluations, uint32_t virtual_mask)
+    template <typename EvalsOut, typename EvalsIn>
+    static void append_unshifted_evaluations(EvalsOut& out, const EvalsIn& evaluations, uint32_t virtual_mask)
     {
         size_t e = 0;
         for (const auto& evaluation : evaluations) {
@@ -350,6 +353,7 @@ class TransparentHonk {
         }
     }
 
+  private:
     /** @brief The row of a point-indicator polynomial e_i, asserting it is exactly that. */
     static size_t indicator_row(const Polynomial<fr>& polynomial)
     {
@@ -380,6 +384,7 @@ class TransparentHonk {
         return eq;
     }
 
+  public:
     /** @brief (group, column) of the to-be-shifted entities in `get_shifted()` entity order. */
     template <typename RefVector> static void append_shifted_refs(RefVector& refs)
     {
@@ -390,6 +395,7 @@ class TransparentHonk {
         refs.push_back({ 3, 1 }); // z_perm
     }
 
+  private:
     static void absorb_vk(const std::shared_ptr<Transcript>& transcript, const VerificationKey& vk)
     {
         transcript->add_to_hash_buffer("vk_log_dyadic_size", FF(vk.log_dyadic_size));

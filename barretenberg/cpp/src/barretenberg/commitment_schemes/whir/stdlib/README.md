@@ -7,7 +7,9 @@ it inside an UltraHonk circuit and settle the 13 KB pairing-based proof instead.
 
 | | |
 |---|---|
-| `whir_recursive_verifier.hpp` | the in-circuit verifier, the mirror of `bb::whir::WhirVerifier::verify` |
+| `whir_recursive_verifier.hpp` | the WHIR opening verifier, the mirror of `bb::whir::WhirVerifier::verify` |
+| `transparent_honk_recursive_verifier.hpp` | the *whole* proof: Honk shell + sumcheck + relations + the opening |
+| `flavor/ultra_provekit_recursive_flavor.hpp` | `UltraProveKitFlavor` over `stdlib::field_t`, so bb's own sumcheck verifier runs in-circuit |
 | `recursion_harness.hpp` | proves WHIR openings of a chosen column layout and verifies them in a circuit |
 | `whir_recursive_verifier.test.cpp` | completeness, soundness (tampering every part of the proof), aggregation |
 | `whir_recursion.bench.cpp` | the gate sweeps below, and the end-to-end outer proof |
@@ -317,25 +319,127 @@ still pay is the domain-point exponentiation `ω^idx`: a 2^k-entry table of `ω`
 multiplications with one lookup. At 2.2 % of the circuit for coset folding and exponentiation
 combined, it is not where the remaining gates are.
 
-## 6. Scope, and running it
+## 6. Verifying a whole proof, not just the opening
+
+`TransparentHonkRecursiveVerifier` is the complete thing: verification-key absorption, public
+inputs, the three witness commitment rounds and their challenges, the full sumcheck over the
+flavor's relation set, the virtual-column checks, and then the WHIR opening. Satisfying its circuit
+is verifying the inner proof.
+
+It reuses bb's own `SumcheckVerifier` rather than restating it. `UltraProveKitRecursiveFlavor_`
+re-instantiates `Flavor::Relations` over `stdlib::field_t`, and because the flavor is registered
+with the `IsRecursiveFlavor` concept, the sumcheck round checks become `assert_equal` instead of
+native comparisons. The relation set the circuit evaluates is therefore the same source the native
+verifier uses, with no hand-written copy to drift.
+
+**The Honk shell is nearly free.** For a 2^13 inner circuit at λ = 64 the whole verifier is 117,314
+gates, of which the shell is 4,825:
+
+| phase | gates |
+|---|---:|
+| honk: transcript + public inputs | 1,007 |
+| honk: sumcheck + relations (all 20 subrelations, 13 rounds) | 3,794 |
+| honk: virtual columns | 24 |
+| *everything else — the WHIR opening* | *112,489* |
+
+That is the useful headline: **verifying a whole WHIR-Honk proof costs about 4 % more than verifying
+its WHIR opening alone.** Sumcheck is `log n` rounds of a degree-6 univariate plus one evaluation of
+the relation set — a few thousand gates — against the hundreds of thousands the opening's Merkle
+work costs. Which also means the levers in §4 are the levers for the whole thing.
+
+One thing the circuit does **not** do for you: `verify` returns the inner proof's public inputs, and
+binding them is the caller's job. Left unbound, the circuit proves "a proof of this inner circuit
+exists" with the public inputs free for the prover to choose. An aggregator that means "a proof of
+*this statement* exists" has to forward them to its own public inputs or hash them in — which is why
+they are returned rather than dropped.
+
+### The whole pipeline, measured
+
+Inner proofs are transparent UltraHonk with WHIR on `UltraProveKitFlavor` (λ = 100, rate 2^-4, k = 4,
+k₀ = 1, Poseidon2 Merkle); the outer proof is ordinary UltraHonk + KZG. Same machine as §4.
+`whir_recursion_bench full` regenerates it.
+
+With a 20-bit grind:
+
+| inner circuit | inner prove | inner verify | inner proof | verifier gates | outer circuit | outer prove | outer verify | outer proof |
+|---|---:|---:|---:|---:|---|---:|---:|---:|
+| 2^13 | 4,921 ms | 23 ms | 112,832 B | 187,655 | 2^18 | 497 ms | 3 ms | 13,120 B |
+| 2^15 | 4,530 ms | 27 ms | 122,880 B | 218,860 | 2^18 | 579 ms | 4 ms | 13,120 B |
+| 2^17 | 17,014 ms | 28 ms | 136,416 B | 242,490 | 2^18 | 618 ms | 3 ms | 13,120 B |
+
+Without grinding:
+
+| inner circuit | inner prove | inner verify | inner proof | verifier gates | outer circuit | outer prove | outer verify | outer proof |
+|---|---:|---:|---:|---:|---|---:|---:|---:|
+| 2^13 | 603 ms | 28 ms | 136,448 B | 225,889 | 2^18 | 596 ms | 3 ms | 13,120 B |
+| 2^15 | 2,385 ms | 33 ms | 148,416 B | 263,518 | 2^19 | 732 ms | 4 ms | 13,120 B |
+| 2^17 | 9,521 ms | 33 ms | 164,704 B | 291,595 | 2^19 | 831 ms | 4 ms | 13,120 B |
+
+Three things to read off it. The verifier grows **logarithmically** in the inner circuit — 2^13 to
+2^17 is sixteen times the circuit for 1.29x the gates. A 112 KB inner proof becomes a 13,120-byte
+outer one whatever the inner size, and the outer verification is 3 ms rather than 23–28 ms. And
+grinding is worth about 17 % of the verifier circuit but is the dominant term in inner proving at
+these sizes — 4.3 s of the 4.9 s at 2^13 — which is the §4 trade seen from the prover's side.
+
+## 7. What full ProveKit recursion would cost
+
+The obvious next target is a whole ProveKit proof rather than a whole WHIR-Honk one. It does not
+work, and the reason is Spartan rather than WHIR.
+
+**ProveKit's verifier is not succinct in the circuit it proves.** `WhirR1CSVerifier::verify` takes
+the R1CS as an argument and calls `multiply_transposed_by_eq_alpha`, which builds an eq-table over
+the whole constraint hypercube and multiplies all three matrices by it — `2^m + nnz(A) + nnz(B) +
+nnz(C)` field operations against the raw matrices. That is why their verifying key for the passport
+circuit is **9.1 MB** and their native verify is ~371 ms where bb's WHIR-Honk verify is 23–33 ms.
+
+This is not one implementation's choice. ProveKit's *own* gnark recursive verifier does the same
+thing in-circuit: `recursive-verifier/app/circuit/matrix_evaluation.go` loops over every nonzero with
+`api.Add(ans, api.Mul(cell.value, api.Mul(rowEval[cell.row], colEval[cell.column])))`, and its CLI
+takes "the R1CS JSON file describing the constraint system of the inner circuit" as a required input.
+
+Priced in barretenberg (`whir_recursion_bench provekit-cost`), that inner loop costs **2.0 gates per
+nonzero** and an eq-table **2.0 gates per hypercube entry** — the matrix structure is public, so only
+the product of the two evaluation tables is a gate.
+
+The row table is indexed by constraint, so it is `2^m` entries and there is no folding variant for
+it: at 2^19 constraints that is **~1.05M gates before a single matrix entry is touched**. (The
+column table can be small — `evaluateFoldedR1CSMatrixExtension` wraps column indices modulo a
+blinding-sized mask — so the column side is not the problem.) On top of that the matrices themselves
+cost 2 gates per nonzero, and ProveKit's verifying key for the passport circuit is 9.1 MB of them.
+
+So a full ProveKit recursive verifier is Θ(inner circuit size): larger than the circuit it verifies,
+and tied to one specific circuit. The WHIR opening inside it — the part this directory implements —
+is 92,094 gates at m = 12 (§4) and grows logarithmically, so it is one to two orders of magnitude
+below the Spartan term at any realistic size. **WHIR is not what makes ProveKit hard to recurse.**
+The fix is on their side: a sparse commitment to the matrices so the verifier stops reading them.
+ProveKit has the machinery (`provekit/spark`, a Spartan-style SPARK compiler), but it is wired into
+the prover only — `grep -rl spark provekit/verifier/src` is empty. Until it reaches the verifier,
+aggregating ProveKit proofs means aggregating the WHIR opening and re-proving the R1CS, which is not
+aggregation.
+
+## 8. Scope, and running it
 
 The verifier covers the shape transparent Honk and ProveKit both use: interleaved columns (no
 stacking), no zero knowledge, every claim at the single sumcheck point. `zk`, `stack_columns` and
 multi-point claim plans are rejected with an assertion rather than silently mis-verified.
 
-**What is verified here is the WHIR opening, not a whole Honk proof.** The shell around it — sumcheck
-and the flavor's subrelations — is the same work for any PCS and is not included; the Noir verifier
-in `commitment_schemes/recursion/` has it. Its figures therefore bundle the two, which is why the
-numbers above are not directly comparable to that README's 501,884.
+`WhirRecursiveVerifier` verifies the opening alone; `TransparentHonkRecursiveVerifier` (§6) verifies
+a whole proof. The §4 tables measure the former, so they are not directly comparable to the Noir
+verifier's 501,884 in `commitment_schemes/recursion/`, which bundles the Honk shell — §6 gives the
+comparable figure.
 
 ```bash
 cd barretenberg/cpp
 cmake --build build --target commitment_schemes_tests whir_recursion_bench
-./build/bin/commitment_schemes_tests --gtest_filter='WhirRecursiveVerifierTest.*:WhirRecursionProfileTest.*'
-./build/bin/whir_recursion_bench            # every table in §4
-./build/bin/whir_recursion_bench outer 8    # aggregate 8 proofs and prove the result
+./build/bin/commitment_schemes_tests --gtest_filter='WhirRecursiveVerifierTest.*:TransparentHonkRecursiveVerifierTest.*:WhirRecursionProfileTest.*'
+./build/bin/whir_recursion_bench                 # every table in §4
+./build/bin/whir_recursion_bench full            # the whole pipeline, §6
+./build/bin/whir_recursion_bench provekit-cost   # the ProveKit term, §7
+./build/bin/whir_recursion_bench outer 8         # aggregate 8 openings and prove the result
 ```
 
 The tests cover completeness over fresh randomness, aggregation of several proofs in one circuit, and
 soundness: corrupting any sampled element of the proof stream, any claimed evaluation, any coordinate
-of the opening point, or any commitment root makes the circuit unsatisfiable.
+of the opening point, or any commitment root makes the circuit unsatisfiable. For the whole-proof
+verifier the same tamper sweep covers the sumcheck univariates and the claimed evaluations, and the
+precomputed-column root — a circuit constant — is what pins the verifier to one inner circuit.

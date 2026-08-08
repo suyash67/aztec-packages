@@ -1,5 +1,9 @@
 #include "barretenberg/commitment_schemes/whir/stdlib/recursion_harness.hpp"
 
+#include "barretenberg/commitment_schemes/whir/stdlib/transparent_honk_recursive_verifier.hpp"
+#include "barretenberg/stdlib_circuit_builders/mock_circuits.hpp"
+#include "barretenberg/ultra_honk/prover_instance.hpp"
+
 #include "barretenberg/common/timer.hpp"
 #include "barretenberg/special_public_inputs/special_public_inputs.hpp"
 #include "barretenberg/srs/global_crs.hpp"
@@ -302,11 +306,195 @@ void outer(size_t count)
     std::cout << "  verified               " << (verified ? "yes" : "NO") << "\n";
 }
 
+/**
+ * @brief The whole pipeline for a *complete* WHIR-Honk proof: inner, verifier circuit, outer.
+ * @details Every column is measured on the same run — the inner proof is produced, verified
+ * natively, verified again inside a circuit, and that circuit is proved with UltraHonk + KZG.
+ */
+void full(const std::vector<size_t>& inner_gate_counts, size_t pow_bits)
+{
+    using Recursive = whir::recursion::TransparentHonkRecursiveVerifier<UltraCircuitBuilder>;
+    using InnerHonk = Recursive::NativeHonk;
+    using FF = stdlib::field_t<UltraCircuitBuilder>;
+
+    const auto build_inner = [](size_t num_gates) {
+        UltraCircuitBuilder builder;
+        MockCircuits::add_arithmetic_gates_with_public_inputs(builder, 16);
+        MockCircuits::add_arithmetic_gates(builder, num_gates);
+        MockCircuits::add_lookup_gates(builder, 2);
+        const size_t rom_id = builder.create_ROM_array(4);
+        for (size_t i = 0; i < 4; ++i) {
+            builder.set_ROM_element(rom_id, i, builder.add_variable(fr(3 * i + 1)));
+        }
+        builder.read_ROM_array(rom_id, builder.add_variable(fr(2)));
+        return builder;
+    };
+    const auto elapsed_ms = [](auto start) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    };
+
+    std::cout << "\nWhole WHIR-Honk proofs, verified recursively and settled with UltraHonk + KZG\n";
+    std::cout << "lambda=100, rate 2^-4, k=4, k0=1, " << pow_bits
+              << "-bit grind; UltraProveKitFlavor (Poseidon2 Merkle)\n";
+    std::cout << std::string(100, '=') << "\n";
+    std::cout << std::left << std::setw(9) << "inner" << std::right << std::setw(11) << "in.prove" << std::setw(11)
+              << "in.verify" << std::setw(12) << "in.proof" << std::setw(12) << "rec.gates" << std::setw(10) << "outer"
+              << std::setw(11) << "out.prove" << std::setw(11) << "out.verify" << std::setw(11) << "out.proof" << "\n";
+
+    for (const size_t num_gates : inner_gate_counts) {
+        UltraCircuitBuilder sizing = build_inner(num_gates);
+        const size_t log_n = ProverInstance_<UltraFlavor>(sizing).log_dyadic_size();
+
+        WhirConfig config = WhirConfig::create(log_n,
+                                               /*security_bits=*/100,
+                                               /*log_inv_rate=*/4,
+                                               /*folding_factor_bits=*/4,
+                                               /*final_poly_bits=*/4,
+                                               WhirSoundness::REPAIRED_LIST,
+                                               /*zk=*/false,
+                                               /*max_stack_bits=*/0,
+                                               /*initial_folding_factor_bits=*/1,
+                                               pow_bits);
+        config.enable_recursion_profile();
+
+        UltraCircuitBuilder inner_builder = build_inner(num_gates);
+        auto pk = InnerHonk::create_proving_key(inner_builder, config);
+        auto start = std::chrono::steady_clock::now();
+        const HonkProof inner_proof = InnerHonk::prove(pk);
+        const auto inner_prove_ms = elapsed_ms(start);
+
+        start = std::chrono::steady_clock::now();
+        const bool inner_ok = InnerHonk::verify(pk.vk, config, inner_proof);
+        const auto inner_verify_ms = elapsed_ms(start);
+        if (!inner_ok) {
+            throw_or_abort("whir_recursion_bench: the inner proof does not verify");
+        }
+
+        UltraCircuitBuilder outer;
+        typename StdlibTranscript<UltraCircuitBuilder>::Proof stdlib_proof;
+        stdlib_proof.reserve(inner_proof.size());
+        for (const fr& element : inner_proof) {
+            stdlib_proof.push_back(FF::from_witness(&outer, element));
+        }
+        const std::vector<FF> inner_public_inputs = Recursive::verify(outer, pk.vk, config, stdlib_proof);
+        for (const FF& input : inner_public_inputs) {
+            outer.set_public_input(input.get_witness_index());
+        }
+        const size_t recursive_gates = outer.get_num_finalized_gates_inefficient();
+        DefaultIO::add_default(outer);
+
+        auto prover_instance = std::make_shared<ProverInstance_<UltraFlavor>>(outer);
+        auto verification_key = std::make_shared<UltraFlavor::VerificationKey>(prover_instance->get_precomputed());
+        UltraProver_<UltraFlavor> prover(prover_instance, verification_key);
+        start = std::chrono::steady_clock::now();
+        const HonkProof outer_proof = prover.construct_proof();
+        const auto outer_prove_ms = elapsed_ms(start);
+
+        auto vk_and_hash = std::make_shared<UltraFlavor::VKAndHash>(verification_key);
+        start = std::chrono::steady_clock::now();
+        UltraVerifier_<UltraFlavor, DefaultIO> verifier(vk_and_hash);
+        const bool outer_ok = verifier.verify_proof(outer_proof).result;
+        const auto outer_verify_ms = elapsed_ms(start);
+        if (!outer_ok) {
+            throw_or_abort("whir_recursion_bench: the outer proof does not verify");
+        }
+
+        std::cout << std::left << std::setw(9) << ("2^" + std::to_string(log_n)) << std::right << std::setw(9)
+                  << inner_prove_ms << " ms" << std::setw(9) << inner_verify_ms << " ms" << std::setw(10)
+                  << inner_proof.size() * sizeof(fr) << " B" << std::setw(12) << recursive_gates << std::setw(10)
+                  << ("2^" + std::to_string(prover_instance->log_dyadic_size())) << std::setw(9) << outer_prove_ms
+                  << " ms" << std::setw(9) << outer_verify_ms << " ms" << std::setw(9)
+                  << outer_proof.size() * sizeof(fr) << " B\n";
+    }
+}
+
+/**
+ * @brief The dominant term of a *ProveKit* recursive verifier, measured in barretenberg.
+ *
+ * @details ProveKit's Spartan verifier is not succinct in the circuit it proves. It builds an
+ * eq-table over the whole constraint hypercube (`calculate_evaluations_over_boolean_hypercube_for_eq`
+ * in `provekit/common/src/utils/sumcheck.rs`) and multiplies the three R1CS matrices by it
+ * (`multiply_transposed_by_eq_alpha`), so its work is `2^m + nnz(A) + nnz(B) + nnz(C)` field
+ * operations against the *raw* matrices, which it takes as an input.
+ *
+ * Their own gnark recursive verifier does exactly that in-circuit — `matrix_evaluation.go` loops
+ * over every nonzero with `api.Add(ans, api.Mul(value, api.Mul(rowEval[row], colEval[col])))` — so
+ * this is not an artifact of one implementation. This probe reproduces that inner loop in bb stdlib
+ * and reports the per-nonzero and per-hypercube-entry gate cost, which is what prices the whole
+ * approach: the matrix indices are public, so the products are the cost and the loop is linear in
+ * the inner circuit.
+ */
+void provekit_cost()
+{
+    using FF = stdlib::field_t<UltraCircuitBuilder>;
+
+    std::cout << "\nProveKit's R1CS term, priced in barretenberg\n";
+    std::cout << std::string(60, '=') << "\n";
+
+    // The eq-table: 2^m entries, each one multiplication.
+    for (const size_t log_m : std::vector<size_t>{ 10, 12 }) {
+        UltraCircuitBuilder builder;
+        std::vector<FF> r;
+        for (size_t i = 0; i < log_m; ++i) {
+            r.push_back(FF::from_witness(&builder, fr::random_element()));
+        }
+        std::vector<FF> table{ FF(1) };
+        for (const FF& coordinate : r) {
+            std::vector<FF> next(table.size() * 2);
+            for (size_t j = 0; j < table.size(); ++j) {
+                next[2 * j + 1] = table[j] * coordinate;
+                next[2 * j] = table[j] - next[2 * j + 1];
+            }
+            table = std::move(next);
+        }
+        const size_t gates = builder.get_num_finalized_gates_inefficient();
+        std::cout << "  eq table over 2^" << log_m << ": " << gates << " gates ("
+                  << double(gates) / double(size_t(1) << log_m) << " per entry)\n";
+    }
+
+    // The matrix loop: one product of two witness evaluations per nonzero, scaled by a public entry.
+    for (const size_t nonzeros : std::vector<size_t>{ 10000, 50000 }) {
+        UltraCircuitBuilder builder;
+        std::vector<FF> row_eval;
+        std::vector<FF> col_eval;
+        for (size_t i = 0; i < 256; ++i) {
+            row_eval.push_back(FF::from_witness(&builder, fr::random_element()));
+            col_eval.push_back(FF::from_witness(&builder, fr::random_element()));
+        }
+        FF accumulator(0);
+        for (size_t i = 0; i < nonzeros; ++i) {
+            // Matrix structure and values are public, so only the evaluation product is a gate.
+            accumulator += row_eval[i % 256] * col_eval[(i * 7) % 256] * bb::fr(uint64_t(i % 5) + 1);
+        }
+        accumulator.assert_is_not_zero();
+        const size_t gates = builder.get_num_finalized_gates_inefficient();
+        std::cout << "  " << nonzeros << " nonzeros: " << gates << " gates (" << double(gates) / double(nonzeros)
+                  << " per nonzero)\n";
+    }
+    std::cout << "\n  A ProveKit verification key for the 2^19 passport circuit is 9.1 MB, essentially all\n"
+                 "  matrix data, so this term runs to millions of gates and grows linearly with the inner\n"
+                 "  circuit. The WHIR opening it also contains costs about 92,000 gates and grows\n"
+                 "  logarithmically. Full ProveKit recursion is bounded by Spartan, not by WHIR.\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     const std::string mode = argc > 1 ? argv[1] : "all";
+    if (mode == "provekit-cost") {
+        provekit_cost();
+        std::cout << std::endl;
+        return 0;
+    }
+    if (mode == "full") {
+        srs::init_file_crs_factory(srs::bb_crs_path());
+        // Distinct dyadic sizes: the lookup table alone floors the mock circuit at 2^13.
+        full({ 100, 20000, 100000 }, /*pow_bits=*/20);
+        full({ 100, 20000, 100000 }, /*pow_bits=*/0);
+        std::cout << std::endl;
+        return 0;
+    }
     if (mode == "outer") {
         srs::init_file_crs_factory(srs::bb_crs_path());
         outer(argc > 2 ? static_cast<size_t>(std::stoul(argv[2])) : 1);
