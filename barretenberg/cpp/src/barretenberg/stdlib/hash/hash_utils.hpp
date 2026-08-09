@@ -47,7 +47,13 @@ field_t<Builder> add_normalize_unsafe(const field_t<Builder>& a, const field_t<B
     field_pt overflow = witness_pt(ctx, overflow_value);
 
     field_pt result = a.add_two(b, overflow * field_pt(ctx, -fr(1ULL << 32ULL)));
-    overflow.create_range_constraint(overflow_bits);
+    // The batched delta-range path directly, rather than field_t::create_range_constraint: that goes through the
+    // limbed decomposition, which for a range this small spends a gate copying the witness into a single limb and
+    // reconstructing it. The gate `create_small_range_constraint` warns about - one making the variable appear in a
+    // wire - is the `add_two` above, so no filler gate is needed either.
+    BB_ASSERT_LTE(overflow_bits, Builder::DEFAULT_PLOOKUP_RANGE_BITNUM);
+    ctx->create_small_range_constraint(
+        overflow.get_witness_index(), (1ULL << overflow_bits) - 1, "add_normalize_unsafe: overflow too large.");
     return result;
 }
 

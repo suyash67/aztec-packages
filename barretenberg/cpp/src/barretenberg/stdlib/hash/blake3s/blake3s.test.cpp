@@ -29,7 +29,61 @@ std::vector<std::string> test_vectors = { std::string{},
                                           "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01",
                                           "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz012",
                                           "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789" };
+
+template <typename Builder> void report_blocks(const std::string& label, Builder& builder)
+{
+    info(label,
+         ": total = ",
+         builder.get_num_finalized_gates_inefficient(),
+         " | lookup = ",
+         builder.blocks.lookup.size(),
+         " | arith = ",
+         builder.blocks.arithmetic.size(),
+         " | delta_range = ",
+         builder.blocks.delta_range.size(),
+         " | lookup tables = ",
+         builder.get_tables_size());
+}
 } // namespace
+
+// Reports the in-circuit cost of a 32-byte blake3s. Two numbers matter: the standalone circuit cost (which pays for
+// the lookup tables once) and the marginal cost of an additional hash, which is what dominates any circuit that
+// hashes repeatedly (e.g. a Merkle path).
+TYPED_TEST(StdlibBlake3s, gate_count_32_byte_input)
+{
+    using Builder = TypeParam;
+    using byte_array_ct = stdlib::byte_array<Builder>;
+
+    std::vector<uint8_t> input_v(32);
+    for (size_t i = 0; i < input_v.size(); ++i) {
+        input_v[i] = static_cast<uint8_t>(i * 7 + 1);
+    }
+
+    size_t one_hash_gates = 0;
+    {
+        Builder builder;
+        byte_array_ct input_arr(&builder, input_v);
+        byte_array_ct output = stdlib::Blake3s<Builder>::hash(input_arr);
+        EXPECT_EQ(output.get_value(), blake3::blake3s(input_v));
+        one_hash_gates = builder.get_num_finalized_gates_inefficient();
+        report_blocks("blake3s(32 bytes) x1  ", builder);
+        EXPECT_TRUE(CircuitChecker::check(builder));
+    }
+
+    {
+        constexpr size_t NUM_HASHES = 9;
+        Builder builder;
+        byte_array_ct input_arr(&builder, input_v);
+        for (size_t i = 0; i < NUM_HASHES; ++i) {
+            byte_array_ct output = stdlib::Blake3s<Builder>::hash(input_arr);
+            EXPECT_EQ(output.get_value(), blake3::blake3s(input_v));
+        }
+        report_blocks("blake3s(32 bytes) x9  ", builder);
+        const size_t nine_hash_gates = builder.get_num_finalized_gates_inefficient();
+        info("blake3s(32 bytes) marginal cost per hash = ", (nine_hash_gates - one_hash_gates) / (NUM_HASHES - 1));
+        EXPECT_TRUE(CircuitChecker::check(builder));
+    }
+}
 
 TYPED_TEST(StdlibBlake3s, test_single_block)
 {

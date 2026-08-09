@@ -43,12 +43,11 @@ template <typename Builder> void Blake2s<Builder>::increment_counter(blake2s_sta
     BB_ASSERT(S.t[0].is_constant());
     BB_ASSERT(S.t[1].is_constant());
 
-    field_ct inc_scalar(static_cast<uint256_t>(inc));
-
-    S.t[0] = S.t[0] + inc_scalar;
-    // Enforced constant state (t[0], t[1]) allows computing the carry out-of-circuit (with correct 32-bit wrap) without
-    // adding constraints.
-    const bool to_inc = uint32_t(uint256_t(S.t[0].get_value())) < inc;
+    // Enforced constant state (t[0], t[1]) allows computing the sum and its carry out-of-circuit (with correct 32-bit
+    // wrap) without adding constraints. The counter is kept reduced because it is later used as a lookup key.
+    const uint32_t sum = static_cast<uint32_t>(uint256_t(S.t[0].get_value()).data[0]) + inc;
+    S.t[0] = field_ct(static_cast<uint256_t>(sum));
+    const bool to_inc = sum < inc;
     S.t[1] = S.t[1] + (to_inc ? field_ct(1) : field_ct(0));
 }
 
@@ -90,9 +89,6 @@ template <typename Builder> void Blake2s<Builder>::compress(blake2s_state& S, by
         blake_util::round_fn(v, m, idx);
     }
 
-    // At this point in the algorithm, the elements (v0, v1, v2, v3) and (v8, v9, v10, v11) in the state matrix 'v' can
-    // be 'overflowed' i.e. contain values > 2^{32}. However we do NOT need to normalize them to be < 2^{32}, the
-    // following `read_sequence_from_table` calls correctly constrain the output to be 32-bits
     for (size_t i = 0; i < 8; ++i) {
         const auto lookup_a = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR, S.h[i], v[i], true);
         const auto lookup_b =

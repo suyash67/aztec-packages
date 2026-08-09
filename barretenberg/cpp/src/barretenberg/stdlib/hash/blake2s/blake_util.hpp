@@ -32,51 +32,36 @@ constexpr uint8_t MSG_SCHEDULE_BLAKE2[10][16] = {
 };
 
 /**
+ * @brief The `G` mixing function of Blake2s and Blake3s: four modular additions interleaved with four
+ * XOR-and-rotate-right steps.
  *
- * Function `G' in the Blake2s and Blake3s algorithm which is the core
- * mixing step with additions, xors and right-rotates. This function is
- * used in  Ultra version (with lookup tables).
+ * @details Cost per call (UltraCircuitBuilder):
+ *
+ *   4 XOR-rotates x 4 lookup gates (32-bit words in 8-bit slices)  = 16
+ *   2 three-term modular additions x 2 gates                       =  4
+ *   2 two-term modular additions x 1 gate                          =  2
+ *                                                                    --
+ *                                                                    22
+ * plus four range constraints on the addition overflows, which amortize to well under a gate each since all of Blake
+ * shares two range lists (1-bit and 2-bit).
+ *
+ * +-----------+--------------+-----------------------+---------------------------+
+ * |           |  calls to G  | gate count for rounds | lookups outside the rounds|
+ * |-----------|--------------|-----------------------|---------------------------|
+ * |  Blake2s  |      80      |        80 * 22        |          20 * 4           |
+ * |  Blake3s  |      56      |        56 * 22        |           8 * 4           |
+ * +-----------+--------------+-----------------------+---------------------------+
+ *
+ * Every value handed to a lookup here must be a reduced 32-bit word: the 8-bit slicing leaves no headroom above
+ * bit 31, so an out-of-range key has no valid decomposition and the lookup simply fails. That is why each addition
+ * is reduced by `add_normalize_unsafe` rather than left to overflow. The reduction is sound despite its name: the
+ * overflow witness is range-constrained, and the subsequent lookup pins the result below 2^32, which leaves the
+ * prover exactly one admissible choice of overflow.
  *
  * Inputs: - A pointer to a 16-word `state`,
  *         - indices a, b, c, d,
  *         - addition messages x and y
- *
- * Gate costs per call to function G in lookup case:
- *
- * Read sequence from table = 6 gates per read => 6 * 4 = 24
- * Addition gates = 2 gates
- * Range gates = 2 gates
- * Addition gate for correct output of XOR rotate 12 = 1 gate
- * Normalizing scaling factors = 2 gates
- *
- * Subtotal = 31 gates
- * Outside rounds, each of Blake2s and Blake3s needs 20 and 24 lookup reads respectively.
- *
- * +-----------+--------------+-----------------------+---------------------------+--------------+
- * |           |  calls to G  | gate count for rounds | gate count outside rounds |    total     |
- * |-----------|--------------|-----------------------|---------------------------|--------------|
- * |  Blake2s  |      80      |        80 * 31        |          20 * 6           |     2600     |
- * |  Blake3s  |      56      |        56 * 31        |          24 * 6           |     1880     |
- * +-----------+--------------+-----------------------+---------------------------+--------------+
- *
- * P.S. This doesn't include some more addition gates required after the rounds.
- *      This cost would be negligible as compared to the above gate counts.
- *
- *
- * NOTE: As a future optimization, the following idea can be used for getting rid of extra addition and multiplication
- * gates by tweaking gate structure. To be implemented later.
- *
- *   q_plookup = 1        | d0 | a0 | d'0 | --  |
- *   q_plookup = 1        | d1 | a1 | d'1 | d2  | <--- set q_arith = 1 and validate d2 - d'5 * scale_factor = 0
- *   q_plookup = 1        | d2 | a2 | d'2 | d'5 |
- *   q_plookup = 1        | d3 | a3 | d'3 | --  |
- *   q_plookup = 1        | d4 | a4 | d'4 | --  |
- *   q_plookup = 1        | d5 | a5 | d'5 | c   |  <---- set q_arith = 1 and validate d'5 * scale_factor + c - c2 =
- * 0. |               | c2  |  <---- this row is start of another lookup table (b ^ c)
- *
- *
- **/
-
+ */
 template <typename Builder>
 void g(field_t<Builder> state[BLAKE_STATE_SIZE],
        size_t a,
@@ -86,70 +71,34 @@ void g(field_t<Builder> state[BLAKE_STATE_SIZE],
        field_t<Builder> x,
        field_t<Builder> y)
 {
-    typedef field_t<Builder> field_pt;
+    using plookup_read_pt = plookup_read<Builder>;
 
     // For simplicity, state[a] is written as `a' in comments.
-    // a = a + b + x
-    state[a] = state[a].add_two(state[b], x);
+    // a = a + b + x. Three 32-bit summands overflow by at most 2 bits.
+    state[a] = hash_utils::add_normalize_unsafe(state[a], state[b] + x, /*overflow_bits=*/2);
 
     // d = (d ^ a).ror(16)
-    // Get the lookup accumulator where `lookup_1[ColumnIdx::C3][0]` contains the
-    // XORed and rotated (by 16) value scaled by 2^{-16}.
-    const auto lookup_1 = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR_ROTATE_16, state[d], state[a], true);
-    // Compute the scaling factor 2^{32-16} = 2^{16} to get the correct rotated value.
-    field_pt scaling_factor_1 = (1 << (32 - 16));
-    // Multiply by the scaling factor to get the final rotated value.
-    state[d] = lookup_1[ColumnIdx::C3][0] * scaling_factor_1;
+    state[d] =
+        plookup_read_pt::get_lookup_accumulators(BLAKE_XOR_ROTATE_16, state[d], state[a], true)[ColumnIdx::C3][0];
 
     // c = c + d
-    state[c] = state[c] + state[d];
+    state[c] = hash_utils::add_normalize_unsafe(state[c], state[d], /*overflow_bits=*/1);
 
     // b = (b ^ c).ror(12)
-    // Does not require a special XOR_ROTATE_12 table since we can get the correct value
-    // by combining values from BLAKE_XOR table itself.
-    // Let u = s_0 + 2^6 * s_1 + 2^{12} * s_2 + 2^{18} * s_3 + 2^{24} * s_4 + 2^{30} * s_5
-    // be a 32-bit output of XOR, split into slices s_0, s_1, s_2, s_3, s_4 (6-bits each) and s_5 (5-bit).
-    // We want to compute ROTATE_12(u) = s_2 + 2^6 * s_3 + 2^{12} * s_4 + 2^{18} * s_5 + 2^{20} * s_0 + 2^{26} * s_1.
-    // The BLAKE_XOR table gives:
-    // lookup_2[ColumnIdx::C3][0] = s_0 + 2^6 * s_1 + 2^{12} * s_2 + 2^{18} * s_3 + 2^{24} * s_4 + 2^{30} * s_5 = u.
-    // lookup_2[ColumnIdx::C3][2] = s_2 + 2^6 * s_3 + 2^{12} * s_4 + 2^{18} * s_5 (i.e., u without s_0 and s_1).
-    // Thus, we can compute ROTATE_12(u) as:
-    // ROTATE_12(u) = lookup_2[ColumnIdx::C3][2] + (lookup_2[ColumnIdx::C3][0] - 2^{12} * lookup_2[ColumnIdx::C3][2]) *
-    // 2^{20}.
-
-    // Get the lookup accumulator for BLAKE_XOR table where lookup_2[ColumnIdx::C3][0] = u.
-    const auto lookup_2 = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR, state[b], state[c], true);
-    // lookup_2[ColumnIdx::C3][2] = s_2 + 2^6 * s_3 + 2^{12} * s_4 + 2^{18} * s_5 (i.e., u without s_0 and s_1).
-    field_pt lookup_output = lookup_2[ColumnIdx::C3][2];
-    // Compute 2^{12} * lookup_2[ColumnIdx::C3][2].
-    field_pt t2_term = field_pt(1 << 12) * lookup_2[ColumnIdx::C3][2];
-    // Compute the final rotated value as described for ROTATE_12(u) above.
-    lookup_output += (lookup_2[ColumnIdx::C3][0] - t2_term) * field_pt(1 << 20);
-    state[b] = lookup_output;
+    state[b] =
+        plookup_read_pt::get_lookup_accumulators(BLAKE_XOR_ROTATE_12, state[b], state[c], true)[ColumnIdx::C3][0];
 
     // a = a + b + y
-    state[a] = hash_utils::add_normalize_unsafe(state[a], state[b] + y, /*overflow_bits=*/3);
+    state[a] = hash_utils::add_normalize_unsafe(state[a], state[b] + y, /*overflow_bits=*/2);
 
     // d = (d ^ a).ror(8)
-    // Get the lookup accumulator where `lookup_3[ColumnIdx::C3][0]` contains the
-    // XORed and rotated (by 8) value scaled by 2^{-24}.
-    const auto lookup_3 = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR_ROTATE_8, state[d], state[a], true);
-    // Compute the scaling factor 2^{32-8} = 2^{24} to get the correct rotated value.
-    field_pt scaling_factor_3 = (1 << (32 - 8));
-    // Multiply by the scaling factor to get the final rotated value.
-    state[d] = lookup_3[ColumnIdx::C3][0] * scaling_factor_3;
+    state[d] = plookup_read_pt::get_lookup_accumulators(BLAKE_XOR_ROTATE_8, state[d], state[a], true)[ColumnIdx::C3][0];
 
     // c = c + d
-    state[c] = hash_utils::add_normalize_unsafe(state[c], state[d], /*overflow_bits=*/3);
+    state[c] = hash_utils::add_normalize_unsafe(state[c], state[d], /*overflow_bits=*/1);
 
     // b = (b ^ c).ror(7)
-    // Get the lookup accumulator where `lookup_4[ColumnIdx::C3][0]` contains the
-    // XORed and rotated (by 7) value scaled by 2^{-25}.
-    const auto lookup_4 = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR_ROTATE_7, state[b], state[c], true);
-    // Compute the scaling factor 2^{32-7} = 2^{25} to get the correct rotated value.
-    field_pt scaling_factor_4 = (1 << (32 - 7));
-    // Multiply by the scaling factor to get the final rotated value.
-    state[b] = lookup_4[ColumnIdx::C3][0] * scaling_factor_4;
+    state[b] = plookup_read_pt::get_lookup_accumulators(BLAKE_XOR_ROTATE_7, state[b], state[c], true)[ColumnIdx::C3][0];
 }
 
 /*

@@ -60,13 +60,6 @@ void Blake3s<Builder>::compress_in_place(field_ct cv[BLAKE3_CV_WORDS],
     field_ct state[BLAKE3_STATE_SIZE];
     compress_pre(state, cv, block, block_len, flags);
 
-    /**
-     * At this point in the algorithm, a malicious prover could tweak the add_normalise function in `blake_util.hpp` to
-     * create unexpected overflow in the state matrix. At the end of the `compress_pre()` function, there might be
-     * overflows in the elements of the first and third rows of the state matrix. But this wouldn't be a problem because
-     * in the below loop, while reading from the lookup table, we ensure that the overflow is ignored and the result is
-     * constrained to 32 bits.
-     */
     for (size_t i = 0; i < (BLAKE3_STATE_SIZE >> 1); i++) {
         const auto lookup = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR, state[i], state[i + 8], true);
         cv[i] = lookup[ColumnIdx::C3][0];
@@ -80,26 +73,25 @@ void Blake3s<Builder>::compress_xof(const field_ct cv[BLAKE3_CV_WORDS],
                                     uint8_t flags,
                                     byte_array_ct& out)
 {
+    BB_ASSERT_LTE(out.size(), BLAKE3_BLOCK_LEN, "blake3s XOF output cannot exceed one block per compression.");
+
     field_ct state[BLAKE3_STATE_SIZE];
 
     compress_pre(state, cv, block, block_len, flags);
 
-    /**
-     * The same note as in the above `blake3_compress_in_place()` function. Here too, reading from the lookup table
-     * ensures that correct 32-bit inputs are used.
-     */
-    for (size_t i = 0; i < (BLAKE3_STATE_SIZE >> 1); i++) {
-        const auto lookup_1 = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR, state[i], state[i + 8], true);
+    // Only the words the caller asked for are XORed out: producing the full 64-byte block and discarding the tail
+    // would cost eight lookups and eight byte decompositions for nothing.
+    const size_t num_words = (out.size() + 3) / 4;
+    for (size_t i = 0; i < num_words; i++) {
+        const auto lookup =
+            i < (BLAKE3_STATE_SIZE >> 1)
+                ? plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR, state[i], state[i + 8], true)
+                : plookup_read<Builder>::get_lookup_accumulators(
+                      BLAKE_XOR, state[i], cv[i - (BLAKE3_STATE_SIZE >> 1)], true);
         // byte_array(field, num_bytes) constructor adds range constraints for each byte
-        byte_array_ct out_bytes_1(lookup_1[ColumnIdx::C3][0], 4);
-        // Safe write: both out and out_bytes_1 are constrained
-        out.write_at(out_bytes_1.reverse(), i * 4);
-
-        const auto lookup_2 = plookup_read<Builder>::get_lookup_accumulators(BLAKE_XOR, state[i + 8], cv[i], true);
-        // byte_array(field, num_bytes) constructor adds range constraints for each byte
-        byte_array_ct out_bytes_2(lookup_2[ColumnIdx::C3][0], 4);
-        // Safe write: both out and out_bytes_2 are constrained
-        out.write_at(out_bytes_2.reverse(), (i + 8) * 4);
+        byte_array_ct out_bytes(lookup[ColumnIdx::C3][0], 4);
+        // Safe write: both out and out_bytes are constrained
+        out.write_at(out_bytes.reverse(), i * 4);
     }
 }
 
@@ -172,11 +164,9 @@ template <typename Builder> void Blake3s<Builder>::hasher_finalize(const blake3_
     uint8_t block_flags = self->flags | maybe_start_flag(self) | CHUNK_END;
     output_t output = make_output(self->cv, self->buf, self->buf_len, block_flags);
 
-    // Create zero-filled constant buffer for compress_xof output (no constraints needed)
-    byte_array_ct wide_buf = byte_array_ct::constant_padding(out.get_context(), BLAKE3_BLOCK_LEN);
-    compress_xof(output.input_cv, output.block, output.block_len, output.flags | ROOT, wide_buf);
-    // Extract the output bytes by slicing (propagates constraint status)
-    out = wide_buf.slice(0, BLAKE3_OUT_LEN);
+    // Sized to the digest so that `compress_xof` only squeezes out the words we keep.
+    out = byte_array_ct::constant_padding(out.get_context(), BLAKE3_OUT_LEN);
+    compress_xof(output.input_cv, output.block, output.block_len, output.flags | ROOT, out);
 }
 
 template <typename Builder> byte_array<Builder> Blake3s<Builder>::hash(const byte_array_ct& input)

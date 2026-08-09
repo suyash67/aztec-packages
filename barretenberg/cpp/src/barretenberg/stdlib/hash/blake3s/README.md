@@ -38,20 +38,18 @@ The compression function mixes an 8-word CV, a 16-word internal state, a 64-byte
 - the lookup output is constrained to the correct 32-bit result, so any intermediate overflow in `state` is discarded at this boundary.
 
 ### Output function (`compress_xof`) and finalization
-`compress_xof` produces a 64-byte output (16×32-bit words) written into a `byte_array`:
+`compress_xof` squeezes out as many 32-bit words as the caller's output `byte_array` has room for (at most a 64-byte block):
 - words `0-7` are `state[i] XOR state[i+8]` (same as CV update),
 - words `8-15` are `state[i+8] XOR cv[i]`,
 where each 32-bit word is converted to 4 bytes via `byte_array(field, 4)` (which range-constrains each output byte).
 
-Finalization (`hasher_finalize`) sets `CHUNK_START` iff `blocks_compressed == 0` (via `maybe_start_flag`), applies the BLAKE3 output function to the final block by setting the `CHUNK_END` and `ROOT` flags, computing the 64-byte output via `compress_xof`. It returns the first 32 bytes as the hash digest.
+Finalization (`hasher_finalize`) sets `CHUNK_START` iff `blocks_compressed == 0` (via `maybe_start_flag`), applies the BLAKE3 output function to the final block by setting the `CHUNK_END` and `ROOT` flags, and squeezes a 32-byte digest. Sizing the output buffer to the digest rather than to a full block matters: the second half of the block would cost eight lookups and eight byte decompositions, all discarded.
 
 ### 32-bit semantics
-XORs and rotates are implemented using lookup tables, and additions are performed using field arithmetic with explicit normalization wherever needed to satisfy lookup input bounds. The core `g` mixing step is shared with Blake2s and uses lookup tables to compute XOR/rotate outputs. As a performance tradeoff, intermediate additions inside `g` may temporarily exceed 32 bits, while all locations that require 32-bit words are enforced either by normalization or by lookup outputs constrained to 32-bit values.
+XORs and rotates are implemented using lookup tables, and additions are performed using field arithmetic with an explicit reduction mod `2^32`. The core `g` mixing step is shared with Blake2s; see `blake_util.hpp` for its cost breakdown and `plookup_tables/blake2s.hpp` for how the rotations are folded into the tables.
 
-- 32-bit message words: `byte_array<Builder>` constrains each input byte to 8 bits. Message words are formed from 4 constrained bytes, so each message word is a well-defined 32-bit value. While the resulting field element is itself not range-constrained to 32 bits, correct 32-bit semantics are enforced at the boundaries via lookup outputs and normalization.
-- 32-bit semantics with overflow: As a performance tradeoff, intermediate additions inside the mixing function `g` may temporarily produce values > `2^32` and are allowed to have an overflow of up to 3 bits. Where the algorithm requires a 32-bit word, the 32-bit semantics are ensured by
-    - normalization, using `add_normalize_unsafe(a, b, overflow_bits=3)`, which forces the result to the low 32 bits of the sum, and introduces an overflow witness constrained to `overflow_bits` (here 3).
-    - lookup tables, where outputs are constrained to the intended 32-bit result (normalization is applied as needed to keep lookup keys within the bound of up to 35-bits.)
+- 32-bit message words: `byte_array<Builder>` constrains each input byte to 8 bits. Message words are formed from 4 constrained bytes, so each message word is a well-defined 32-bit value.
+- 32-bit semantics: every lookup key is a reduced 32-bit word. The tables slice a key into four 8-bit limbs with no headroom above bit 31, so an unreduced key has no valid decomposition and its lookup cannot be satisfied. Each addition inside `g` is therefore reduced by `add_normalize_unsafe(a, b, overflow_bits)`, which subtracts `overflow * 2^32` from the sum and range-constrains `overflow`. The reduction is sound despite the function's name: the following lookup pins the result below `2^32`, which leaves the prover exactly one admissible overflow value.
 - 32-bit chaining/output words:
   - CV updates in `compress_in_place()` are computed via XOR lookup tables, whose outputs are constrained to the correct 32-bit results.
   - When producing output bytes in `compress_xof()`, each 32-bit word is converted into 4 bytes using `byte_array(field, 4)`, which range-constrains each output byte to 8 bits.

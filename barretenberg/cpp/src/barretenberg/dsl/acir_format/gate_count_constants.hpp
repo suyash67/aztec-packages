@@ -29,7 +29,7 @@ template <typename Builder> inline constexpr size_t BIG_QUAD = 2 + ZERO_GATE + M
 template <typename Builder> inline constexpr size_t LOGIC_XOR_32 = 6 + ZERO_GATE + MEGA_OFFSET<Builder>;
 template <typename Builder> inline constexpr size_t LOGIC_AND_32 = 6 + ZERO_GATE + MEGA_OFFSET<Builder>;
 template <typename Builder> inline constexpr size_t RANGE_32 = 2744 + ZERO_GATE + MEGA_OFFSET<Builder>;
-template <typename Builder> inline constexpr size_t SHA256_COMPRESSION = 6703 + ZERO_GATE + MEGA_OFFSET<Builder>;
+template <typename Builder> inline constexpr size_t SHA256_COMPRESSION = 6567 + ZERO_GATE + MEGA_OFFSET<Builder>;
 template <typename Builder> inline constexpr size_t AES128_ENCRYPTION = 1559 + ZERO_GATE + MEGA_OFFSET<Builder>;
 
 // The mega offset works differently for ECDSA opcodes because of the use of ROM tables, which use indices that
@@ -40,8 +40,8 @@ template <typename Builder> inline constexpr size_t ECDSA_SECP256K1 = 42837 + ZE
 template <typename Builder>
 inline constexpr size_t ECDSA_SECP256R1 = 45945 + ZERO_GATE + (IsMegaBuilder<Builder> ? 2 : 0);
 
-template <typename Builder> inline constexpr size_t BLAKE2S = 2952 + ZERO_GATE + MEGA_OFFSET<Builder>;
-template <typename Builder> inline constexpr size_t BLAKE3 = 2158 + ZERO_GATE + MEGA_OFFSET<Builder>;
+template <typename Builder> inline constexpr size_t BLAKE2S = 1814 + ZERO_GATE + MEGA_OFFSET<Builder>;
+template <typename Builder> inline constexpr size_t BLAKE3 = 1267 + ZERO_GATE + MEGA_OFFSET<Builder>;
 template <typename Builder> inline constexpr size_t KECCAK_PERMUTATION = 17387 + ZERO_GATE + MEGA_OFFSET<Builder>;
 template <typename Builder>
 inline constexpr size_t POSEIDON2_PERMUTATION = (IsMegaBuilder<Builder> ? 25 : 73) + ZERO_GATE + MEGA_OFFSET<Builder>;

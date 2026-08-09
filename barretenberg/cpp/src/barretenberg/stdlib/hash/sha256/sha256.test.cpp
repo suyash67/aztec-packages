@@ -82,7 +82,7 @@ TYPED_TEST(Sha256Test, BlockNistVectorOne)
         EXPECT_EQ(circuit_val, ABC_EXPECTED[i]) << "Circuit mismatch at index " << i;
     }
 
-    check_circuit_and_gate_count(builder, 6703);
+    check_circuit_and_gate_count(builder, 6567);
     EXPECT_EQ(builder.get_tables_size(), 33944);
 }
 
@@ -151,7 +151,7 @@ TYPED_TEST(Sha256Test, BlockNistVectorTwo)
         EXPECT_EQ(circuit_val, EXPECTED[i]) << "Circuit mismatch at index " << i;
     }
 
-    check_circuit_and_gate_count(builder, 10649);
+    check_circuit_and_gate_count(builder, 10377);
     EXPECT_EQ(builder.get_tables_size(), 33944);
 }
 
@@ -223,7 +223,7 @@ TYPED_TEST(Sha256Test, BlockConstantHinitWitnessInput)
         EXPECT_EQ(circuit_val, ABC_EXPECTED[i]) << "Constant h_init mismatch at index " << i;
     }
 
-    check_circuit_and_gate_count(builder, 6652);
+    check_circuit_and_gate_count(builder, 6516);
     EXPECT_EQ(builder.get_tables_size(), 33944);
 }
 
@@ -258,7 +258,7 @@ TYPED_TEST(Sha256Test, BlockWitnessHinitConstantInput)
         EXPECT_EQ(circuit_val, ABC_EXPECTED[i]) << "Witness h_init mismatch at index " << i;
     }
 
-    check_circuit_and_gate_count(builder, 5523);
+    check_circuit_and_gate_count(builder, 5387);
     EXPECT_EQ(builder.get_tables_size(), 13072);
 }
 
@@ -302,7 +302,7 @@ TYPED_TEST(Sha256Test, BlockMixedConstantsAndWitnesses)
         EXPECT_EQ(circuit_val, ABC_EXPECTED[i]) << "Mixed mismatch at index " << i;
     }
 
-    check_circuit_and_gate_count(builder, 6644);
+    check_circuit_and_gate_count(builder, 6508);
     EXPECT_EQ(builder.get_tables_size(), 33944);
 }
 

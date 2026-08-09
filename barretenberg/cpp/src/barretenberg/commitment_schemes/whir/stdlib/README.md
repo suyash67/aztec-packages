@@ -54,8 +54,8 @@ times, and reusing round 0's cap there costs more than it saves.
 
 **A Poseidon2 grind** (`poseidon2_pow`). Grinding is the cheapest way to buy soundness bits, and
 soundness bits are queries. But bb's grind is Blake3 — the right choice natively, since the prover
-runs it 2^b times — and in-circuit a Blake3s compression measures 4,330 gates with another 2,865 per
-field element absorbed just to decompose it (§5), so each grind check runs to roughly ten thousand
+runs it 2^b times — and in-circuit a Blake3s compression measures 2,620 gates with another 2,865 per
+field element absorbed just to decompose it (§5), so each grind check runs to roughly eight thousand
 gates and the three in one of these schedules would cost about what the removed queries were worth. The Poseidon2 form accepts when `Poseidon2(seed, nonce)` is divisible by `2^b`, which is
 one permutation plus two range constraints on the quotient: 1.3 % of the circuit for a fifth off the
 query count. It is the one lever with a real prover-side price — see §4.
@@ -299,11 +299,11 @@ and the choice can be priced. The unit costs on this machine:
 | | gates |
 |---|---:|
 | Poseidon2 permutation — a Merkle node, or three absorbed values | 75 |
-| Blake3s of 65 bytes — a Merkle node | 4,330 |
-| Blake3s of 769 bytes — one 24-value leaf chunk | 28,575 |
+| Blake3s of 65 bytes — a Merkle node | 2,620 |
+| Blake3s of 769 bytes — one 24-value leaf chunk | 17,492 |
 | `field_t` → its canonical 32 bytes | 2,865 |
 
-Two separate penalties. A Blake3s node compression is **58× a Poseidon2 permutation**, because in a
+Two separate penalties. A Blake3s node compression is **35× a Poseidon2 permutation**, because in a
 BN254 circuit it is 32-bit word arithmetic rather than field arithmetic. And every field element it
 absorbs must first be decomposed into 32 bytes with a canonicity check, which alone costs 38× a whole
 Poseidon2 permutation — so a leaf of `n` values pays `2,865n` before any hashing happens.
@@ -312,16 +312,16 @@ End to end, the same statement verified both ways (`whir_recursion_bench hashers
 
 | configuration | Poseidon2 | Blake3s | ratio | Poseidon2 proof | Blake3s proof |
 |---|---:|---:|---:|---:|---:|
-| m = 8, λ = 32 | 31,482 | 719,321 | 22.8× | 12,608 B | 16,256 B |
-| m = 8, λ = 64 | 51,696 | 1,291,389 | 25.0× | 19,776 B | 25,984 B |
-| m = 10, λ = 32 | 30,032 | 1,104,605 | 36.8× | 14,656 B | 20,416 B |
+| m = 8, λ = 32 | 31,482 | 460,750 | 14.6× | 12,608 B | 16,256 B |
+| m = 8, λ = 64 | 51,696 | 825,527 | 16.0× | 19,776 B | 25,984 B |
+| m = 10, λ = 32 | 30,032 | 701,093 | 23.3× | 14,656 B | 20,416 B |
 
 The ratio *grows* with the tree depth, because the deeper the tree the more of the cost is node
-hashing, where Blake3s is worst (58× against the leaf side's ~30×). A Blake3s digest is also two
+hashing, where Blake3s is worst (35× against the leaf side's 29×, comparing hashing alone). A Blake3s digest is also two
 field elements to Poseidon2's one, so its proof carries about twice the Merkle-path bytes.
 
 The table stops at deliberately small parameters because that is where it stops being measurable:
-extrapolating the m = 10 ratio, the transparent-Honk verifier of §4 would be roughly 4–5 M gates on
+extrapolating the m = 10 ratio, the transparent-Honk verifier of §4 would be roughly 3–4 M gates on
 Blake3s against 144,455 on Poseidon2, and the whole-proof verifier of §6 would be larger still — past
 what one outer proof holds on this machine. `TransparentHonkRecursiveVerifier` is therefore fixed to
 Poseidon2 rather than templated on the hasher: the opening comparison above already isolates the

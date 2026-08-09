@@ -57,7 +57,7 @@ class GateReport {
  * @details Both halves of the hasher are a single `Poseidon2Permutation` call per three absorbed
  * values (leaves) or per node, which is what makes it the cheapest of bb's WHIR hashers to verify
  * recursively: Ultra gives Poseidon2 its own custom gates, and a Blake3s node compression measures
- * 4,330 gates against this one's 75. See `StdlibBlake3sHasher` and the README's hash comparison.
+ * 2,620 gates against this one's 75. See `StdlibBlake3sHasher` and the README's hash comparison.
  */
 template <typename Builder> class StdlibPoseidon2Hasher {
   public:
@@ -722,8 +722,8 @@ template <typename Builder, typename Hasher_ = StdlibPoseidon2Hasher<Builder>> c
 
     /**
      * @brief Constrain the round's Poseidon2 grind: `Poseidon2(seed, nonce) = q·2^pow_bits`.
-     * @details One permutation and two range constraints, against roughly ten thousand for the
-     * Blake3s form — a 4,330-gate compression plus 2,865 to decompose each absorbed field element. `pow_bits` bits of
+     * @details One permutation and two range constraints, against roughly eight thousand for the
+     * Blake3s form — a 2,620-gate compression plus 2,865 to decompose each absorbed field element. `pow_bits` bits of
      * the query soundness are supplied by this instead of by queries, and a query costs a whole leaf hash plus a path.
      */
     static void check_grinding(Builder& builder,
