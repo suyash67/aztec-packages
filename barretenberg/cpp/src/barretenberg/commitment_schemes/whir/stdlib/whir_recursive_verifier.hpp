@@ -3,6 +3,7 @@
 #include "barretenberg/commitment_schemes/whir/whir.hpp"
 #include "barretenberg/stdlib/hash/blake3s/blake3s.hpp"
 #include "barretenberg/stdlib/hash/poseidon2/poseidon2_permutation.hpp"
+#include "barretenberg/stdlib/hash/skyscraper/skyscraper.hpp"
 #include "barretenberg/stdlib/primitives/bool/bool.hpp"
 #include "barretenberg/stdlib/primitives/byte_array/byte_array.hpp"
 #include "barretenberg/stdlib/primitives/field/field.hpp"
@@ -139,6 +140,46 @@ template <typename Builder> class StdlibPoseidon2Hasher {
         FF constant(value);
         constant.convert_constant_to_fixed_witness(&builder);
         return constant;
+    }
+};
+
+/**
+ * @brief In-circuit Merkle hashing with Skyscraper, bit-identical to `bb::whir::SkyscraperMerkleHasher`.
+ *
+ * @details The middle of the three. Skyscraper is a BN254-native permutation, so like Poseidon2 its
+ * digest is one field element and it needs no byte encoding; unlike Poseidon2 its diffusion comes
+ * partly from a byte-level "bar" S-box, which a circuit pays for in a canonical 32-byte
+ * decomposition and 32 lookups. That puts a node compression at 474 gates against Poseidon2's 75 and
+ * Blake3s' 2,620, while natively it is the fastest of the three to prove with. It is the only hasher
+ * here that reproduces ProveKit's leaf/node convention exactly: a left fold of the compression, no
+ * domain tags.
+ */
+template <typename Builder> class StdlibSkyscraperHasher {
+  public:
+    using FF = stdlib::field_t<Builder>;
+    using Bool = stdlib::bool_t<Builder>;
+    using NativeHasher = SkyscraperMerkleHasher;
+    using Digest = FF;
+    static constexpr size_t DIGEST_NUM_FIELDS = NativeHasher::DIGEST_NUM_FIELDS;
+
+    static Digest from_fields(Builder&, std::span<const FF> fields) { return fields[0]; }
+    static std::vector<FF> to_fields(const Digest& digest) { return { digest }; }
+    static Digest conditional_assign(const Bool& predicate, const Digest& lhs, const Digest& rhs)
+    {
+        return FF::conditional_assign(predicate, lhs, rhs);
+    }
+    static void assert_equal(const Digest& lhs, const Digest& rhs, const std::string& message)
+    {
+        lhs.assert_equal(rhs, message);
+    }
+
+    static FF hash_leaf(Builder&, std::span<const FF> values)
+    {
+        return stdlib::skyscraper::Skyscraper<Builder>::fold_compress(values);
+    }
+    static FF hash_node(Builder&, const FF& left, const FF& right)
+    {
+        return stdlib::skyscraper::Skyscraper<Builder>::compress(left, right);
     }
 };
 

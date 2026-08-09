@@ -21,6 +21,12 @@ namespace bb::crypto::skyscraper {
 /** @brief The Chi-like byte S-box, Table 3 of the paper. */
 uint8_t sbox(uint8_t v);
 
+/** @brief sigma^-1, the scaling applied to every squaring round. */
+const fr& sigma_inv();
+
+/** @brief Round constant `index` of the 18 the permutation uses. */
+const fr& round_constant(size_t index);
+
 /** @brief The full 9-double-round permutation, Figure 2.a. */
 std::pair<fr, fr> permute(const fr& left, const fr& right);
 

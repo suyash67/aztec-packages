@@ -79,6 +79,17 @@ void bar_round(size_t round, fr& l, fr& r)
 
 } // namespace
 
+const fr& sigma_inv()
+{
+    return SIGMA_INV;
+}
+
+const fr& round_constant(size_t index)
+{
+    BB_ASSERT_LT(index, ROUND_CONSTANTS.size(), "skyscraper round constant out of range");
+    return ROUND_CONSTANTS[index];
+}
+
 uint8_t sbox(uint8_t v)
 {
     const auto chi = static_cast<uint8_t>(rotl8(static_cast<uint8_t>(~v), 1) & rotl8(v, 2) & rotl8(v, 3));

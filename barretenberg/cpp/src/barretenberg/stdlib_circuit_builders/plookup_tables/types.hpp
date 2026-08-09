@@ -62,6 +62,8 @@ enum BasicTableId {
     SECP256K1_XLO_ENDO_BASIC,
     SECP256K1_XHI_ENDO_BASIC,
     SECP256K1_XYPRIME_ENDO_BASIC,
+    // The Chi-like byte S-box of Skyscraper's bar function, as a 256-row 1-to-2 map.
+    SKYSCRAPER_SBOX,
     // 8-bit XOR tables backing Blake2s/Blake3s. Each is a 256 x 256 twin-key table; the ROTATEk variants store the
     // slice's XOR rotated left by (32 - k) so that a slice lands directly at its position in ROTR^{k} of the word.
     BLAKE_XOR8,
@@ -141,6 +143,7 @@ enum MultiTableId {
     SECP256R1_FIXED_BASE_YLO_HI,
     SECP256R1_FIXED_BASE_YHI_LO,
     SECP256R1_FIXED_BASE_YHI_HI,
+    SKYSCRAPER_SBOX_MULTI,
     BLAKE_XOR,
     BLAKE_XOR_ROTATE_16,
     BLAKE_XOR_ROTATE_12,

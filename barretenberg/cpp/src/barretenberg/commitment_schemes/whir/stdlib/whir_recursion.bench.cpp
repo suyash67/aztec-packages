@@ -2,6 +2,7 @@
 
 #include "barretenberg/commitment_schemes/mercury/vela_honk.hpp"
 #include "barretenberg/commitment_schemes/whir/stdlib/transparent_honk_recursive_verifier.hpp"
+#include "barretenberg/crypto/skyscraper/skyscraper.hpp"
 #include "barretenberg/stdlib_circuit_builders/mock_circuits.hpp"
 #include "barretenberg/ultra_honk/prover_instance.hpp"
 
@@ -608,16 +609,131 @@ void pipeline(const std::string& which, const std::vector<size_t>& inner_gate_co
 {
     using Builder = UltraCircuitBuilder;
     std::cout << "\nWHIR-Honk end to end: inner proof -> recursive verifier -> pairing-based outer proof\n";
-    if (which != "blake3") {
+    if (which == "all" || which == "poseidon2") {
         pipeline_for<whir::recursion::TransparentHonkRecursiveVerifier<Builder>,
                      whir::recursion::StdlibPoseidon2Hasher<Builder>>("Poseidon2", inner_gate_counts, pow_bits);
     }
-    if (which != "poseidon2") {
+    if (which == "all" || which == "skyscraper") {
+        pipeline_for<
+            whir::recursion::TransparentHonkRecursiveVerifier<Builder,
+                                                              whir::recursion::RecursionSkyscraperWhirPcs,
+                                                              whir::recursion::StdlibSkyscraperHasher<Builder>>,
+            whir::recursion::StdlibSkyscraperHasher<Builder>>("Skyscraper", inner_gate_counts, pow_bits);
+    }
+    if (which == "all" || which == "blake3") {
         pipeline_for<whir::recursion::TransparentHonkRecursiveVerifier<Builder,
                                                                        whir::recursion::RecursionBlake3sWhirPcs,
                                                                        whir::recursion::StdlibBlake3sHasher<Builder>>,
                      whir::recursion::StdlibBlake3sHasher<Builder>>("Blake3s", inner_gate_counts, pow_bits);
     }
+}
+
+/**
+ * @brief The inner (prover-side) half of the pipeline for every Merkle hash bb's WHIR can commit
+ * with, including the two that have no in-circuit verifier yet.
+ * @details Stage [1] alone: how fast the hash is to prove with, what its proof costs on the wire,
+ * and how fast it verifies natively. That is the half of the trade-off a recursion-free deployment
+ * sees, and it runs the ordering opposite to the in-circuit half.
+ */
+void inner_hashers(const std::vector<size_t>& inner_gate_counts)
+{
+    using FF = fr;
+    const auto build_inner = [](size_t num_gates) {
+        UltraCircuitBuilder builder;
+        MockCircuits::add_arithmetic_gates_with_public_inputs(builder, 16);
+        MockCircuits::add_arithmetic_gates(builder, num_gates);
+        MockCircuits::add_lookup_gates(builder, 2);
+        const size_t rom_id = builder.create_ROM_array(4);
+        for (size_t i = 0; i < 4; ++i) {
+            builder.set_ROM_element(rom_id, i, builder.add_variable(FF(3 * i + 1)));
+        }
+        builder.read_ROM_array(rom_id, builder.add_variable(FF(2)));
+        return builder;
+    };
+    const auto elapsed_ms = [](auto start) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    };
+
+    std::cout << "\nInner WHIR-Honk proof by Merkle hash (lambda=100, rate 2^-4, k=4, k0=1, 20-bit grind)\n";
+    std::cout << std::string(84, '=') << "\n";
+    std::cout << std::left << std::setw(14) << "hash" << std::setw(9) << "inner" << std::right << std::setw(12) << "key"
+              << std::setw(12) << "prove" << std::setw(12) << "verify" << std::setw(14) << "proof" << "\n";
+
+    for (const size_t num_gates : inner_gate_counts) {
+        UltraCircuitBuilder sizing = build_inner(num_gates);
+        const size_t log_n = ProverInstance_<UltraFlavor>(sizing).log_dyadic_size();
+
+        const auto run = [&](const char* name, auto pcs_tag) {
+            using Pcs = decltype(pcs_tag);
+            using Honk = honk_transparent::TransparentHonk<Pcs, UltraProveKitFlavor>;
+            WhirConfig config = WhirConfig::create(log_n,
+                                                   /*security_bits=*/100,
+                                                   /*log_inv_rate=*/4,
+                                                   /*folding_factor_bits=*/4,
+                                                   /*final_poly_bits=*/4,
+                                                   WhirSoundness::REPAIRED_LIST,
+                                                   /*zk=*/false,
+                                                   /*max_stack_bits=*/0,
+                                                   /*initial_folding_factor_bits=*/1,
+                                                   /*pow_bits=*/20);
+            config.enable_recursion_profile();
+
+            UltraCircuitBuilder builder = build_inner(num_gates);
+            auto start = std::chrono::steady_clock::now();
+            auto pk = Honk::create_proving_key(builder, config);
+            const auto key_ms = elapsed_ms(start);
+            start = std::chrono::steady_clock::now();
+            const HonkProof proof = Honk::prove(pk);
+            const auto prove_ms = elapsed_ms(start);
+            start = std::chrono::steady_clock::now();
+            const bool ok = Honk::verify(pk.vk, config, proof);
+            const auto verify_ms = elapsed_ms(start);
+            if (!ok) {
+                throw_or_abort("whir_recursion_bench: inner proof does not verify");
+            }
+            std::cout << std::left << std::setw(14) << name << std::setw(9) << ("2^" + std::to_string(log_n))
+                      << std::right << std::setw(9) << key_ms << " ms" << std::setw(9) << prove_ms << " ms"
+                      << std::setw(9) << verify_ms << " ms" << std::setw(11) << proof.size() * sizeof(fr) << " B\n"
+                      << std::flush;
+        };
+
+        run("Poseidon2", whir::recursion::RecursionWhirPcsFor<Poseidon2CompressionHasher>{});
+        run("Skyscraper", whir::recursion::RecursionWhirPcsFor<SkyscraperMerkleHasher>{});
+        run("Blake3s", whir::recursion::RecursionWhirPcsFor<Blake3sMerkleHasher>{});
+    }
+}
+
+/**
+ * @brief What a Skyscraper "bar" would cost in circuit, priced before writing one.
+ * @details The bar rotates the *canonical* little-endian byte string of an Fr by 16 bytes, S-boxes
+ * each byte and reduces. Everything but the canonicity is cheap and lookup-shaped; the canonical
+ * decomposition is the term that decides whether the hash is viable in a recursive verifier, so it
+ * is worth measuring on its own rather than assuming.
+ */
+void bar_cost()
+{
+    using FF = stdlib::field_t<UltraCircuitBuilder>;
+    std::cout << "\nSkyscraper bar, priced in barretenberg\n";
+    std::cout << std::string(60, '=') << "\n";
+
+    for (const size_t count : std::vector<size_t>{ 1, 2, 10 }) {
+        UltraCircuitBuilder builder;
+        std::vector<FF> inputs;
+        for (size_t i = 0; i < count; ++i) {
+            inputs.push_back(FF::from_witness(&builder, fr::random_element()));
+        }
+        const size_t before = builder.get_num_finalized_gates_inefficient();
+        for (const FF& x : inputs) {
+            stdlib::byte_array<UltraCircuitBuilder> bytes(x, 32);
+            // Keep the decomposition alive so it is not optimised away.
+            builder.set_public_input(FF(bytes[0]).normalize().get_witness_index());
+        }
+        const size_t after = builder.get_num_finalized_gates_inefficient();
+        std::cout << "  " << std::setw(3) << count << " canonical 32-byte decompositions: " << std::setw(8)
+                  << (after - before) << " gates\n";
+    }
+    std::cout << "  (the difference between successive rows is the marginal cost; the first row\n"
+                 "   also pays for the shared range lists)\n";
 }
 
 /**
@@ -771,6 +887,16 @@ int main(int argc, char** argv)
         const std::string which = argc > 2 ? argv[2] : "all";
         const size_t inner_gates = argc > 3 ? static_cast<size_t>(std::stoul(argv[3])) : 100;
         pipeline(which, { inner_gates }, /*pow_bits=*/20);
+        std::cout << std::endl;
+        return 0;
+    }
+    if (mode == "bar-cost") {
+        bar_cost();
+        std::cout << std::endl;
+        return 0;
+    }
+    if (mode == "inner-hashers") {
+        inner_hashers({ 100, 20000 });
         std::cout << std::endl;
         return 0;
     }

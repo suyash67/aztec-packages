@@ -33,6 +33,9 @@ using RecursionWhirPcs = RecursionWhirPcsFor<Poseidon2CompressionHasher>;
 /** @brief The same instantiation over Blake3s, whose digest is 32 bytes rather than one field. */
 using RecursionBlake3sWhirPcs = RecursionWhirPcsFor<Blake3sMerkleHasher>;
 
+/** @brief And over Skyscraper, which like Poseidon2 has a single-field digest. */
+using RecursionSkyscraperWhirPcs = RecursionWhirPcsFor<SkyscraperMerkleHasher>;
+
 /**
  * @brief Recursive verifier for a whole transparent-Honk-with-WHIR proof.
  *
