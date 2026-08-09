@@ -16,13 +16,15 @@ namespace bb::whir::recursion {
  * identical statement; the sweep would otherwise be measuring a different protocol from the one
  * under test.
  */
-class RecursionHarness {
+template <typename StdlibHasher = StdlibPoseidon2Hasher<UltraCircuitBuilder>> class RecursionHarness_ {
   public:
     using Builder = UltraCircuitBuilder;
     using FF = stdlib::field_t<Builder>;
-    using Verifier = WhirRecursiveVerifier<Builder>;
+    using Verifier = WhirRecursiveVerifier<Builder, StdlibHasher>;
     using CircuitTranscript = StdlibTranscript<Builder>;
-    using Hasher = Poseidon2CompressionHasher;
+    // The in-circuit hasher names the native one it mirrors, so the two can never be paired wrongly.
+    using Hasher = typename StdlibHasher::NativeHasher;
+    using Digest = typename Hasher::Digest;
     using CK = WhirCommitmentKey<Hasher>;
     using NativeProver = WhirProver<Hasher>;
     using NativeVerifier = WhirVerifier<Hasher>;
@@ -32,7 +34,7 @@ class RecursionHarness {
         WhirConfig config;
         std::vector<fr> u;
         std::vector<size_t> group_num_columns;
-        std::vector<fr> roots;
+        std::vector<Digest> roots;
         std::vector<WhirColumnRef> unshifted;
         std::vector<fr> unshifted_evaluations;
         std::vector<WhirColumnRef> to_be_shifted;
@@ -120,7 +122,7 @@ class RecursionHarness {
                                                 .unshifted_evaluations = instance.unshifted_evaluations,
                                                 .to_be_shifted = instance.to_be_shifted,
                                                 .shifted_evaluations = instance.shifted_evaluations,
-                                                .group_roots = instance.roots_on_proof_stream ? std::vector<fr>{}
+                                                .group_roots = instance.roots_on_proof_stream ? std::vector<Digest>{}
                                                                                               : instance.roots };
         auto transcript = std::make_shared<NativeTranscript>(instance.proof);
         [[maybe_unused]] auto init = transcript->template receive_from_prover<fr>("Init");
@@ -144,8 +146,10 @@ class RecursionHarness {
             // A root the aggregator knows at build time is a circuit constant, which is what binds
             // it: `assert_equal` against a constant fixes the witness, where two witnesses would
             // only be copy-constrained to each other.
-            for (const fr& root : instance.roots) {
-                claims.group_roots.emplace_back(root);
+            for (const Digest& root : instance.roots) {
+                const auto limbs = Hasher::digest_to_fields(root);
+                std::vector<FF> constants(limbs.begin(), limbs.end());
+                claims.group_roots.push_back(StdlibHasher::from_fields(builder, constants));
             }
         }
         claims.unshifted = instance.unshifted;
@@ -228,5 +232,7 @@ class RecursionHarness {
         return mle(shifted, u);
     }
 };
+
+using RecursionHarness = RecursionHarness_<>;
 
 } // namespace bb::whir::recursion

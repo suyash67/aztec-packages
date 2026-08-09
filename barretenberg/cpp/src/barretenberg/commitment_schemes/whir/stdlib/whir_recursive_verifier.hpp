@@ -1,8 +1,10 @@
 #pragma once
 
 #include "barretenberg/commitment_schemes/whir/whir.hpp"
+#include "barretenberg/stdlib/hash/blake3s/blake3s.hpp"
 #include "barretenberg/stdlib/hash/poseidon2/poseidon2_permutation.hpp"
 #include "barretenberg/stdlib/primitives/bool/bool.hpp"
+#include "barretenberg/stdlib/primitives/byte_array/byte_array.hpp"
 #include "barretenberg/stdlib/primitives/field/field.hpp"
 #include "barretenberg/stdlib/primitives/memory/rom_table.hpp"
 #include "barretenberg/stdlib/primitives/witness/witness.hpp"
@@ -54,14 +56,30 @@ class GateReport {
  * @brief In-circuit Merkle hashing, bit-identical to `bb::whir::Poseidon2CompressionHasher`.
  * @details Both halves of the hasher are a single `Poseidon2Permutation` call per three absorbed
  * values (leaves) or per node, which is what makes it the cheapest of bb's WHIR hashers to verify
- * recursively: Ultra gives Poseidon2 its own custom gates, where a Blake3 or SHA-256 compression
- * costs thousands of constraints.
+ * recursively: Ultra gives Poseidon2 its own custom gates, and a Blake3s node compression measures
+ * 4,330 gates against this one's 75. See `StdlibBlake3sHasher` and the README's hash comparison.
  */
 template <typename Builder> class StdlibPoseidon2Hasher {
   public:
     using FF = stdlib::field_t<Builder>;
+    using Bool = stdlib::bool_t<Builder>;
     using Permutation = stdlib::Poseidon2Permutation<Builder>;
+    using NativeHasher = Poseidon2CompressionHasher;
+    /** @brief A digest is one field element, so it needs no encoding at all. */
+    using Digest = FF;
+    static constexpr size_t DIGEST_NUM_FIELDS = NativeHasher::DIGEST_NUM_FIELDS;
     static constexpr size_t RATE = 3;
+
+    static Digest from_fields(Builder&, std::span<const FF> fields) { return fields[0]; }
+    static std::vector<FF> to_fields(const Digest& digest) { return { digest }; }
+    static Digest conditional_assign(const Bool& predicate, const Digest& lhs, const Digest& rhs)
+    {
+        return FF::conditional_assign(predicate, lhs, rhs);
+    }
+    static void assert_equal(const Digest& lhs, const Digest& rhs, const std::string& message)
+    {
+        lhs.assert_equal(rhs, message);
+    }
 
     static FF hash_leaf(Builder& builder, std::span<const FF> values)
     {
@@ -125,6 +143,145 @@ template <typename Builder> class StdlibPoseidon2Hasher {
 };
 
 /**
+ * @brief In-circuit Merkle hashing with Blake3s, bit-identical to `bb::whir::Blake3sMerkleHasher`.
+ *
+ * @details Included to measure the choice rather than assert it. Blake3s is one of the fastest
+ * hashers natively — it is why bb's WHIR defaults to it — but in a BN254 circuit it is bit
+ * arithmetic on 32-bit words, and every field element it hashes must first be decomposed into 32
+ * bytes. Both halves are expensive: see the README's hash comparison.
+ *
+ * The layout is the native one exactly. A leaf is the byte string `0x00 || v_0 || ... ` with each
+ * value as its canonical *little-endian* 32 bytes, chunked 24 values at a time with the previous
+ * chunk's digest replacing the tag; a node is `0x01 || left || right`. bb's `byte_array` is
+ * big-endian, hence the `reverse()` on every conversion.
+ */
+template <typename Builder> class StdlibBlake3sHasher {
+  public:
+    using FF = stdlib::field_t<Builder>;
+    using Bool = stdlib::bool_t<Builder>;
+    using Bytes = stdlib::byte_array<Builder>;
+    using NativeHasher = Blake3sMerkleHasher;
+    /** @brief A 32-byte digest, carried on the proof stream as two 128-bit field elements. */
+    using Digest = Bytes;
+    static constexpr size_t DIGEST_NUM_FIELDS = NativeHasher::DIGEST_NUM_FIELDS;
+    static constexpr size_t DIGEST_BYTES = 32;
+    static constexpr size_t HALF_BYTES = DIGEST_BYTES / 2;
+    static constexpr size_t LEAF_CHUNK_VALUES = NativeHasher::LEAF_CHUNK_VALUES;
+
+    static Digest hash_leaf(Builder& builder, std::span<const FF> values)
+    {
+        BB_ASSERT(!values.empty(), "a WHIR leaf is never empty");
+        Bytes buffer = tag(builder, 0);
+        Digest digest = empty(builder);
+        OriginTag absorbed_tag = OriginTag::constant();
+        size_t absorbed = 0;
+        while (absorbed < values.size()) {
+            const size_t chunk = std::min(LEAF_CHUNK_VALUES, values.size() - absorbed);
+            for (size_t t = 0; t < chunk; ++t) {
+                const FF& value = values[absorbed + t];
+                absorbed_tag = OriginTag(absorbed_tag, value.get_origin_tag());
+                buffer.write(to_little_endian(value));
+            }
+            absorbed += chunk;
+            digest = hash_bytes(buffer, absorbed_tag);
+            buffer = digest; // the next chunk chains on the digest, replacing the tag
+        }
+        return digest;
+    }
+
+    static Digest hash_node(Builder& builder, const Digest& left, const Digest& right)
+    {
+        Bytes buffer = tag(builder, 1);
+        buffer.write(left);
+        buffer.write(right);
+        return hash_bytes(buffer, OriginTag(digest_tag(left), digest_tag(right)));
+    }
+
+    /** @brief `detail::byte_digest_from_fields`: each half is 16 little-endian bytes. */
+    static Digest from_fields(Builder& builder, std::span<const FF> fields)
+    {
+        Bytes digest = empty(builder);
+        for (size_t half = 0; half < DIGEST_NUM_FIELDS; ++half) {
+            Bytes half_bytes = Bytes(fields[half], HALF_BYTES).reverse();
+            retag(half_bytes, fields[half].get_origin_tag());
+            digest.write(half_bytes);
+        }
+        return digest;
+    }
+
+    /** @brief `detail::byte_digest_to_fields`: the inverse, and cheap — bytes to a field is linear. */
+    static std::vector<FF> to_fields(const Digest& digest)
+    {
+        std::vector<FF> fields;
+        for (size_t half = 0; half < DIGEST_NUM_FIELDS; ++half) {
+            fields.push_back(static_cast<FF>(digest.slice(half * HALF_BYTES, HALF_BYTES).reverse()));
+        }
+        return fields;
+    }
+
+    static Digest conditional_assign(const Bool& predicate, const Digest& lhs, const Digest& rhs)
+    {
+        Digest result = empty(*lhs.get_context());
+        for (size_t i = 0; i < DIGEST_BYTES; ++i) {
+            result.write(Bytes(FF::conditional_assign(predicate, FF(lhs[i]), FF(rhs[i])), 1));
+        }
+        return result;
+    }
+
+    static void assert_equal(const Digest& lhs, const Digest& rhs, const std::string& message)
+    {
+        for (size_t i = 0; i < DIGEST_BYTES; ++i) {
+            FF(lhs[i]).assert_equal(FF(rhs[i]), message);
+        }
+    }
+
+  private:
+    /**
+     * @brief The one-byte domain tag, as a constant.
+     * @details `byte_array(Builder*)` is not an empty array — it resolves to `byte_array(field_t,
+     * 32)` through `field_t`'s context constructor and yields 32 zero bytes — so every buffer here
+     * starts from `empty` instead.
+     */
+    static Bytes tag(Builder& builder, uint8_t value) { return Bytes::constant_padding(&builder, 1, value); }
+
+    static Bytes empty(Builder& builder) { return Bytes(&builder, std::vector<uint8_t>{}); }
+
+    /**
+     * @brief Give every byte of a digest the provenance of what produced it.
+     * @details `Blake3s::hash` and the `byte_array` decomposition both emit fresh witnesses with no
+     * origin tag, exactly as `Poseidon2Permutation` does; a digest is a function of its inputs, so
+     * without this it reads as a free witness the moment it meets a transcript-derived value.
+     */
+    /**
+     * @brief `Blake3s::hash` with the origin tags handled around it.
+     * @details Its internals build fresh untagged witnesses (the 32-bit word arithmetic) and combine
+     * them with the input bytes, which trips the tag mechanism the moment the input carries
+     * transcript provenance — nothing in bb had driven it with tagged data before. The compression
+     * is a pure function of its input, so clearing the tags going in and stamping the merged
+     * provenance on the digest is the same accounting `field_t::assert_equal` does internally.
+     */
+    static Digest hash_bytes(Bytes buffer, const OriginTag& tag)
+    {
+        buffer.set_origin_tag(OriginTag::constant());
+        Digest digest = stdlib::Blake3s<Builder>::hash(buffer);
+        digest.set_origin_tag(tag);
+        return digest;
+    }
+
+    static void retag(Bytes& digest, const OriginTag& tag) { digest.set_origin_tag(tag); }
+
+    static OriginTag digest_tag(const Digest& digest) { return digest.get_origin_tag(); }
+
+    /** @brief A field element as the canonical little-endian 32 bytes `append_fr_bytes` writes. */
+    static Bytes to_little_endian(const FF& value)
+    {
+        Bytes bytes = Bytes(value, DIGEST_BYTES).reverse();
+        retag(bytes, value.get_origin_tag());
+        return bytes;
+    }
+};
+
+/**
  * @brief Recursive verifier for a WHIR batched opening, the in-circuit mirror of
  * `bb::whir::WhirVerifier::verify`.
  *
@@ -144,19 +301,22 @@ template <typename Builder> class StdlibPoseidon2Hasher {
  * Everything is native BN254 Fr arithmetic — no non-native field emulation and no elliptic-curve
  * work at all, which is the structural reason a hash-based scheme recurses cheaply into UltraHonk.
  */
-template <typename Builder> class WhirRecursiveVerifier {
+template <typename Builder, typename Hasher_ = StdlibPoseidon2Hasher<Builder>> class WhirRecursiveVerifier {
   public:
     using FF = stdlib::field_t<Builder>;
     using Bool = stdlib::bool_t<Builder>;
     using Witness = stdlib::witness_t<Builder>;
     using Transcript = StdlibTranscript<Builder>;
-    using Hasher = StdlibPoseidon2Hasher<Builder>;
+    using Hasher = Hasher_;
+    using Digest = typename Hasher::Digest;
+    using NativeHasher = typename Hasher::NativeHasher;
     using RomTable = stdlib::rom_table<Builder>;
+    static constexpr size_t DIGEST_NUM_FIELDS = Hasher::DIGEST_NUM_FIELDS;
 
     /** @brief The verifier's statement: the same shape as `WhirVerifier::Claims`, in circuit types. */
     struct Claims {
         std::vector<size_t> group_num_columns;
-        std::vector<FF> group_roots; // empty reads them off the proof stream instead
+        std::vector<Digest> group_roots; // empty reads them off the proof stream instead
         std::vector<WhirColumnRef> unshifted;
         std::vector<FF> unshifted_evaluations;
         std::vector<WhirColumnRef> to_be_shifted;
@@ -193,10 +353,10 @@ template <typename Builder> class WhirRecursiveVerifier {
         // All-or-nothing, as the native verifier reads them: either the caller supplies every root
         // (the Honk integration, where earlier rounds bound them) or they all arrive on the proof
         // stream. A partial set would leave the two sides reading different offsets.
-        std::vector<FF> roots = claims.group_roots;
+        std::vector<Digest> roots = claims.group_roots;
         if (roots.empty()) {
             for (size_t g = 0; g < claims.group_num_columns.size(); ++g) {
-                roots.push_back(transcript->template receive_from_prover<FF>(detail::whir_label("root", g)));
+                roots.push_back(receive_digest(builder, transcript, detail::whir_label("root", g)));
             }
         }
         BB_ASSERT_EQ(roots.size(), claims.group_num_columns.size(), "one root per commitment group required");
@@ -264,7 +424,7 @@ template <typename Builder> class WhirRecursiveVerifier {
         phase.mark("claims + batching");
 
         // ---- Fold-and-commit iterations -----------------------------------------------------
-        std::optional<FF> folded_root;
+        std::optional<Digest> folded_root;
         size_t bound = 0; // sumcheck variables consumed, i.e. the eq term's next coordinate
 
         for (size_t i = 0; i < config.rounds.size(); ++i) {
@@ -286,7 +446,7 @@ template <typename Builder> class WhirRecursiveVerifier {
             }
             phase.mark("whir sumcheck");
 
-            const FF next_root = transcript->template receive_from_prover<FF>(detail::whir_label("root_g", i + 1));
+            const Digest next_root = receive_digest(builder, transcript, detail::whir_label("root_g", i + 1));
             const FF z_ood = transcript->template get_challenge<FF>(detail::whir_label("z_ood", i));
             const FF y_ood = transcript->template receive_from_prover<FF>(detail::whir_label("y_ood", i));
 
@@ -562,9 +722,9 @@ template <typename Builder> class WhirRecursiveVerifier {
 
     /**
      * @brief Constrain the round's Poseidon2 grind: `Poseidon2(seed, nonce) = q·2^pow_bits`.
-     * @details One permutation and one range constraint, against tens of thousands of constraints
-     * for the Blake3 form. `pow_bits` bits of the query soundness are supplied by this instead of
-     * by queries, and a query costs a whole leaf hash plus a path.
+     * @details One permutation and two range constraints, against roughly ten thousand for the
+     * Blake3s form — a 4,330-gate compression plus 2,865 to decompose each absorbed field element. `pow_bits` bits of
+     * the query soundness are supplied by this instead of by queries, and a query costs a whole leaf hash plus a path.
      */
     static void check_grinding(Builder& builder,
                                const std::shared_ptr<Transcript>& transcript,
@@ -605,7 +765,7 @@ template <typename Builder> class WhirRecursiveVerifier {
     static std::vector<std::vector<FF>> authenticate(Builder& builder,
                                                      const std::shared_ptr<Transcript>& transcript,
                                                      const WhirConfig& config,
-                                                     const FF& root,
+                                                     const Digest& root,
                                                      std::span<const QueryIndex> indices,
                                                      size_t leaf_width,
                                                      size_t depth,
@@ -620,57 +780,88 @@ template <typename Builder> class WhirRecursiveVerifier {
             BB_ASSERT_EQ(index.bits.size(), depth, "query index width must match the tree depth");
         }
 
-        const std::vector<FF> flat =
-            transcript->receive_unhashed_from_prover(cap_size + indices.size() * (leaf_width + path_length));
+        const std::vector<FF> flat = transcript->receive_unhashed_from_prover(
+            (cap_size + indices.size() * path_length) * DIGEST_NUM_FIELDS + indices.size() * leaf_width);
         size_t cursor = 0;
-        std::vector<FF> cap(flat.begin(), flat.begin() + static_cast<std::ptrdiff_t>(cap_size));
-        cursor += cap_size;
+        std::vector<Digest> cap;
+        std::vector<std::vector<FF>> cap_limbs(DIGEST_NUM_FIELDS);
+        for (size_t j = 0; j < cap_size; ++j) {
+            const std::span<const FF> limbs(flat.data() + cursor, DIGEST_NUM_FIELDS);
+            for (size_t limb = 0; limb < DIGEST_NUM_FIELDS; ++limb) {
+                cap_limbs[limb].push_back(limbs[limb]);
+            }
+            cap.push_back(Hasher::from_fields(builder, limbs));
+            cursor += DIGEST_NUM_FIELDS;
+        }
 
         // Fold the cap to the committed root: 2^c - 1 hashes once, against c per query.
         {
-            std::vector<FF> level = cap;
+            std::vector<Digest> level = cap;
             while (level.size() > 1) {
-                std::vector<FF> above(level.size() / 2);
-                for (size_t j = 0; j < above.size(); ++j) {
-                    above[j] = Hasher::hash_node(builder, level[2 * j], level[2 * j + 1]);
+                std::vector<Digest> above;
+                above.reserve(level.size() / 2);
+                for (size_t j = 0; j < level.size() / 2; ++j) {
+                    above.push_back(Hasher::hash_node(builder, level[2 * j], level[2 * j + 1]));
                 }
                 level = std::move(above);
             }
-            level[0].assert_equal(root, "whir merkle cap");
+            Hasher::assert_equal(level[0], root, "whir merkle cap");
         }
         phase.mark("merkle: cap fold");
-        const RomTable cap_table(cap);
+        // One ROM table per digest limb, addressed by the index bits the path did not consume.
+        std::vector<RomTable> cap_tables;
+        for (size_t limb = 0; limb < DIGEST_NUM_FIELDS; ++limb) {
+            cap_tables.emplace_back(cap_limbs[limb]);
+        }
 
         std::vector<std::vector<FF>> values(indices.size());
         for (size_t s = 0; s < indices.size(); ++s) {
             values[s].assign(flat.begin() + static_cast<std::ptrdiff_t>(cursor),
                              flat.begin() + static_cast<std::ptrdiff_t>(cursor + leaf_width));
             cursor += leaf_width;
-            FF digest = Hasher::hash_leaf(builder, values[s]);
+            Digest digest = Hasher::hash_leaf(builder, values[s]);
             phase.mark("merkle: leaf hashing");
             for (size_t level = 0; level < path_length; ++level) {
-                const FF& sibling = flat[cursor++];
+                const Digest sibling =
+                    Hasher::from_fields(builder, std::span<const FF>(flat.data() + cursor, DIGEST_NUM_FIELDS));
+                cursor += DIGEST_NUM_FIELDS;
                 const Bool& bit = indices[s].bits[level];
                 // Two normalized selects rather than one select and a linear complement: the
                 // permutation normalizes whatever it is handed, so deriving `right` as
                 // `digest + sibling - left` moves the gate rather than removing it, and measures
                 // slightly worse.
-                const FF left = FF::conditional_assign(bit, sibling, digest);
-                const FF right = FF::conditional_assign(bit, digest, sibling);
+                const Digest left = Hasher::conditional_assign(bit, sibling, digest);
+                const Digest right = Hasher::conditional_assign(bit, digest, sibling);
                 digest = Hasher::hash_node(builder, left, right);
             }
             phase.mark("merkle: path walk");
-            digest.assert_equal(cap_table[indices[s].high_part(path_length)], "whir merkle path");
+            const FF address = indices[s].high_part(path_length);
+            const std::vector<FF> digest_limbs = Hasher::to_fields(digest);
+            for (size_t limb = 0; limb < DIGEST_NUM_FIELDS; ++limb) {
+                digest_limbs[limb].assert_equal(cap_tables[limb][address], "whir merkle path");
+            }
             phase.mark("merkle: cap lookup");
         }
         return values;
+    }
+
+    /** @brief Read one digest, `DIGEST_NUM_FIELDS` proof elements, under `label`. */
+    static Digest receive_digest(Builder& builder,
+                                 const std::shared_ptr<Transcript>& transcript,
+                                 const std::string& label)
+    {
+        std::vector<FF> limbs;
+        for (size_t i = 0; i < DIGEST_NUM_FIELDS; ++i) {
+            limbs.push_back(transcript->template receive_from_prover<FF>(label));
+        }
+        return Hasher::from_fields(builder, limbs);
     }
 
     /** @brief The folded oracle's cosets: one column, so a leaf is the coset itself. */
     static std::vector<std::vector<FF>> read_single_column_openings(Builder& builder,
                                                                     const std::shared_ptr<Transcript>& transcript,
                                                                     const WhirConfig& config,
-                                                                    const FF& root,
+                                                                    const Digest& root,
                                                                     std::span<const QueryIndex> indices,
                                                                     size_t index_bits,
                                                                     size_t k,
@@ -688,7 +879,7 @@ template <typename Builder> class WhirRecursiveVerifier {
     static std::vector<std::vector<FF>> read_round0_openings(Builder& builder,
                                                              const std::shared_ptr<Transcript>& transcript,
                                                              const WhirConfig& config,
-                                                             const std::vector<FF>& roots,
+                                                             const std::vector<Digest>& roots,
                                                              const Claims& claims,
                                                              const auto& constituents,
                                                              const std::vector<FF>& rho_powers,

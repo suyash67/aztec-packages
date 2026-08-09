@@ -54,9 +54,9 @@ times, and reusing round 0's cap there costs more than it saves.
 
 **A Poseidon2 grind** (`poseidon2_pow`). Grinding is the cheapest way to buy soundness bits, and
 soundness bits are queries. But bb's grind is Blake3 — the right choice natively, since the prover
-runs it 2^b times — and a Blake3 compression is tens of thousands of constraints in-circuit, so the
-three grinds in one of these schedules would cost more than the ~30,000 gates the removed queries
-were worth. The Poseidon2 form accepts when `Poseidon2(seed, nonce)` is divisible by `2^b`, which is
+runs it 2^b times — and in-circuit a Blake3s compression measures 4,330 gates with another 2,865 per
+field element absorbed just to decompose it (§5), so each grind check runs to roughly ten thousand
+gates and the three in one of these schedules would cost about what the removed queries were worth. The Poseidon2 form accepts when `Poseidon2(seed, nonce)` is divisible by `2^b`, which is
 one permutation plus two range constraints on the quotient: 1.3 % of the circuit for a fifth off the
 query count. It is the one lever with a real prover-side price — see §4.
 
@@ -287,7 +287,51 @@ when applied to witness columns, so this needs per-group stacking to be worth it
 bb's four WHIR hashers to prove with). Its `bar` needs a byte decomposition and S-box lookups per
 field element — roughly 2–4× Poseidon2's ~23 gates per absorbed element — and Ultra gives Poseidon2
 dedicated custom gates that nothing else gets. The native ranking and the in-circuit ranking are
-opposites, and only the in-circuit one matters here.
+opposites, and only the in-circuit one matters here. **Blake3s** is the same story, measured: see
+below.
+
+### Blake3s, measured rather than asserted
+
+`StdlibBlake3sHasher` is a second in-circuit hasher, bit-identical to `bb::whir::Blake3sMerkleHasher`
+(a test pins both leaf and node against it), so the same verifier runs on Blake3s-committed proofs
+and the choice can be priced. The unit costs on this machine:
+
+| | gates |
+|---|---:|
+| Poseidon2 permutation — a Merkle node, or three absorbed values | 75 |
+| Blake3s of 65 bytes — a Merkle node | 4,330 |
+| Blake3s of 769 bytes — one 24-value leaf chunk | 28,575 |
+| `field_t` → its canonical 32 bytes | 2,865 |
+
+Two separate penalties. A Blake3s node compression is **58× a Poseidon2 permutation**, because in a
+BN254 circuit it is 32-bit word arithmetic rather than field arithmetic. And every field element it
+absorbs must first be decomposed into 32 bytes with a canonicity check, which alone costs 38× a whole
+Poseidon2 permutation — so a leaf of `n` values pays `2,865n` before any hashing happens.
+
+End to end, the same statement verified both ways (`whir_recursion_bench hashers`):
+
+| configuration | Poseidon2 | Blake3s | ratio | Poseidon2 proof | Blake3s proof |
+|---|---:|---:|---:|---:|---:|
+| m = 8, λ = 32 | 31,482 | 719,321 | 22.8× | 12,608 B | 16,256 B |
+| m = 8, λ = 64 | 51,696 | 1,291,389 | 25.0× | 19,776 B | 25,984 B |
+| m = 10, λ = 32 | 30,032 | 1,104,605 | 36.8× | 14,656 B | 20,416 B |
+
+The ratio *grows* with the tree depth, because the deeper the tree the more of the cost is node
+hashing, where Blake3s is worst (58× against the leaf side's ~30×). A Blake3s digest is also two
+field elements to Poseidon2's one, so its proof carries about twice the Merkle-path bytes.
+
+The table stops at deliberately small parameters because that is where it stops being measurable:
+extrapolating the m = 10 ratio, the transparent-Honk verifier of §4 would be roughly 4–5 M gates on
+Blake3s against 144,455 on Poseidon2, and the whole-proof verifier of §6 would be larger still — past
+what one outer proof holds on this machine. `TransparentHonkRecursiveVerifier` is therefore fixed to
+Poseidon2 rather than templated on the hasher: the opening comparison above already isolates the
+choice, and the Honk shell around it hashes with the Poseidon2 transcript either way, so a
+whole-proof comparison would measure the same ratio diluted.
+
+So the hash choice inverts between the two sides of the pipeline: bb's WHIR defaults to Blake3s
+because it is the fastest to *prove* with, and a recursive verifier must use Poseidon2 because it is
+20–40× cheaper to *verify*. If proofs are going to be aggregated, that decision belongs to the
+verifier.
 
 ### On turning the verifier into lookups
 

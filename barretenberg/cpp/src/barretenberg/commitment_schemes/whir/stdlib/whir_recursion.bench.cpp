@@ -477,11 +477,70 @@ void provekit_cost()
                  "  logarithmically. Full ProveKit recursion is bounded by Spartan, not by WHIR.\n";
 }
 
+/**
+ * @brief The same statement verified with each Merkle hasher, so the choice is measured.
+ * @details Poseidon2 and Blake3s are opposites: Blake3s is the fastest of bb's WHIR hashers to
+ * *prove* with and the most expensive to *verify* in a circuit, because in a BN254 circuit it is
+ * 32-bit word arithmetic and every field element it absorbs has to be decomposed into 32 bytes
+ * first. The configurations here are deliberately small — a realistic Blake3s verifier does not fit
+ * on this machine, which is itself the finding.
+ */
+void hashers()
+{
+    using Poseidon2Harness =
+        whir::recursion::RecursionHarness_<whir::recursion::StdlibPoseidon2Hasher<UltraCircuitBuilder>>;
+    using Blake3sHarness =
+        whir::recursion::RecursionHarness_<whir::recursion::StdlibBlake3sHasher<UltraCircuitBuilder>>;
+
+    std::cout << "\nMerkle hash choice, same statement both times (1 column, rate 2^-4, k=4, k0=1, no grind)\n";
+    std::cout << std::string(92, '=') << "\n";
+    std::cout << std::left << std::setw(22) << "configuration" << std::right << std::setw(14) << "poseidon2"
+              << std::setw(14) << "blake3s" << std::setw(12) << "blake3s/p2" << std::setw(14) << "p2 proof"
+              << std::setw(14) << "b3 proof" << "\n";
+
+    struct Point {
+        size_t num_variables;
+        size_t security_bits;
+    };
+    for (const Point& point : std::vector<Point>{ { 8, 32 }, { 8, 64 }, { 10, 32 } }) {
+        const auto make = [&](auto harness_tag) {
+            using Harness = decltype(harness_tag);
+            const WhirConfig config = Harness::config(point.num_variables,
+                                                      point.security_bits,
+                                                      /*log_inv_rate=*/4,
+                                                      /*k=*/4,
+                                                      /*k0=*/1,
+                                                      /*pow_bits=*/0);
+            const auto instance = Harness::make_instance(config, { 1 });
+            if (!Harness::verify_natively(instance)) {
+                throw_or_abort("whir_recursion_bench: the proof under measurement does not verify");
+            }
+            auto builder = Harness::build_circuit(instance);
+            return std::pair<size_t, size_t>{ builder.get_num_finalized_gates_inefficient(),
+                                              instance.proof.size() * sizeof(fr) };
+        };
+        const auto [p2_gates, p2_proof] = make(Poseidon2Harness{});
+        const auto [b3_gates, b3_proof] = make(Blake3sHarness{});
+        std::cout << std::left << std::setw(22)
+                  << ("m=" + std::to_string(point.num_variables) + ", lambda=" + std::to_string(point.security_bits))
+                  << std::right << std::setw(14) << p2_gates << std::setw(14) << b3_gates << std::setw(11) << std::fixed
+                  << std::setprecision(1) << double(b3_gates) / double(p2_gates) << "x" << std::setw(12) << p2_proof
+                  << " B" << std::setw(12) << b3_proof << " B\n";
+    }
+    std::cout << "\n  Blake3s digests are two field elements where Poseidon2's is one, so the Blake3s proof also\n"
+                 "  carries roughly twice the Merkle-path bytes.\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     const std::string mode = argc > 1 ? argv[1] : "all";
+    if (mode == "hashers") {
+        hashers();
+        std::cout << std::endl;
+        return 0;
+    }
     if (mode == "provekit-cost") {
         provekit_cost();
         std::cout << std::endl;
