@@ -299,14 +299,22 @@ and the choice can be priced. The unit costs on this machine:
 | | gates |
 |---|---:|
 | Poseidon2 permutation — a Merkle node, or three absorbed values | 75 |
+| Skyscraper compression — a Merkle node | 474 |
 | Blake3s of 65 bytes — a Merkle node | 2,620 |
 | Blake3s of 769 bytes — one 24-value leaf chunk | 17,492 |
-| `field_t` → its canonical 32 bytes | 2,865 |
+| `field_t` → its canonical 32 bytes, first in a circuit | 2,864 |
+| `field_t` → its canonical 32 bytes, each after that | 70 |
 
-Two separate penalties. A Blake3s node compression is **35× a Poseidon2 permutation**, because in a
-BN254 circuit it is 32-bit word arithmetic rather than field arithmetic. And every field element it
-absorbs must first be decomposed into 32 bytes with a canonicity check, which alone costs 38× a whole
-Poseidon2 permutation — so a leaf of `n` values pays `2,865n` before any hashing happens.
+A Blake3s node compression is **35× a Poseidon2 permutation**, because in a BN254 circuit it is
+32-bit word arithmetic rather than field arithmetic, and every field element it absorbs must first be
+decomposed into 32 bytes with a canonicity check. That decomposition is much cheaper than it first
+appears: a circuit's *first* one costs 2,864 gates but almost all of that is building the shared
+range lists, and each one after costs ~70. So a leaf of `n` values pays `2,864 + 70n`, not `2,865n`.
+
+Skyscraper sits between the two, and its cost has the same shape for a different reason: it is
+BN254-native, but two of its eighteen half-rounds are a byte-level "bar" S-box, so each compression
+pays four canonical decompositions and 128 S-box lookups. Fourteen squaring half-rounds cost one gate
+each.
 
 End to end, the same statement verified both ways (`whir_recursion_bench hashers`):
 
