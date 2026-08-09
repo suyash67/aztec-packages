@@ -1,5 +1,6 @@
 #include "barretenberg/commitment_schemes/whir/stdlib/recursion_harness.hpp"
 
+#include "barretenberg/commitment_schemes/mercury/vela_honk.hpp"
 #include "barretenberg/commitment_schemes/whir/stdlib/transparent_honk_recursive_verifier.hpp"
 #include "barretenberg/stdlib_circuit_builders/mock_circuits.hpp"
 #include "barretenberg/ultra_honk/prover_instance.hpp"
@@ -409,6 +410,217 @@ void full(const std::vector<size_t>& inner_gate_counts, size_t pow_bits)
 }
 
 /**
+ * @brief One WHIR-Honk proof carried all the way to a pairing-based proof, with every stage timed.
+ *
+ * @details The pipeline a rollup would actually run: an inner statement proved with transparent
+ * UltraHonk over WHIR, that whole proof verified inside a circuit, and that circuit proved with a
+ * pairing-based scheme whose verifier fits on chain. The inner proof never touches the chain, so
+ * its size is a bandwidth question rather than a gas one; what settles is the outer proof.
+ *
+ * Both outer schemes are measured because they answer different questions. UltraHonk + KZG is the
+ * production path (Gemini/Shplonk, ~13 KB). UltraHonk + Vela is the same shell over the Mercury-style
+ * univariate PCS, which trades prover work for an opening argument the EVM checks more cheaply.
+ */
+template <typename Recursive, typename StdlibHasher>
+void pipeline_for(const char* label, const std::vector<size_t>& inner_gate_counts, size_t pow_bits)
+{
+    using InnerHonk = typename Recursive::NativeHonk;
+    using FF = stdlib::field_t<UltraCircuitBuilder>;
+
+    const auto build_inner = [](size_t num_gates) {
+        UltraCircuitBuilder builder;
+        MockCircuits::add_arithmetic_gates_with_public_inputs(builder, 16);
+        MockCircuits::add_arithmetic_gates(builder, num_gates);
+        MockCircuits::add_lookup_gates(builder, 2);
+        const size_t rom_id = builder.create_ROM_array(4);
+        for (size_t i = 0; i < 4; ++i) {
+            builder.set_ROM_element(rom_id, i, builder.add_variable(fr(3 * i + 1)));
+        }
+        builder.read_ROM_array(rom_id, builder.add_variable(fr(2)));
+        return builder;
+    };
+    const auto elapsed_ms = [](auto start) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    };
+    const auto row = [](const char* name, auto value, const char* unit) {
+        std::cout << "    " << std::left << std::setw(26) << name << std::right << std::setw(12) << value << " " << unit
+                  << "\n";
+    };
+
+    for (const size_t num_gates : inner_gate_counts) {
+        UltraCircuitBuilder sizing = build_inner(num_gates);
+        const size_t log_n = ProverInstance_<UltraFlavor>(sizing).log_dyadic_size();
+
+        std::cout << "\n" << std::string(78, '=') << "\n";
+        std::cout << label << " Merkle hash, inner circuit 2^" << log_n << ", lambda=100, rate 2^-4, k=4, k0=1, "
+                  << pow_bits << "-bit grind\n";
+        std::cout << std::string(78, '=') << "\n";
+
+        WhirConfig config = WhirConfig::create(log_n,
+                                               /*security_bits=*/100,
+                                               /*log_inv_rate=*/4,
+                                               /*folding_factor_bits=*/4,
+                                               /*final_poly_bits=*/4,
+                                               WhirSoundness::REPAIRED_LIST,
+                                               /*zk=*/false,
+                                               /*max_stack_bits=*/0,
+                                               /*initial_folding_factor_bits=*/1,
+                                               pow_bits);
+        config.enable_recursion_profile();
+
+        // ---- Stage 0: the same statement proved directly with UltraHonk + KZG ---------------
+        // The baseline the whole pipeline has to justify itself against: if the inner statement can
+        // simply be proved with the scheme that settles on chain, the WHIR detour buys nothing.
+        {
+            UltraCircuitBuilder direct = build_inner(num_gates);
+            DefaultIO::add_default(direct);
+            auto start_direct = std::chrono::steady_clock::now();
+            auto instance = std::make_shared<ProverInstance_<UltraFlavor>>(direct);
+            auto vk = std::make_shared<UltraFlavor::VerificationKey>(instance->get_precomputed());
+            UltraProver_<UltraFlavor> prover(instance, vk);
+            const auto key_ms = elapsed_ms(start_direct);
+            start_direct = std::chrono::steady_clock::now();
+            const HonkProof proof = prover.construct_proof();
+            const auto prove_ms = elapsed_ms(start_direct);
+            auto vk_and_hash = std::make_shared<UltraFlavor::VKAndHash>(vk);
+            start_direct = std::chrono::steady_clock::now();
+            UltraVerifier_<UltraFlavor, DefaultIO> verifier(vk_and_hash);
+            const bool ok = verifier.verify_proof(proof).result;
+            const auto verify_ms = elapsed_ms(start_direct);
+            std::cout << "  [0] baseline: the same statement, UltraHonk + KZG directly (no WHIR)\n";
+            row("proving key", key_ms, "ms");
+            row("prove", prove_ms, "ms");
+            row("verify (native)", verify_ms, "ms");
+            row("proof", proof.size() * sizeof(fr), "B");
+            row("verified", ok ? "yes" : "NO", "");
+            std::cout << std::flush;
+        }
+
+        // ---- Stage 1: the inner proof, transparent UltraHonk over WHIR ----------------------
+        UltraCircuitBuilder inner_builder = build_inner(num_gates);
+        auto start = std::chrono::steady_clock::now();
+        auto pk = InnerHonk::create_proving_key(inner_builder, config);
+        const auto inner_key_ms = elapsed_ms(start);
+
+        start = std::chrono::steady_clock::now();
+        const HonkProof inner_proof = InnerHonk::prove(pk);
+        const auto inner_prove_ms = elapsed_ms(start);
+
+        start = std::chrono::steady_clock::now();
+        const bool inner_ok = InnerHonk::verify(pk.vk, config, inner_proof);
+        const auto inner_verify_ms = elapsed_ms(start);
+        if (!inner_ok) {
+            throw_or_abort("whir_recursion_bench: the inner proof does not verify");
+        }
+        std::cout << "  [1] inner: UltraHonk + WHIR (" << label << ")\n";
+        row("proving key", inner_key_ms, "ms");
+        row("prove", inner_prove_ms, "ms");
+        row("verify (native)", inner_verify_ms, "ms");
+        row("proof", inner_proof.size() * sizeof(fr), "B");
+        std::cout << std::flush;
+
+        // ---- Stage 2: that proof verified inside a circuit -----------------------------------
+        UltraCircuitBuilder outer;
+        typename StdlibTranscript<UltraCircuitBuilder>::Proof stdlib_proof;
+        stdlib_proof.reserve(inner_proof.size());
+        for (const fr& element : inner_proof) {
+            stdlib_proof.push_back(FF::from_witness(&outer, element));
+        }
+        start = std::chrono::steady_clock::now();
+        const std::vector<FF> inner_public_inputs = Recursive::verify(outer, pk.vk, config, stdlib_proof);
+        const auto build_ms = elapsed_ms(start);
+        for (const FF& input : inner_public_inputs) {
+            outer.set_public_input(input.get_witness_index());
+        }
+        const size_t recursive_gates = outer.get_num_finalized_gates_inefficient();
+        const size_t table_rows = outer.get_tables_size();
+        std::cout << "  [2] recursive verifier circuit\n";
+        row("build (witness gen)", build_ms, "ms");
+        row("gates", recursive_gates, "");
+        row("lookup table rows", table_rows, "");
+        std::cout << std::flush;
+
+        // ---- Stage 3a: settle with UltraHonk + KZG -------------------------------------------
+        {
+            UltraCircuitBuilder settle = outer;
+            DefaultIO::add_default(settle);
+            start = std::chrono::steady_clock::now();
+            auto instance = std::make_shared<ProverInstance_<UltraFlavor>>(settle);
+            auto vk = std::make_shared<UltraFlavor::VerificationKey>(instance->get_precomputed());
+            const auto key_ms = elapsed_ms(start);
+
+            UltraProver_<UltraFlavor> prover(instance, vk);
+            start = std::chrono::steady_clock::now();
+            const HonkProof proof = prover.construct_proof();
+            const auto prove_ms = elapsed_ms(start);
+
+            auto vk_and_hash = std::make_shared<UltraFlavor::VKAndHash>(vk);
+            start = std::chrono::steady_clock::now();
+            UltraVerifier_<UltraFlavor, DefaultIO> verifier(vk_and_hash);
+            const bool ok = verifier.verify_proof(proof).result;
+            const auto verify_ms = elapsed_ms(start);
+
+            std::cout << "  [3a] outer: UltraHonk + KZG\n";
+            row("circuit",
+                instance->dyadic_size(),
+                ("rows (2^" + std::to_string(instance->log_dyadic_size()) + ")").c_str());
+            row("proving key", key_ms, "ms");
+            row("prove", prove_ms, "ms");
+            row("verify (native)", verify_ms, "ms");
+            row("proof", proof.size() * sizeof(fr), "B");
+            row("verified", ok ? "yes" : "NO", "");
+            std::cout << std::flush;
+        }
+
+        // ---- Stage 3b: settle with UltraHonk + Vela ------------------------------------------
+        {
+            using VelaHonk = bb::vela::VelaHonk;
+            UltraCircuitBuilder settle = outer;
+            UltraCircuitBuilder sizing_settle = settle;
+            const size_t outer_log_n = ProverInstance_<UltraFlavor>(sizing_settle).log_dyadic_size();
+            const auto vela_config = VelaHonk::make_config(outer_log_n);
+
+            start = std::chrono::steady_clock::now();
+            auto vela_pk = VelaHonk::create_proving_key(settle, vela_config);
+            const auto key_ms = elapsed_ms(start);
+
+            start = std::chrono::steady_clock::now();
+            const HonkProof proof = VelaHonk::prove(vela_pk);
+            const auto prove_ms = elapsed_ms(start);
+
+            start = std::chrono::steady_clock::now();
+            const bool ok = VelaHonk::verify(vela_pk.vk, vela_config, proof);
+            const auto verify_ms = elapsed_ms(start);
+
+            std::cout << "  [3b] outer: UltraHonk + Vela\n";
+            row("circuit", size_t(1) << outer_log_n, ("rows (2^" + std::to_string(outer_log_n) + ")").c_str());
+            row("proving key", key_ms, "ms");
+            row("prove", prove_ms, "ms");
+            row("verify (native)", verify_ms, "ms");
+            row("proof", proof.size() * sizeof(fr), "B");
+            row("verified", ok ? "yes" : "NO", "");
+            std::cout << std::flush;
+        }
+    }
+}
+
+void pipeline(const std::string& which, const std::vector<size_t>& inner_gate_counts, size_t pow_bits)
+{
+    using Builder = UltraCircuitBuilder;
+    std::cout << "\nWHIR-Honk end to end: inner proof -> recursive verifier -> pairing-based outer proof\n";
+    if (which != "blake3") {
+        pipeline_for<whir::recursion::TransparentHonkRecursiveVerifier<Builder>,
+                     whir::recursion::StdlibPoseidon2Hasher<Builder>>("Poseidon2", inner_gate_counts, pow_bits);
+    }
+    if (which != "poseidon2") {
+        pipeline_for<whir::recursion::TransparentHonkRecursiveVerifier<Builder,
+                                                                       whir::recursion::RecursionBlake3sWhirPcs,
+                                                                       whir::recursion::StdlibBlake3sHasher<Builder>>,
+                     whir::recursion::StdlibBlake3sHasher<Builder>>("Blake3s", inner_gate_counts, pow_bits);
+    }
+}
+
+/**
  * @brief The dominant term of a *ProveKit* recursive verifier, measured in barretenberg.
  *
  * @details ProveKit's Spartan verifier is not succinct in the circuit it proves. It builds an
@@ -551,6 +763,14 @@ int main(int argc, char** argv)
         // Distinct dyadic sizes: the lookup table alone floors the mock circuit at 2^13.
         full({ 100, 20000, 100000 }, /*pow_bits=*/20);
         full({ 100, 20000, 100000 }, /*pow_bits=*/0);
+        std::cout << std::endl;
+        return 0;
+    }
+    if (mode == "pipeline") {
+        srs::init_file_crs_factory(srs::bb_crs_path());
+        const std::string which = argc > 2 ? argv[2] : "all";
+        const size_t inner_gates = argc > 3 ? static_cast<size_t>(std::stoul(argv[3])) : 100;
+        pipeline(which, { inner_gates }, /*pow_bits=*/20);
         std::cout << std::endl;
         return 0;
     }

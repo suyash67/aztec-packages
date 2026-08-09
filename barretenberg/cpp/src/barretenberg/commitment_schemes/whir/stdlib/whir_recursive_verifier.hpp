@@ -581,6 +581,18 @@ template <typename Builder, typename Hasher_ = StdlibPoseidon2Hasher<Builder>> c
         GateReport* report_;
     };
 
+    /** @brief Read one digest, `DIGEST_NUM_FIELDS` proof elements, under `label`. */
+    static Digest receive_digest(Builder& builder,
+                                 const std::shared_ptr<Transcript>& transcript,
+                                 const std::string& label)
+    {
+        std::vector<FF> limbs;
+        for (size_t i = 0; i < DIGEST_NUM_FIELDS; ++i) {
+            limbs.push_back(transcript->template receive_from_prover<FF>(label));
+        }
+        return Hasher::from_fields(builder, limbs);
+    }
+
   private:
     /**
      * @brief A query index: its value, its bits, and the powers of a domain generator it induces.
@@ -843,18 +855,6 @@ template <typename Builder, typename Hasher_ = StdlibPoseidon2Hasher<Builder>> c
             phase.mark("merkle: cap lookup");
         }
         return values;
-    }
-
-    /** @brief Read one digest, `DIGEST_NUM_FIELDS` proof elements, under `label`. */
-    static Digest receive_digest(Builder& builder,
-                                 const std::shared_ptr<Transcript>& transcript,
-                                 const std::string& label)
-    {
-        std::vector<FF> limbs;
-        for (size_t i = 0; i < DIGEST_NUM_FIELDS; ++i) {
-            limbs.push_back(transcript->template receive_from_prover<FF>(label));
-        }
-        return Hasher::from_fields(builder, limbs);
     }
 
     /** @brief The folded oracle's cosets: one column, so a leaf is the coset itself. */

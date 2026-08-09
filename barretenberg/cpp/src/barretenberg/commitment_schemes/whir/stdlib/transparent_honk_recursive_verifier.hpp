@@ -20,12 +20,18 @@ namespace bb::whir::recursion {
  * soundness (`PROVABLE_LIST`) also roughly doubles the query count against the repaired-list bound
  * for the same lambda. Grinding supplies 20 bits so the queries do not have to.
  */
-using RecursionWhirPcs = WhirPcs<Poseidon2CompressionHasher,
-                                 /*MaxStackBits=*/0,
-                                 WhirSoundness::REPAIRED_LIST,
-                                 /*FoldingFactorBits=*/4,
-                                 /*InitialFoldingFactorBits=*/1,
-                                 /*PowBits=*/20>;
+template <typename Hasher>
+using RecursionWhirPcsFor = WhirPcs<Hasher,
+                                    /*MaxStackBits=*/0,
+                                    WhirSoundness::REPAIRED_LIST,
+                                    /*FoldingFactorBits=*/4,
+                                    /*InitialFoldingFactorBits=*/1,
+                                    /*PowBits=*/20>;
+
+using RecursionWhirPcs = RecursionWhirPcsFor<Poseidon2CompressionHasher>;
+
+/** @brief The same instantiation over Blake3s, whose digest is 32 bytes rather than one field. */
+using RecursionBlake3sWhirPcs = RecursionWhirPcsFor<Blake3sMerkleHasher>;
 
 /**
  * @brief Recursive verifier for a whole transparent-Honk-with-WHIR proof.
@@ -50,7 +56,8 @@ using RecursionWhirPcs = WhirPcs<Poseidon2CompressionHasher,
  * Poseidon2 relations, which removes four committed columns *and* shortens every sumcheck round
  * univariate from 7 evaluations to 6 — both of which the recursive verifier feels directly.
  */
-template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentHonkRecursiveVerifier {
+template <typename Builder, typename Pcs_ = RecursionWhirPcs, typename StdlibHasher_ = StdlibPoseidon2Hasher<Builder>>
+class TransparentHonkRecursiveVerifier {
   public:
     using Pcs = Pcs_;
     using NativeFlavor = UltraProveKitFlavor;
@@ -59,9 +66,18 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
     using Transcript = StdlibTranscript<Builder>;
     using NativeHonk = honk_transparent::TransparentHonk<Pcs, NativeFlavor>;
     using NativeVerificationKey = typename NativeHonk::VerificationKey;
-    using WhirVerifier = WhirRecursiveVerifier<Builder>;
+    using WhirVerifier = WhirRecursiveVerifier<Builder, StdlibHasher_>;
+    using StdlibHasher = StdlibHasher_;
+    using NativeHasher = typename StdlibHasher::NativeHasher;
+    using Digest = typename StdlibHasher::Digest;
+
+    // The in-circuit hasher must mirror the one the proof was produced with, or the roots it
+    // reconstructs are meaningless.
+    static_assert(std::is_same_v<NativeHasher, typename Pcs::Hasher>,
+                  "the stdlib Merkle hasher must match the one the WHIR PCS commits with");
 
     static constexpr size_t NUM_PRECOMPUTED = NativeFlavor::NUM_PRECOMPUTED_ENTITIES;
+    static constexpr size_t DIGEST_NUM_FIELDS = StdlibHasher::DIGEST_NUM_FIELDS;
 
     /**
      * @brief Verify `proof` against `vk` inside `builder`; returns the inner proof's public inputs.
@@ -96,7 +112,7 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
         }
 
         // Three witness commitment rounds, interleaved with the challenges that depend on them.
-        const FF wires_root = receive_root(transcript, "HONK:wires");
+        const Digest wires_root = receive_root(builder, transcript, "HONK:wires");
         auto [eta, rom_logup_gamma] =
             transcript->template get_challenges<FF>(std::array<std::string, 2>{ "eta", "rom_logup_gamma" });
         RelationParameters<FF> relation_parameters;
@@ -105,7 +121,7 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
         relation_parameters.eta_three = relation_parameters.eta_two * eta;
         relation_parameters.rom_logup_gamma = rom_logup_gamma;
 
-        const FF counts_w4_root = receive_root(transcript, "HONK:counts_w4");
+        const Digest counts_w4_root = receive_root(builder, transcript, "HONK:counts_w4");
         auto [beta, gamma] = transcript->template get_challenges<FF>(std::array<std::string, 2>{ "beta", "gamma" });
         relation_parameters.beta = beta;
         relation_parameters.beta_sqr = beta * beta;
@@ -114,7 +130,7 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
         relation_parameters.public_input_delta =
             compute_public_input_delta<Flavor>(public_inputs, beta, gamma, FF(uint64_t(vk.pub_inputs_offset)));
 
-        const FF inverses_z_perm_root = receive_root(transcript, "HONK:inverses_z_perm");
+        const Digest inverses_z_perm_root = receive_root(builder, transcript, "HONK:inverses_z_perm");
         phase.mark("honk: transcript + public inputs");
 
         const FF alpha = transcript->template get_challenge<FF>("alpha");
@@ -144,7 +160,9 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
                                      NativeHonk::WITNESS_GROUP_COLUMNS[1],
                                      NativeHonk::WITNESS_GROUP_COLUMNS[2] };
         // The precomputed root is a constant of the aggregator; the witness roots are proof data.
-        claims.group_roots = { FF(vk.precomputed_commitment), wires_root, counts_w4_root, inverses_z_perm_root };
+        claims.group_roots = {
+            constant_digest(builder, vk.precomputed_commitment), wires_root, counts_w4_root, inverses_z_perm_root
+        };
         NativeHonk::append_unshifted_refs(claims.unshifted, vk.virtual_mask);
         NativeHonk::append_unshifted_evaluations(claims.unshifted_evaluations, unshifted_evaluations, vk.virtual_mask);
         NativeHonk::append_shifted_refs(claims.to_be_shifted);
@@ -158,9 +176,27 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
   private:
     using Phase = typename WhirVerifier::Phase;
 
-    static FF receive_root(const std::shared_ptr<Transcript>& transcript, const std::string& label)
+    static Digest receive_root(Builder& builder,
+                               const std::shared_ptr<Transcript>& transcript,
+                               const std::string& label)
     {
-        return transcript->template receive_from_prover<FF>(label);
+        return WhirVerifier::receive_digest(builder, transcript, label);
+    }
+
+    /**
+     * @brief A root the aggregator knows when it is built, as circuit constants.
+     * @details Only the precomputed-column root qualifies: it is fixed by the inner verification
+     * key, and making it a constant is what binds this circuit to one inner statement.
+     */
+    static Digest constant_digest(Builder& builder, const typename Pcs::GroupCommitment& digest)
+    {
+        const auto native_limbs = NativeHasher::digest_to_fields(digest);
+        std::vector<FF> limbs;
+        limbs.reserve(DIGEST_NUM_FIELDS);
+        for (const bb::fr& limb : native_limbs) {
+            limbs.emplace_back(limb);
+        }
+        return StdlibHasher::from_fields(builder, limbs);
     }
 
     /**
@@ -185,7 +221,12 @@ template <typename Builder, typename Pcs_ = RecursionWhirPcs> class TransparentH
         transcript->add_to_hash_buffer("vk_virtual_mask", fixed(bb::fr(uint64_t(vk.virtual_mask))));
         transcript->add_to_hash_buffer("vk_lagrange_first_row", fixed(bb::fr(uint64_t(vk.lagrange_first_row))));
         transcript->add_to_hash_buffer("vk_lagrange_last_row", fixed(bb::fr(uint64_t(vk.lagrange_last_row))));
-        transcript->add_to_hash_buffer("vk_root", fixed(vk.precomputed_commitment));
+        const auto root_limbs = NativeHasher::digest_to_fields(vk.precomputed_commitment);
+        std::array<FF, DIGEST_NUM_FIELDS> root{};
+        for (size_t i = 0; i < DIGEST_NUM_FIELDS; ++i) {
+            root[i] = fixed(root_limbs[i]);
+        }
+        transcript->add_to_hash_buffer("vk_root", root);
     }
 
     /**
