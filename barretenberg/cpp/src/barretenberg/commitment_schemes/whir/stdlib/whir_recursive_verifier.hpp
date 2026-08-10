@@ -149,7 +149,7 @@ template <typename Builder> class StdlibPoseidon2Hasher {
  * @details The middle of the three. Skyscraper is a BN254-native permutation, so like Poseidon2 its
  * digest is one field element and it needs no byte encoding; unlike Poseidon2 its diffusion comes
  * partly from a byte-level "bar" S-box, which a circuit pays for in a canonical 32-byte
- * decomposition and 32 lookups. That puts a node compression at 474 gates against Poseidon2's 75 and
+ * decomposition and a slice lookup each. That puts a node compression at 158 gates against Poseidon2's 75 and
  * Blake3s' 2,620, while natively it is the fastest of the three to prove with. It is the only hasher
  * here that reproduces ProveKit's leaf/node convention exactly: a left fold of the compression, no
  * domain tags.

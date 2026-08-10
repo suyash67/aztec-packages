@@ -299,7 +299,7 @@ and the choice can be priced. The unit costs on this machine:
 | | gates |
 |---|---:|
 | Poseidon2 permutation — a Merkle node, or three absorbed values | 75 |
-| Skyscraper compression — a Merkle node | 474 |
+| Skyscraper compression — a Merkle node | 158 |
 | Blake3s of 65 bytes — a Merkle node | 2,620 |
 | Blake3s of 769 bytes — one 24-value leaf chunk | 17,492 |
 | `field_t` → its canonical 32 bytes, first in a circuit | 2,864 |
@@ -311,10 +311,10 @@ decomposed into 32 bytes with a canonicity check. That decomposition is much che
 appears: a circuit's *first* one costs 2,864 gates but almost all of that is building the shared
 range lists, and each one after costs ~70. So a leaf of `n` values pays `2,864 + 70n`, not `2,865n`.
 
-Skyscraper sits between the two, and its cost has the same shape for a different reason: it is
-BN254-native, but two of its eighteen half-rounds are a byte-level "bar" S-box, so each compression
-pays four canonical decompositions and 128 S-box lookups. Fourteen squaring half-rounds cost one gate
-each.
+Skyscraper sits between the two, and its cost has a different shape: it is BN254-native, and its
+fourteen squaring half-rounds are one gate each. Its four "bar" half-rounds carry the rest — each is
+a single 16-slice lookup that decomposes the state, substitutes its bytes and rotates them in one
+pass, plus the canonicity proof that the lookup does not itself give.
 
 End to end, the same statement verified both ways (`whir_recursion_bench hashers`):
 
