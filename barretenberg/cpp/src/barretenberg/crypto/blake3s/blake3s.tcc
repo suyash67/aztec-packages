@@ -244,6 +244,17 @@ constexpr void blake3_hasher_finalize(const blake3_hasher* self, uint8_t* out)
     }
 }
 
+void blake3s(std::span<const uint8_t> input, std::array<uint8_t, BLAKE3_OUT_LEN>& output)
+{
+    BB_ASSERT_LTE(
+        input.size(), 1024U, "Barretenberg does not support blake3s with input lengths greater than 1024 bytes.");
+
+    blake3_hasher hasher;
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, input.data(), input.size());
+    blake3_hasher_finalize(&hasher, output.data());
+}
+
 std::vector<uint8_t> blake3s(std::vector<uint8_t> const& input)
 {
     BB_ASSERT_LTE(

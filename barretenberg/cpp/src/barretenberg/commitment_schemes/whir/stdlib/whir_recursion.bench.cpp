@@ -635,7 +635,7 @@ void pipeline(const std::string& which, const std::vector<size_t>& inner_gate_co
  * and how fast it verifies natively. That is the half of the trade-off a recursion-free deployment
  * sees, and it runs the ordering opposite to the in-circuit half.
  */
-void inner_hashers(const std::vector<size_t>& inner_gate_counts)
+void inner_hashers(const std::vector<size_t>& inner_gate_counts, const std::string& only = "", size_t repeats = 1)
 {
     using FF = fr;
     const auto build_inner = [](size_t num_gates) {
@@ -697,9 +697,17 @@ void inner_hashers(const std::vector<size_t>& inner_gate_counts)
                       << std::flush;
         };
 
-        run("Poseidon2", whir::recursion::RecursionWhirPcsFor<Poseidon2CompressionHasher>{});
-        run("Skyscraper", whir::recursion::RecursionWhirPcsFor<SkyscraperMerkleHasher>{});
-        run("Blake3s", whir::recursion::RecursionWhirPcsFor<Blake3sMerkleHasher>{});
+        for (size_t r = 0; r < repeats; ++r) {
+            if (only.empty() || only == "poseidon2") {
+                run("Poseidon2", whir::recursion::RecursionWhirPcsFor<Poseidon2CompressionHasher>{});
+            }
+            if (only.empty() || only == "skyscraper") {
+                run("Skyscraper", whir::recursion::RecursionWhirPcsFor<SkyscraperMerkleHasher>{});
+            }
+            if (only.empty() || only == "blake3") {
+                run("Blake3s", whir::recursion::RecursionWhirPcsFor<Blake3sMerkleHasher>{});
+            }
+        }
     }
 }
 
@@ -896,6 +904,13 @@ int main(int argc, char** argv)
         return 0;
     }
     if (mode == "inner-hashers") {
+        const std::string only = argc > 2 ? argv[2] : "";
+        const size_t repeats = argc > 3 ? static_cast<size_t>(std::stoul(argv[3])) : 1;
+        if (!only.empty()) {
+            inner_hashers({ 100 }, only, repeats);
+            std::cout << std::endl;
+            return 0;
+        }
         inner_hashers({ 100, 20000 });
         std::cout << std::endl;
         return 0;

@@ -138,6 +138,18 @@ struct SkyscraperMerkleHasher {
 
 namespace detail {
 
+/** @brief Write an Fr as its canonical 4x64-bit little-endian limbs into 32 bytes at `out`. */
+inline void write_fr_bytes(uint8_t* out, const fr& value)
+{
+    const uint256_t canonical(value);
+    for (size_t limb = 0; limb < 4; ++limb) {
+        const uint64_t word = canonical.data[limb];
+        for (size_t byte = 0; byte < 8; ++byte) {
+            out[8 * limb + byte] = static_cast<uint8_t>(word >> (8 * byte));
+        }
+    }
+}
+
 /** @brief Append an Fr as its canonical 4x64-bit little-endian limbs. */
 inline void append_fr_bytes(std::vector<uint8_t>& buffer, const fr& value)
 {
@@ -224,48 +236,50 @@ struct Blake3sMerkleHasher {
     static constexpr size_t DIGEST_NUM_FIELDS = 2;
     static constexpr size_t LEAF_CHUNK_VALUES = 24;
 
+    // A tree hashes millions of times across a thread pool, so both halves work in a stack buffer:
+    // a heap allocation per node would make the allocator lock, not the hash, the thing that scales.
+    static constexpr size_t LEAF_BUFFER_BYTES = 33 + 32 * (LEAF_CHUNK_VALUES + 1);
+
     static Digest hash_leaf(std::span<const fr> values, const std::optional<fr>& salt)
     {
-        std::vector<uint8_t> buffer;
-        buffer.reserve(33 + 32 * (LEAF_CHUNK_VALUES + 1));
-        buffer.push_back(uint8_t(0)); // leaf tag
+        std::array<uint8_t, LEAF_BUFFER_BYTES> buffer{};
+        size_t size = 0;
+        buffer[size++] = uint8_t(0); // leaf tag
         if (salt) {
-            detail::append_fr_bytes(buffer, *salt);
+            detail::write_fr_bytes(buffer.data() + size, *salt);
+            size += 32;
         }
         Digest digest{};
         size_t absorbed = 0;
         while (absorbed < values.size()) {
             const size_t chunk = std::min(LEAF_CHUNK_VALUES, values.size() - absorbed);
             for (size_t t = 0; t < chunk; ++t) {
-                detail::append_fr_bytes(buffer, values[absorbed + t]);
+                detail::write_fr_bytes(buffer.data() + size, values[absorbed + t]);
+                size += 32;
             }
             absorbed += chunk;
-            digest = to_digest(blake3::blake3s(buffer));
-            buffer.assign(digest.begin(), digest.end()); // chain into the next chunk
+            blake3::blake3s(std::span<const uint8_t>(buffer.data(), size), digest);
+            // Chain into the next chunk: the digest replaces the tag and everything after it.
+            std::memcpy(buffer.data(), digest.data(), 32);
+            size = 32;
         }
         return digest;
     }
     static Digest hash_node(const Digest& left, const Digest& right)
     {
-        std::vector<uint8_t> input(65);
+        std::array<uint8_t, 65> input{};
         input[0] = uint8_t(1); // node tag
         std::memcpy(input.data() + 1, left.data(), 32);
         std::memcpy(input.data() + 33, right.data(), 32);
-        return to_digest(blake3::blake3s(input));
+        Digest digest{};
+        blake3::blake3s(std::span<const uint8_t>(input), digest);
+        return digest;
     }
     static std::array<fr, DIGEST_NUM_FIELDS> digest_to_fields(const Digest& digest)
     {
         return detail::byte_digest_to_fields(digest);
     }
     static Digest digest_from_fields(std::span<const fr> fields) { return detail::byte_digest_from_fields(fields); }
-
-  private:
-    static Digest to_digest(const std::vector<uint8_t>& bytes)
-    {
-        Digest digest;
-        std::memcpy(digest.data(), bytes.data(), 32);
-        return digest;
-    }
 };
 
 /**

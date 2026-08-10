@@ -36,6 +36,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -112,6 +113,14 @@ constexpr void blake3_compress_xof(
 
 constexpr std::array<uint8_t, BLAKE3_OUT_LEN> blake3s_constexpr(const uint8_t* input, size_t input_size);
 inline std::vector<uint8_t> blake3s(std::vector<uint8_t> const& input);
+
+/**
+ * @brief Hash into a caller-provided digest, allocating nothing.
+ * @details The vector-returning overload allocates its output on every call, which is invisible next
+ * to one hash but not next to the millions a Merkle tree does across a thread pool - there the
+ * allocator lock is what the threads end up waiting on.
+ */
+inline void blake3s(std::span<const uint8_t> input, std::array<uint8_t, BLAKE3_OUT_LEN>& output);
 
 } // namespace blake3
 
