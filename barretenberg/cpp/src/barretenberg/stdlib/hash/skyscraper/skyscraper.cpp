@@ -4,6 +4,7 @@
 #include "barretenberg/stdlib/primitives/circuit_builders/circuit_builders.hpp"
 #include "barretenberg/stdlib/primitives/plookup/plookup.hpp"
 #include "barretenberg/stdlib/primitives/witness/witness.hpp"
+#include "barretenberg/stdlib_circuit_builders/plookup_tables/skyscraper.hpp"
 
 namespace bb::stdlib::skyscraper {
 
@@ -25,7 +26,7 @@ namespace bb::stdlib::skyscraper {
 template <typename Builder> field_t<Builder> Skyscraper<Builder>::bar(const field_ct& x)
 {
     const auto lookup = plookup_read<Builder>::get_lookup_accumulators(plookup::MultiTableId::SKYSCRAPER_BAR, x);
-    enforce_canonical(x, lookup[plookup::ColumnIdx::C1][NUM_BYTES / 2]);
+    enforce_canonical(x, lookup[plookup::ColumnIdx::C1][plookup::skyscraper_tables::ROTATION_SLICES]);
     return lookup[plookup::ColumnIdx::C2][0];
 }
 

@@ -13,9 +13,17 @@ namespace bb::plookup::skyscraper_tables {
  * input, the value column accumulates the substituted bytes, and the rotation is nothing more than
  * where each value-column coefficient places its byte.
  */
-static constexpr uint64_t SBOX_DOMAIN = 256;
-static constexpr size_t NUM_SLICES = 32;
-static constexpr size_t ROTATION_SLICES = 16;
+/**
+ * The slice width trades lookup gates against table rows, and it is the only knob here. At 16 bits a
+ * bar is 16 reads over two 65,536-row tables; at 8 it is 32 reads over two 256-row tables. The wider
+ * setting is chosen because the intended caller is a WHIR recursive verifier, where the circuit is
+ * already far larger than the table and the gates are what cost; a circuit hashing only a few times
+ * wants the narrow one, since a lookup table sets a floor on circuit size.
+ */
+static constexpr size_t SLICE_BITS = 16;
+static constexpr uint64_t SBOX_DOMAIN = uint64_t(1) << SLICE_BITS;
+static constexpr size_t NUM_SLICES = 256 / SLICE_BITS;
+static constexpr size_t ROTATION_SLICES = NUM_SLICES / 2;
 
 /**
  * @brief `sbox(key) << shift`.
@@ -23,10 +31,18 @@ static constexpr size_t ROTATION_SLICES = 16;
  * only defined up to division by its first coefficient - so the only way to get an unrotated,
  * unscaled bar out of the accumulator is for slice 0's table to emit its byte already in place.
  */
+inline uint256_t substitute_slice(uint64_t slice)
+{
+    uint256_t out(0);
+    for (size_t byte = 0; byte < SLICE_BITS / 8; ++byte) {
+        out += uint256_t(crypto::skyscraper::sbox(static_cast<uint8_t>(slice >> (8 * byte)))) << (8 * byte);
+    }
+    return out;
+}
+
 template <size_t shift> inline std::array<bb::fr, 2> get_sbox_values_from_key(const std::array<uint64_t, 2> key)
 {
-    const uint256_t substituted(crypto::skyscraper::sbox(static_cast<uint8_t>(key[0])));
-    return { bb::fr(substituted << shift), bb::fr(0) };
+    return { bb::fr(substitute_slice(key[0]) << shift), bb::fr(0) };
 }
 
 /** @brief The S-box as a 1-to-2 map: byte in column 1, substituted byte in column 2. */
@@ -39,7 +55,7 @@ template <size_t shift> inline BasicTable generate_sbox_table(BasicTableId id, c
 
     for (uint64_t i = 0; i < SBOX_DOMAIN; ++i) {
         table.column_1.emplace_back(i);
-        table.column_2.emplace_back(uint256_t(crypto::skyscraper::sbox(static_cast<uint8_t>(i))) << shift);
+        table.column_2.emplace_back(substitute_slice(i) << shift);
         table.column_3.emplace_back(0);
     }
 
@@ -72,15 +88,15 @@ inline MultiTable get_bar_table(const MultiTableId id = SKYSCRAPER_BAR)
     std::vector<uint64_t> slice_sizes;
 
     for (size_t i = 0; i < NUM_SLICES; ++i) {
-        key_coefficients.emplace_back(uint256_t(1) << (8 * i));
+        key_coefficients.emplace_back(uint256_t(1) << (SLICE_BITS * i));
         // Slice 0's own table already emits its byte at position 16, so its coefficient is 1 - the
         // accumulator divides through by it, and scaling here as well would double-count.
         value_coefficients.emplace_back(i == 0 ? uint256_t(1)
-                                               : uint256_t(1) << (8 * ((i + ROTATION_SLICES) % NUM_SLICES)));
+                                               : uint256_t(1) << (SLICE_BITS * ((i + ROTATION_SLICES) % NUM_SLICES)));
         unused_coefficients.emplace_back(1);
         slice_sizes.emplace_back(SBOX_DOMAIN);
         basic_table_ids.emplace_back(i == 0 ? SKYSCRAPER_SBOX_SHIFT128 : SKYSCRAPER_SBOX);
-        table_values.emplace_back(i == 0 ? &get_sbox_values_from_key<8 * ROTATION_SLICES>
+        table_values.emplace_back(i == 0 ? &get_sbox_values_from_key<SLICE_BITS * ROTATION_SLICES>
                                          : &get_sbox_values_from_key<0>);
     }
 

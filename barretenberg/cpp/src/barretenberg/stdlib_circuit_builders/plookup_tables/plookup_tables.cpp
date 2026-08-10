@@ -410,8 +410,9 @@ BasicTable create_basic_table(const BasicTableId id, const size_t index)
         return skyscraper_tables::generate_sbox_table<0>(SKYSCRAPER_SBOX, index);
     }
     case SKYSCRAPER_SBOX_SHIFT128: {
-        return skyscraper_tables::generate_sbox_table<8 * skyscraper_tables::ROTATION_SLICES>(SKYSCRAPER_SBOX_SHIFT128,
-                                                                                              index);
+        return skyscraper_tables::generate_sbox_table<skyscraper_tables::SLICE_BITS *
+                                                      skyscraper_tables::ROTATION_SLICES>(SKYSCRAPER_SBOX_SHIFT128,
+                                                                                          index);
     }
     case BLAKE_XOR8: {
         return blake2s_tables::generate_xor_rotate_table<blake2s_tables::BITS_PER_SLICE, 0>(BLAKE_XOR8, index);
