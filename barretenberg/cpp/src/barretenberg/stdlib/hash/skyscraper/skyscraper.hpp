@@ -4,6 +4,7 @@
 
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace bb::stdlib::skyscraper {
 
@@ -36,6 +37,12 @@ template <typename Builder> class Skyscraper {
 
     /** @brief One bar application: canonical bytes -> rotate 16 -> S-box -> field element. */
     static field_ct bar(const field_ct& x);
+
+    /**
+     * @brief The rate-1 duplex sponge of `crypto::skyscraper::hash`, for a Fiat-Shamir transcript.
+     * @details Signature and name match `stdlib::poseidon2`, so `BaseTranscript` accepts either.
+     */
+    static field_ct hash(const std::vector<field_ct>& input);
 
     /**
      * @brief Left-fold of `compress` over a sequence, matching `crypto::skyscraper::fold_compress`

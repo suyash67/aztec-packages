@@ -2,6 +2,7 @@
 
 #include "barretenberg/circuit_checker/circuit_checker.hpp"
 #include "barretenberg/crypto/skyscraper/skyscraper.hpp"
+#include "barretenberg/stdlib/hash/poseidon2/poseidon2.hpp"
 #include "barretenberg/stdlib_circuit_builders/ultra_circuit_builder.hpp"
 
 #include <gtest/gtest.h>
@@ -72,6 +73,32 @@ TEST(StdlibSkyscraper, FoldMatchesTheNativeImplementation)
 // Reports the marginal cost of a compression, which is what prices Skyscraper as a WHIR Merkle hash
 // in a recursive verifier. The first compression also pays for the shared range lists and the
 // 256-row S-box table, so the marginal figure is the one that scales.
+// The other half of the Fiat-Shamir trade. Skyscraper's sponge absorbs one field element per
+// permutation; bb's Poseidon2 transcript absorbs three, and Ultra gives Poseidon2 custom gates. So
+// the hash that is cheaper natively is the dearer one in a recursive verifier, and this is the
+// number that says by how much.
+TEST(StdlibSkyscraper, TranscriptHashGateCount)
+{
+    for (const size_t width : { size_t(3), size_t(30), size_t(300) }) {
+        Builder sky_builder;
+        Builder p2_builder;
+        std::vector<field_ct> sky_input;
+        std::vector<stdlib::field_t<Builder>> p2_input;
+        for (size_t i = 0; i < width; ++i) {
+            sky_input.push_back(witness_ct(&sky_builder, fr::random_element()));
+            p2_input.push_back(witness_ct(&p2_builder, fr::random_element()));
+        }
+        const size_t sky_before = sky_builder.get_num_finalized_gates_inefficient();
+        const size_t p2_before = p2_builder.get_num_finalized_gates_inefficient();
+        Skyscraper::hash(sky_input);
+        stdlib::poseidon2<Builder>::hash(p2_input);
+        const double sky = double(sky_builder.get_num_finalized_gates_inefficient() - sky_before) / double(width);
+        const double p2 = double(p2_builder.get_num_finalized_gates_inefficient() - p2_before) / double(width);
+        info("transcript hash of ", width, " elements: skyscraper ", sky, " gates/elt, poseidon2 ", p2, " gates/elt");
+        EXPECT_TRUE(CircuitChecker::check(sky_builder));
+    }
+}
+
 TEST(StdlibSkyscraper, GateCount)
 {
     size_t previous = 0;

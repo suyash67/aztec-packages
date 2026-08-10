@@ -1,4 +1,5 @@
 #include "barretenberg/crypto/skyscraper/skyscraper.hpp"
+#include "barretenberg/crypto/poseidon2/poseidon2.hpp"
 
 #include "barretenberg/common/log.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
@@ -77,6 +78,37 @@ int main()
             fr(uint256_t(crypto::skyscraper::sbox(static_cast<uint8_t>(c.data[2])), c.data[3], c.data[0], c.data[1])) +
             v;
     });
+    // Fiat-Shamir: what a transcript hash costs per absorbed field element. bb's transcript is
+    // Poseidon2 (rate 3, one permutation per three elements); Skyscraper's rate-1 duplex sponge is
+    // one permutation each. Per element is therefore the fair unit, not per permutation.
+    std::cout << "\nFiat-Shamir transcript hash, per absorbed field element\n";
+    for (const size_t width : { size_t(8), size_t(64), size_t(512) }) {
+        std::vector<fr> buffer(values.begin(), values.begin() + static_cast<long>(width));
+        const size_t iterations = 1u << 14;
+
+        auto begin = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < iterations; ++i) {
+            sink += crypto::Poseidon2<crypto::Poseidon2Bn254ScalarFieldParams>::hash(buffer);
+        }
+        const double poseidon2_ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                            std::chrono::steady_clock::now() - begin)
+                                                            .count()) /
+                                    static_cast<double>(iterations * width);
+
+        begin = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < iterations; ++i) {
+            sink += crypto::skyscraper::hash(buffer);
+        }
+        const double skyscraper_ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                             std::chrono::steady_clock::now() - begin)
+                                                             .count()) /
+                                     static_cast<double>(iterations * width);
+
+        std::cout << "  " << std::setw(4) << width << " elements: poseidon2 " << std::setw(7) << std::fixed
+                  << std::setprecision(1) << poseidon2_ns << " ns/elt   skyscraper " << std::setw(7) << skyscraper_ns
+                  << " ns/elt   ratio " << std::setprecision(2) << poseidon2_ns / skyscraper_ns << "x\n";
+    }
+
     std::cout << std::setfill(' ') << "\n(sink " << sink << ")\n";
     return 0;
 }

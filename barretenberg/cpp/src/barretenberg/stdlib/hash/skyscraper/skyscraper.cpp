@@ -118,6 +118,16 @@ template <typename Builder> field_t<Builder> Skyscraper<Builder>::compress(const
     return permute(left, right).first + left;
 }
 
+template <typename Builder> field_t<Builder> Skyscraper<Builder>::hash(const std::vector<field_ct>& input)
+{
+    field_ct left(0);
+    field_ct right(0);
+    for (const field_ct& element : input) {
+        std::tie(left, right) = permute(left + element, right);
+    }
+    return left;
+}
+
 template <typename Builder> field_t<Builder> Skyscraper<Builder>::fold_compress(std::span<const field_ct> values)
 {
     BB_ASSERT_GT(values.size(), static_cast<size_t>(0), "skyscraper fold of an empty sequence");

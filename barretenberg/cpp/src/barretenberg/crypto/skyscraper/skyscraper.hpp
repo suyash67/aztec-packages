@@ -4,6 +4,7 @@
 
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace bb::crypto::skyscraper {
 
@@ -32,6 +33,19 @@ std::pair<fr, fr> permute(const fr& left, const fr& right);
 
 /** @brief Two-to-one compression: left feed-forward over the permutation. */
 fr compress(const fr& left, const fr& right);
+
+/**
+ * @brief Rate-1 duplex sponge over the permutation, for use as a Fiat-Shamir transcript hash.
+ * @details Matches the shape of ProveKit's `DuplexSponge<Skyscraper, 64, 32>`: a two-element state,
+ * one absorbed per permutation, squeezing the left branch. Distinct from `fold_compress`, which is
+ * the Merkle leaf convention.
+ */
+fr hash(std::span<const fr> input);
+
+/** @brief `hash` behind the static interface `BaseTranscript` expects of its hash function. */
+struct TranscriptHash {
+    static fr hash(const std::vector<fr>& input) { return skyscraper::hash(std::span<const fr>(input)); }
+};
 
 /**
  * @brief Left-fold of `compress` over a sequence, ProveKit's leaf-hash convention:

@@ -138,6 +138,16 @@ fr compress(const fr& left, const fr& right)
     return permute(left, right).first + left;
 }
 
+fr hash(std::span<const fr> input)
+{
+    fr left = fr::zero();
+    fr right = fr::zero();
+    for (const fr& element : input) {
+        std::tie(left, right) = permute(left + element, right);
+    }
+    return left;
+}
+
 fr fold_compress(std::span<const fr> values)
 {
     BB_ASSERT_GT(values.size(), static_cast<size_t>(0), "skyscraper fold of an empty sequence");

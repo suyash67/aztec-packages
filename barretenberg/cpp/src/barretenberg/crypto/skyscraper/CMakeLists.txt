@@ -1,1 +1,1 @@
-barretenberg_module(crypto_skyscraper ecc numeric)
+barretenberg_module(crypto_skyscraper ecc numeric crypto_poseidon2)
