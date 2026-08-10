@@ -1,44 +1,76 @@
 #include "skyscraper.hpp"
 
 #include "barretenberg/crypto/skyscraper/skyscraper.hpp"
-#include "barretenberg/stdlib/primitives/byte_array/byte_array.hpp"
 #include "barretenberg/stdlib/primitives/circuit_builders/circuit_builders.hpp"
 #include "barretenberg/stdlib/primitives/plookup/plookup.hpp"
+#include "barretenberg/stdlib/primitives/witness/witness.hpp"
 
 namespace bb::stdlib::skyscraper {
-
-namespace {
-constexpr size_t NUM_BYTES = 32;
-constexpr size_t ROTATION_BYTES = 16;
-} // namespace
 
 /**
  * @brief Rotate the canonical little-endian byte string by 16, S-box each byte, read it back.
  *
- * @details `byte_array(field_t, 32)` is what makes this sound: a field element has several 32-byte
- * representations below 2^256 and each would give a different result, so the decomposition has to be
- * the canonical one. Its constructor imposes that. The 32 S-box reads then cost one gate each and
- * range-constrain their own input byte, and the rotation is free - it is just where each substituted
- * byte is placed in the recomposition.
+ * @details One `SKYSCRAPER_BAR` read does all three: its key column accumulates the byte
+ * decomposition of `x` (so the decomposition is bound without a separate `byte_array`), its value
+ * column accumulates the substituted bytes already rotated into place, and the top accumulator of
+ * each is the value we want. That is 32 gates for what otherwise costs a decomposition, 32 separate
+ * reads and a 32-term recomposition.
+ *
+ * What the read does *not* give is canonicity. Its key accumulator binds
+ * `sum b_i 2^(8i) == x` in the field, and a field element has four such 32-byte representations
+ * below 2^256 - each of which the bar would map somewhere different, so the prover could choose.
+ * `enforce_canonical` pins it to the representation below the modulus, reusing the two 128-bit
+ * halves the read has already accumulated rather than decomposing anything a second time.
  */
 template <typename Builder> field_t<Builder> Skyscraper<Builder>::bar(const field_ct& x)
 {
-    using byte_array_ct = byte_array<Builder>;
+    const auto lookup = plookup_read<Builder>::get_lookup_accumulators(plookup::MultiTableId::SKYSCRAPER_BAR, x);
+    enforce_canonical(x, lookup[plookup::ColumnIdx::C1][NUM_BYTES / 2]);
+    return lookup[plookup::ColumnIdx::C2][0];
+}
 
-    // `byte_array` is big-endian; Skyscraper's byte string is the canonical little-endian one.
-    byte_array_ct bytes(x, NUM_BYTES);
+/**
+ * @brief Prove that the byte decomposition behind a `SKYSCRAPER_BAR` read is the canonical one.
+ *
+ * @details `high` is the read's own accumulator at slice 16, so it is the top 128 bits of the
+ * decomposition and `value - 2^128 * high` is the bottom 128 bits; both are already pinned below
+ * 2^128 by the slices themselves. What is left is to show the pair is at most `r - 1`, which is the
+ * comparison `byte_array(field_t, 32)` makes: shift the low-half difference up by 2^128 so its
+ * 129th bit is the borrow, then require the high-half difference minus the borrow's complement to
+ * be a non-negative 128-bit number.
+ */
+template <typename Builder> void Skyscraper<Builder>::enforce_canonical(const field_ct& value, const field_ct& high)
+{
+    constexpr uint256_t modulus_minus_one = bb::fr::modulus - 1;
+    constexpr uint256_t s_lo = modulus_minus_one.slice(0, 128);
+    constexpr uint256_t s_hi = modulus_minus_one.slice(128, 256);
+    constexpr uint256_t shift = uint256_t(1) << 128;
 
-    std::vector<field_ct> terms;
-    terms.reserve(NUM_BYTES);
-    for (size_t i = 0; i < NUM_BYTES; ++i) {
-        const field_ct byte = bytes[NUM_BYTES - 1 - i];
-        const field_ct substituted =
-            plookup_read<Builder>::read_from_1_to_2_table(plookup::MultiTableId::SKYSCRAPER_SBOX_MULTI, byte);
-        // rotated[j] = le[(j + 16) mod 32], so byte i of the input lands at position (i - 16) mod 32.
-        const size_t position = (i + NUM_BYTES - ROTATION_BYTES) % NUM_BYTES;
-        terms.push_back(substituted * bb::fr(uint256_t(1) << (8 * position)));
+    if (value.is_constant()) {
+        // A constant is already the canonical representative; there is no prover to constrain.
+        return;
     }
-    return field_ct::accumulate(terms);
+    Builder* ctx = value.get_context();
+
+    const field_ct low = value - (high * bb::fr(shift));
+
+    const field_ct diff_lo = -low + bb::fr(s_lo) + bb::fr(shift);
+    const uint256_t diff_lo_value(diff_lo.get_value());
+    field_ct borrow = witness_t<Builder>(ctx, bb::fr(diff_lo_value >> 128));
+    field_ct diff_lo_lo = witness_t<Builder>(ctx, bb::fr(diff_lo_value & (shift - 1)));
+    // Both are functions of `value`, so they inherit its Fiat-Shamir provenance. Left untagged they
+    // would look like free witnesses the moment they are compared against `diff_lo`, which carries
+    // the transcript's origin.
+    borrow.set_origin_tag(value.get_origin_tag());
+    diff_lo_lo.set_origin_tag(value.get_origin_tag());
+    borrow.create_range_constraint(1, "skyscraper: canonicity borrow is not a bit");
+    diff_lo_lo.create_range_constraint(128, "skyscraper: canonicity low limb exceeds 128 bits");
+    diff_lo.assert_equal(diff_lo_lo + borrow * bb::fr(shift), "skyscraper: canonicity low split");
+
+    // borrow == 1 exactly when the low half does not already force the comparison, so the high half
+    // must then be strictly smaller.
+    const field_ct diff_hi = -high + bb::fr(s_hi) - (field_ct(1) - borrow);
+    diff_hi.create_range_constraint(128, "skyscraper: value is not a canonical field element");
 }
 
 template <typename Builder>

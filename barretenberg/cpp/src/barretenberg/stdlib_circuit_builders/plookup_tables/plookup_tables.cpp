@@ -86,8 +86,7 @@ std::array<MultiTable, MultiTableId::NUM_MULTI_TABLES>& get_multi_tables()
         tables[MultiTableId::SECP256K1_XYPRIME_ENDO] =
             ecc_generator_tables::ecc_generator_table<secp256k1::g1>::get_xyprime_endo_table(
                 MultiTableId::SECP256K1_XYPRIME_ENDO, BasicTableId::SECP256K1_XYPRIME_ENDO_BASIC);
-        tables[MultiTableId::SKYSCRAPER_SBOX_MULTI] =
-            skyscraper_tables::get_sbox_multitable(MultiTableId::SKYSCRAPER_SBOX_MULTI);
+        tables[MultiTableId::SKYSCRAPER_BAR] = skyscraper_tables::get_bar_table(MultiTableId::SKYSCRAPER_BAR);
         tables[MultiTableId::BLAKE_XOR] = blake2s_tables::get_blake2s_xor_table(MultiTableId::BLAKE_XOR);
         tables[MultiTableId::BLAKE_XOR_ROTATE_16] =
             blake2s_tables::get_blake2s_xor_rotate_16_table(MultiTableId::BLAKE_XOR_ROTATE_16);
@@ -408,7 +407,11 @@ BasicTable create_basic_table(const BasicTableId id, const size_t index)
             SECP256K1_XYPRIME_ENDO_BASIC, index);
     }
     case SKYSCRAPER_SBOX: {
-        return skyscraper_tables::generate_sbox_table(SKYSCRAPER_SBOX, index);
+        return skyscraper_tables::generate_sbox_table<0>(SKYSCRAPER_SBOX, index);
+    }
+    case SKYSCRAPER_SBOX_SHIFT128: {
+        return skyscraper_tables::generate_sbox_table<8 * skyscraper_tables::ROTATION_SLICES>(SKYSCRAPER_SBOX_SHIFT128,
+                                                                                              index);
     }
     case BLAKE_XOR8: {
         return blake2s_tables::generate_xor_rotate_table<blake2s_tables::BITS_PER_SLICE, 0>(BLAKE_XOR8, index);

@@ -36,29 +36,51 @@ const std::array<fr, 18> ROUND_CONSTANTS = {
     fr(0),
 };
 
-uint8_t rotl8(uint8_t v, unsigned n)
+constexpr uint8_t rotl8(uint8_t v, unsigned n)
 {
     return static_cast<uint8_t>(static_cast<uint8_t>(v << n) | static_cast<uint8_t>(v >> (8U - n)));
 }
 
-// Rotate the canonical little-endian byte string by 16, S-box each byte, reduce mod r.
+constexpr uint8_t sbox_of(uint8_t v)
+{
+    const auto chi = static_cast<uint8_t>(rotl8(static_cast<uint8_t>(~v), 1) & rotl8(v, 2) & rotl8(v, 3));
+    return rotl8(static_cast<uint8_t>(v ^ chi), 1);
+}
+
+// The S-box is a bijection on a byte, so it is a 256-entry table. Evaluating it costs four rotates
+// and three bitwise ops; a compression applies it 128 times, which is enough for the table to be
+// worth its cache line.
+constexpr std::array<uint8_t, 256> SBOX_TABLE = [] {
+    std::array<uint8_t, 256> table{};
+    for (size_t i = 0; i < 256; ++i) {
+        table[i] = sbox_of(static_cast<uint8_t>(i));
+    }
+    return table;
+}();
+
+/** @brief The S-box applied to each of a limb's eight bytes. */
+constexpr uint64_t sbox_limb(uint64_t limb)
+{
+    uint64_t out = 0;
+    for (size_t byte = 0; byte < 8; ++byte) {
+        out |= static_cast<uint64_t>(SBOX_TABLE[(limb >> (8 * byte)) & 0xFFULL]) << (8 * byte);
+    }
+    return out;
+}
+
+/**
+ * @brief Rotate the canonical little-endian byte string by 16, S-box each byte, reduce mod r.
+ * @details Rotating by 16 bytes is exactly swapping the two 128-bit halves, so it is a relabelling
+ * of the limbs rather than anything the bytes have to be materialised for. Working on the limbs also
+ * makes the routine endianness-independent, which the byte-copy version was not.
+ */
 fr bar(const fr& x)
 {
     const uint256_t canonical(x);
-    std::array<uint8_t, 32> bytes;
-    std::memcpy(bytes.data(), canonical.data, 32);
-
-    std::array<uint8_t, 32> rotated;
-    std::memcpy(rotated.data(), bytes.data() + 16, 16);
-    std::memcpy(rotated.data() + 16, bytes.data(), 16);
-
-    for (auto& b : rotated) {
-        b = sbox(b);
-    }
-
-    uint256_t result;
-    std::memcpy(result.data, rotated.data(), 32);
-    return fr(result);
+    return fr(uint256_t(sbox_limb(canonical.data[2]),
+                        sbox_limb(canonical.data[3]),
+                        sbox_limb(canonical.data[0]),
+                        sbox_limb(canonical.data[1])));
 }
 
 void square_round(size_t round, fr& l, fr& r)
@@ -92,8 +114,7 @@ const fr& round_constant(size_t index)
 
 uint8_t sbox(uint8_t v)
 {
-    const auto chi = static_cast<uint8_t>(rotl8(static_cast<uint8_t>(~v), 1) & rotl8(v, 2) & rotl8(v, 3));
-    return rotl8(static_cast<uint8_t>(v ^ chi), 1);
+    return SBOX_TABLE[v];
 }
 
 std::pair<fr, fr> permute(const fr& left, const fr& right)

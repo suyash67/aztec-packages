@@ -42,6 +42,12 @@ template <typename Builder> class Skyscraper {
      * and hence ProveKit's leaf-hash convention. A single value hashes to itself.
      */
     static field_ct fold_compress(std::span<const field_ct> values);
+
+  private:
+    static constexpr size_t NUM_BYTES = 32;
+
+    /** @brief Pin a bar read's byte decomposition to the canonical representative below `r`. */
+    static void enforce_canonical(const field_ct& value, const field_ct& high);
 };
 
 } // namespace bb::stdlib::skyscraper
