@@ -28,6 +28,7 @@
 
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/crypto/blake3s/blake3s.hpp"
+#include "barretenberg/ecc/curves/bn254/fr.hpp"
 
 namespace bb {
 
@@ -104,6 +105,19 @@ class Blake3VMCircuitBuilder {
     // Read multiplicities into the XOR table, one array per lookup set.
     std::array<std::vector<uint32_t>, Layout::NUM_LOOKUP_SETS> read_counts;
 
+    /**
+     * @brief The claim sequence a consuming circuit binds against, in call order.
+     * @details Each entry is one 8-byte chunk of the hashed data, packed little-endian as
+     * `w_lo + 2³²·w_hi` from a pair of 32-bit words: eight chunks per compression covering that
+     * block's 64 message bytes, then four covering the 32-byte digest of the call's final
+     * compression. Every entry is a value the trace already carries on a single row — the message
+     * pair on a round-0 G row, the output pair on an output row — which is what lets the link bind
+     * it without reaching across rows. See README.md, "The linking argument".
+     */
+    std::vector<fr> claims;
+    // is_final[c] = compression c is the last of its call, so its digest is claimed.
+    std::vector<bool> is_final;
+
     Blake3VMCircuitBuilder()
     {
         for (auto& counts : read_counts) {
@@ -158,11 +172,21 @@ class Blake3VMCircuitBuilder {
             Blake3VMBoundary boundary{ .block_len = static_cast<uint32_t>(len), .flags = flags, .chain = (b != 0) };
             const auto out = add_compression(cv, block, boundary);
             std::copy(out.begin(), out.begin() + 8, cv.begin());
+
+            // The block's 64 message bytes, as the eight chunks its round-0 rows expose.
+            for (size_t p = 0; p < Layout::NUM_G_PER_ROUND; ++p) {
+                claims.push_back(pack(blake3::load32(&block[8 * p]), blake3::load32(&block[8 * p + 4])));
+            }
+            is_final.push_back(b + 1 == num_blocks);
         }
 
         std::array<uint8_t, 32> digest;
         for (size_t i = 0; i < 8; ++i) {
             blake3::store32(&digest[4 * i], cv[i]);
+        }
+        // The digest of the call's final compression, as the four chunks its output rows expose.
+        for (size_t t = 0; t < Layout::NUM_OUT_ROWS; ++t) {
+            claims.push_back(pack(cv[2 * t], cv[2 * t + 1]));
         }
 
         std::array<uint8_t, 32> expected;
@@ -172,6 +196,12 @@ class Blake3VMCircuitBuilder {
     }
 
   private:
+    /** @brief One claim entry: two consecutive 32-bit words, little-endian. */
+    static fr pack(uint32_t lo, uint32_t hi)
+    {
+        return fr(static_cast<uint64_t>(lo) + (static_cast<uint64_t>(hi) << 32));
+    }
+
     static std::array<uint8_t, 4> to_bytes(uint32_t w)
     {
         return { static_cast<uint8_t>(w),

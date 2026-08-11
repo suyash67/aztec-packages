@@ -19,6 +19,7 @@
 #include "barretenberg/numeric/bitop/get_msb.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
 #include "barretenberg/polynomials/univariate.hpp"
+#include "barretenberg/relations/blake3vm/blake3vm_link_relation.hpp"
 #include "barretenberg/relations/blake3vm/blake3vm_lookup_relation.hpp"
 #include "barretenberg/relations/blake3vm/blake3vm_relations.hpp"
 #include "barretenberg/relations/relation_parameters.hpp"
@@ -54,6 +55,8 @@ class Blake3VMFlavor {
     using Relations_ = std::tuple<Blake3VMGRelation<FF>,
                                   Blake3VMWiringRelation<FF>,
                                   Blake3VMZeroRowRelation<FF>,
+                                  Blake3VMClaimRelation<FF>,
+                                  Blake3VMLinkRelation<FF>,
                                   Blake3VMLookupRelation<FF, 0>,
                                   Blake3VMLookupRelation<FF, 1>,
                                   Blake3VMLookupRelation<FF, 2>,
@@ -89,8 +92,10 @@ class Blake3VMFlavor {
                               q_out_1,
                               q_out_2,
                               q_out_3,
-                              q_mperm, // pos-7 G rows of rounds 0..5 (message permutation applies)
-                              q_table, // 1 on the 2^16 XOR-table rows
+                              q_mperm,   // pos-7 G rows of rounds 0..5 (message permutation applies)
+                              q_round0,  // round-0 G rows, whose message pair is a claim
+                              row_index, // 0, 1, 2, ... — the dense link section's index
+                              q_table,   // 1 on the 2^16 XOR-table rows
                               table_x,
                               table_y,
                               table_z)
@@ -139,7 +144,8 @@ class Blake3VMFlavor {
                               out_4,
                               out_5,
                               out_6,
-                              out_7)
+                              out_7,
+                              claim_index)
     };
 
     /** @brief Per-row working columns of the G rows and output rows. */
@@ -219,6 +225,11 @@ class Blake3VMFlavor {
                               blk_len,
                               blk_flags,
                               chain,
+                              is_final,    // this compression ends its call, so its digest is claimed
+                              claim_value, // the claim this row contributes, scattered through the trace
+                              q_claim,     // 1 on rows that contribute a claim
+                              link_value,  // the same claims, gathered densely at rows 0..N-1
+                              q_link,      // 1 on rows [0, N)
                               counts_0,
                               counts_1,
                               counts_2,
@@ -230,7 +241,7 @@ class Blake3VMFlavor {
     /** @brief Logup inverse columns, committed after the beta/gamma challenges. */
     template <typename DataType> class DerivedWitnessEntities {
       public:
-        DEFINE_FLAVOR_MEMBERS(DataType, inv_0, inv_1, inv_2, inv_3, inv_4, inv_5)
+        DEFINE_FLAVOR_MEMBERS(DataType, inv_0, inv_1, inv_2, inv_3, inv_4, inv_5, inv_link)
     };
 
     template <typename DataType>
@@ -299,7 +310,8 @@ class Blake3VMFlavor {
                               out_4_shift,
                               out_5_shift,
                               out_6_shift,
-                              out_7_shift)
+                              out_7_shift,
+                              claim_index_shift)
     };
 
     template <typename DataType>
@@ -380,6 +392,9 @@ class Blake3VMFlavor {
             for (auto& poly : get_to_be_shifted()) {
                 poly = Polynomial::shiftable(active_rows, dyadic_size);
             }
+            // The running claim count is defined on every row, not just the active ones, so that its
+            // increment relation holds past the end of the trace.
+            this->claim_index = Polynomial::shiftable(dyadic_size, dyadic_size);
             for (auto& poly : WireNonShiftedEntities<Polynomial>::get_all()) {
                 poly = Polynomial(active_rows, dyadic_size);
             }
@@ -408,10 +423,23 @@ class Blake3VMFlavor {
             for (auto& poly : RefArray{ this->q_table, this->table_x, this->table_y, this->table_z }) {
                 poly = Polynomial(L::TABLE_ROWS, dyadic_size);
             }
+            this->row_index = Polynomial(dyadic_size);
+            this->q_round0 = Polynomial(active_rows, dyadic_size);
+            const size_t num_claims = builder.claims.size();
+            this->link_value = Polynomial(num_claims, dyadic_size);
+            this->q_link = Polynomial(num_claims, dyadic_size);
             this->lagrange_first = Polynomial(1, dyadic_size);
             this->lagrange_first.at(0) = 1;
             this->lagrange_last = Polynomial(1, dyadic_size, dyadic_size - 1);
             this->lagrange_last.at(dyadic_size - 1) = 1;
+
+            for (size_t i = 0; i < dyadic_size; ++i) {
+                this->row_index.at(i) = i;
+            }
+            for (size_t i = 0; i < num_claims; ++i) {
+                this->link_value.at(i) = builder.claims[i];
+                this->q_link.at(i) = 1;
+            }
 
             // XOR table and read counts.
             for (size_t i = 0; i < L::TABLE_ROWS; ++i) {
@@ -450,6 +478,9 @@ class Blake3VMFlavor {
                 }
                 for (size_t t = 0; t + 1 < L::NUM_OUT_ROWS; ++t) {
                     q_out[t].at(L::row_of_out(c, t)) = 1;
+                }
+                for (size_t p = 0; p < L::NUM_G_PER_ROUND; ++p) {
+                    this->q_round0.at(L::row_of_g(c, 0, p)) = 1;
                 }
                 // q_out_3 rows were set above as boundary rows (row_of_out(c, 3) == boundary_row_of(c + 1)).
             }
@@ -547,6 +578,41 @@ class Blake3VMFlavor {
                     set_bytes({ this->z2_b_0, this->z2_b_1, this->z2_b_2, this->z2_b_3 },
                               row,
                               bytes_of(blockdata.out[2 * t + 1]));
+                }
+            }
+
+            // Claims, in trace order: each compression's eight message chunks, then the four digest
+            // chunks of the compressions that end a call.
+            {
+                size_t claim_index = 0;
+                for (size_t c = 0; c < num_compressions; ++c) {
+                    for (size_t p = 0; p < L::NUM_G_PER_ROUND; ++p) {
+                        const size_t row = L::row_of_g(c, 0, p);
+                        const auto& g = builder.g_rows[c * L::NUM_G_ROWS + p];
+                        this->q_claim.at(row) = 1;
+                        this->claim_value.at(row) =
+                            fr(static_cast<uint64_t>(g.m[2 * p]) + (static_cast<uint64_t>(g.m[2 * p + 1]) << 32));
+                        this->claim_index.at(row) = claim_index++;
+                    }
+                    const bool final_compression = builder.is_final[c];
+                    for (size_t t = 0; t < L::NUM_OUT_ROWS; ++t) {
+                        const size_t row = L::row_of_out(c, t);
+                        this->is_final.at(row) = final_compression ? 1 : 0;
+                        if (final_compression) {
+                            const auto& block = builder.out_blocks[c];
+                            this->q_claim.at(row) = 1;
+                            this->claim_value.at(row) = fr(static_cast<uint64_t>(block.out[2 * t]) +
+                                                           (static_cast<uint64_t>(block.out[2 * t + 1]) << 32));
+                            this->claim_index.at(row) = claim_index++;
+                        }
+                    }
+                }
+                BB_ASSERT_EQ(claim_index, num_claims, "the trace's claims must match the builder's claim vector");
+                // claim_index holds the running count on every row, not just claiming ones.
+                size_t running = 0;
+                for (size_t row = 1; row < dyadic_size; ++row) {
+                    running += (this->q_claim.get(row - 1) == fr(1)) ? 1 : 0;
+                    this->claim_index.at(row) = running;
                 }
             }
 

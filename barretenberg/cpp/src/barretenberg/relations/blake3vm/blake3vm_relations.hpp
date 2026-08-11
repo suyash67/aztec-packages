@@ -234,7 +234,8 @@ template <typename FF_> class Blake3VMWiringRelationImpl {
                                             View(in.m_4_shift),  View(in.m_5_shift),  View(in.m_6_shift),  View(in.m_7_shift),
                                             View(in.m_8_shift),  View(in.m_9_shift),  View(in.m_10_shift), View(in.m_11_shift),
                                             View(in.m_12_shift), View(in.m_13_shift), View(in.m_14_shift), View(in.m_15_shift) };
-        const std::array<View, 8> out{ View(in.out_0), View(in.out_1), View(in.out_2), View(in.out_3), View(in.out_4), View(in.out_5), View(in.out_6), View(in.out_7) };
+        const std::array<View, 8> out{ View(in.out_0), View(in.out_1), View(in.out_2), View(in.out_3),
+                                       View(in.out_4), View(in.out_5), View(in.out_6), View(in.out_7) };
         const std::array<View, 8> out_shift{ View(in.out_0_shift), View(in.out_1_shift), View(in.out_2_shift), View(in.out_3_shift),
                                              View(in.out_4_shift), View(in.out_5_shift), View(in.out_6_shift), View(in.out_7_shift) };
 
@@ -327,7 +328,7 @@ template <typename FF_> class Blake3VMZeroRowRelationImpl {
   public:
     using FF = FF_;
 
-    static constexpr size_t NUM_SUBRELATIONS = 40;
+    static constexpr size_t NUM_SUBRELATIONS = 41;
     static constexpr std::array<size_t, NUM_SUBRELATIONS> SUBRELATION_PARTIAL_LENGTHS = [] {
         std::array<size_t, NUM_SUBRELATIONS> lengths{};
         lengths.fill(3);
@@ -344,13 +345,14 @@ template <typename FF_> class Blake3VMZeroRowRelationImpl {
         using View = typename Accumulator::View;
 
         const Accumulator lagrange_first(View(in.lagrange_first));
-        const std::array<View, 40> to_be_shifted{ View(in.v_0),   View(in.v_1),   View(in.v_2),   View(in.v_3),   View(in.v_4),   View(in.v_5),   View(in.v_6),
+        const std::array<View, 41> to_be_shifted{ View(in.v_0),   View(in.v_1),   View(in.v_2),   View(in.v_3),   View(in.v_4),   View(in.v_5),   View(in.v_6),
                                                   View(in.v_7),   View(in.v_8),   View(in.v_9),   View(in.v_10),  View(in.v_11),  View(in.v_12),  View(in.v_13),
                                                   View(in.v_14),  View(in.v_15),  View(in.m_0),   View(in.m_1),   View(in.m_2),   View(in.m_3),   View(in.m_4),
                                                   View(in.m_5),   View(in.m_6),   View(in.m_7),   View(in.m_8),   View(in.m_9),   View(in.m_10),  View(in.m_11),
                                                   View(in.m_12),  View(in.m_13),  View(in.m_14),  View(in.m_15),  View(in.out_0), View(in.out_1), View(in.out_2),
-                                                  View(in.out_3), View(in.out_4), View(in.out_5), View(in.out_6), View(in.out_7) };
-        bb::constexpr_for<0, 40, 1>(
+                                                  View(in.out_3), View(in.out_4), View(in.out_5), View(in.out_6), View(in.out_7),
+                                                  View(in.claim_index) };
+        bb::constexpr_for<0, 41, 1>(
             [&]<size_t J>() { std::get<J>(evals) += lagrange_first * Accumulator(to_be_shifted[J]) * scaling_factor; });
     }
 };

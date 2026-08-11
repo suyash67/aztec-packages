@@ -48,6 +48,8 @@ class Blake3VMTests : public ::testing::Test {
             compute_logderivative_inverse<FF, Blake3VMLookupRelation<FF, SET>, Flavor::ProverPolynomials, false>(
                 polynomials, params, 0);
         });
+        compute_logderivative_inverse<FF, Blake3VMLinkRelation<FF>, Flavor::ProverPolynomials, false>(
+            polynomials, params, 0);
     }
 };
 
@@ -82,12 +84,82 @@ TEST_F(Blake3VMTests, RelationCorrectness)
     expect_no_failures(Base::check<Blake3VMGRelation<FF>>(polynomials, params, "G"), "G");
     expect_no_failures(Base::check<Blake3VMWiringRelation<FF>>(polynomials, params, "Wiring"), "Wiring");
     expect_no_failures(Base::check<Blake3VMZeroRowRelation<FF>>(polynomials, params, "ZeroRow"), "ZeroRow");
+    expect_no_failures(Base::check<Blake3VMClaimRelation<FF>>(polynomials, params, "Claim"), "Claim");
+    expect_no_failures(Base::check<Blake3VMLinkRelation<FF>, /*has_linearly_dependent=*/true>(polynomials, params, "Link"),
+                       "Link");
     bb::constexpr_for<0, Blake3VMTraceLayout::NUM_LOOKUP_SETS, 1>([&]<size_t SET>() {
         const std::string label = "Lookup" + std::to_string(SET);
         expect_no_failures(
             Base::check<Blake3VMLookupRelation<FF, SET>, /*has_linearly_dependent=*/true>(polynomials, params, label),
             label);
     });
+}
+
+// The claim vector is the VM's half of the linking argument: a consuming circuit binds to the VM by
+// carrying this exact sequence in a committed column of its own proof. It must therefore be the
+// hashed data itself - each call's message blocks in byte order, then its digest.
+TEST_F(Blake3VMTests, ClaimVectorIsTheHashedData)
+{
+    Blake3VMCircuitBuilder builder;
+    const std::vector<size_t> sizes = { 64, 32, 65, 130 };
+    std::vector<std::vector<uint8_t>> messages;
+    std::vector<std::array<uint8_t, 32>> digests;
+    for (const size_t size : sizes) {
+        std::vector<uint8_t> message(size);
+        for (size_t j = 0; j < size; ++j) {
+            message[j] = static_cast<uint8_t>(size * 17 + j * 3);
+        }
+        digests.push_back(builder.add_hash(message));
+        messages.push_back(std::move(message));
+    }
+
+    // Rebuild the byte stream the claims encode and compare it with what was hashed.
+    size_t entry = 0;
+    for (size_t call = 0; call < messages.size(); ++call) {
+        const size_t num_blocks = std::max<size_t>(1, (messages[call].size() + 63) / 64);
+        std::vector<uint8_t> claimed;
+        for (size_t b = 0; b < num_blocks; ++b) {
+            for (size_t chunk = 0; chunk < 8; ++chunk) {
+                const uint64_t packed = uint256_t(builder.claims.at(entry++)).data[0];
+                for (size_t byte = 0; byte < 8; ++byte) {
+                    claimed.push_back(static_cast<uint8_t>(packed >> (8 * byte)));
+                }
+            }
+        }
+        std::vector<uint8_t> padded = messages[call];
+        padded.resize(num_blocks * 64, 0); // the final block is zero-padded before compression
+        EXPECT_EQ(claimed, padded) << "call " << call << " claims different message bytes than it hashed";
+
+        std::vector<uint8_t> claimed_digest;
+        for (size_t chunk = 0; chunk < 4; ++chunk) {
+            const uint64_t packed = uint256_t(builder.claims.at(entry++)).data[0];
+            for (size_t byte = 0; byte < 8; ++byte) {
+                claimed_digest.push_back(static_cast<uint8_t>(packed >> (8 * byte)));
+            }
+        }
+        EXPECT_EQ(claimed_digest, std::vector<uint8_t>(digests[call].begin(), digests[call].end()))
+            << "call " << call << " claims a different digest than it produced";
+    }
+    EXPECT_EQ(entry, builder.claims.size());
+
+    // And the trace's dense link column is that vector, which is what gets committed.
+    Flavor::ProverPolynomials polynomials(builder);
+    for (size_t i = 0; i < builder.claims.size(); ++i) {
+        ASSERT_EQ(polynomials.link_value.get(i), builder.claims[i]) << "link column diverges at " << i;
+    }
+    EXPECT_EQ(polynomials.link_value.get(builder.claims.size()), FF(0)) << "the link column must end with the claims";
+}
+
+// A link column that does not carry the trace's claims must not prove.
+TEST_F(Blake3VMTests, TamperedLinkColumnFails)
+{
+    Blake3VMCircuitBuilder builder = typical_builder();
+    Blake3VMProver prover(builder);
+    prover.key->polynomials.link_value.at(7) += 1;
+    const HonkProof proof = prover.construct_proof();
+
+    Blake3VMVerifier verifier(prover.verification_key);
+    EXPECT_FALSE(verifier.verify_proof(proof));
 }
 
 TEST_F(Blake3VMTests, ProveAndVerify)

@@ -51,6 +51,8 @@ HonkProof Blake3VMProver::construct_proof()
         compute_logderivative_inverse<FF, Blake3VMLookupRelation<FF, SET>, Flavor::ProverPolynomials, true>(
             polynomials, relation_parameters, 0);
     });
+    compute_logderivative_inverse<FF, Blake3VMLinkRelation<FF>, Flavor::ProverPolynomials, true>(
+        polynomials, relation_parameters, 0);
     {
         auto batch = key->commitment_key.start_batch();
         for (auto [inverse, label] :
