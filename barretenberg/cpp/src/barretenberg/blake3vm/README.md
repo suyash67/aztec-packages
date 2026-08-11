@@ -19,8 +19,8 @@ compression function removes that cost from the recursion: the intended flow is
 4. many such proofs are aggregated into one.
 
 This module implements the standalone machine (step 3's hash side): trace builder, flavor,
-relations, prover, and verifier. The linking argument that connects a consuming circuit's hash
-claims to the VM trace is future work (see Roadmap).
+relations, prover, and verifier, together with the VM's half of the linking argument that binds a
+consuming circuit's hash claims to the trace.
 
 Measured on an M4 Pro (native arm64 build with `DISABLE_ASM=1`): 1,000 64-byte compressions fill a
 2^16-row trace and prove in **1.14 s**, verify natively in **6 ms**, with a **29,184-byte** proof
@@ -69,9 +69,9 @@ delegated path, so the VM prover, not the recursion circuit, is what to optimise
 | field / PCS | proof system base | BN254, KZG, non-ZK sumcheck |
 | rows per compression | 56 G rows + 4 output rows | 60 (`Blake3VMTraceLayout`) |
 | XOR table | rows of (x, y, x ⊕ y), x, y ∈ [0, 256) | 2^16 (the minimum trace size) |
-| precomputed columns | selectors + table + Lagrange | 19 |
-| witness columns | 40 to-be-shifted + 79 working + 6 logup inverses | 125 |
-| entities in sumcheck | precomputed + witness + 40 shifts | 184 |
+| precomputed columns | selectors + table + Lagrange + link index | 21 |
+| witness columns | 41 to-be-shifted + 78 working + 7 logup inverses | 126 |
+| entities in sumcheck | precomputed + witness + 41 shifts | 188 |
 | lookup reads per G row | across six logup sets | 23 |
 | max relation length | the 4-read lookup subrelations | 8 (batched: 9) |
 
@@ -112,7 +112,8 @@ result bounded by its byte decomposition. Message words are byte-decomposed and 
 every use (`mx_b`/`my_b` with the `junk_*` XOR outputs discarded).
 
 The relation inventory lives in `relations/blake3vm/blake3vm_relations.hpp` (G algebra, wiring,
-zero row) and `relations/blake3vm/blake3vm_lookup_relation.hpp` (the six logup sets); each file's
+zero row), `relations/blake3vm/blake3vm_lookup_relation.hpp` (the six logup sets), and
+`relations/blake3vm/blake3vm_link_relation.hpp` (the claim exposure and its gather); each file's
 header comment is the constraint-level reference.
 
 ## Transcript schedule
@@ -122,7 +123,7 @@ header comment is the constraint-level reference.
 | VK binding (hash buffer) | `vk_circuit_size`, `vk_<precomputed entity name>` |
 | 119 wire commitments | the witness entity names (`v_0` … `counts_5`) |
 | logup challenges | `beta`, `gamma` (β² is derived, not drawn) |
-| 6 inverse commitments | `inv_0` … `inv_5` |
+| 7 inverse commitments | `inv_0` … `inv_5`, `inv_link` |
 | sumcheck | `Sumcheck:alpha`, `Sumcheck:gate_challenge`, then the standard non-ZK rounds |
 | opening | Shplemini + KZG standard labels |
 

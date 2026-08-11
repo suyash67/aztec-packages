@@ -59,6 +59,7 @@ class HashOracle {
     void reset(Builder& builder)
     {
         calls_.clear();
+        replay_.clear();
         output_indices_.clear();
         node_input_indices_.clear();
         received_digest_indices_.clear();
