@@ -27,6 +27,41 @@ Measured on an M4 Pro (native arm64 build with `DISABLE_ASM=1`): 1,000 64-byte c
 (`Blake3VMTests.DISABLED_LargeBatchProveAndVerify`). The same hashing in UltraHonk is a ~2^22
 circuit.
 
+## The pipeline, measured
+
+`whir_settlement.test.cpp` runs every stage of that flow on one statement and prices the recursion
+step both ways. Nothing in it is modelled: the client proof is produced and verified, both
+recursion circuits are built, the VM proves the hash workload the delegated circuit consumed, and
+the settled proofs are produced and verified. It takes about 20 s and peaks near 6 GB, almost all
+of it the in-circuit-Blake3s baseline.
+
+| Stage | Measurement |
+|---|---|
+| client proves (2^13 statement, zk WHIR) | 4.8 s, 189,440-byte proof |
+| sequencer verifies natively → soft confirmation | 10 ms |
+| recursion, Blake3s in circuit | **5,604,393 gates** (5,288,073 = 94% Merkle hashing) |
+| recursion, hashing delegated | **49,553 gates** — 113x smaller |
+| ↳ of which the link fingerprint | 10,590 gates binding 10,590 field elements |
+| Blake3VM over the same workload | 1,541 calls / 3,880 compressions, 2^18 trace, 6.4 s prove, 10 ms verify, 30,080-byte proof |
+| settle the delegated circuit | 2^16 outer, 244 ms prove, 5 ms verify, 13,664-byte proof |
+| aggregate 2 client proofs | 2^17 outer, 48,027 gates per client proof |
+
+The delegated circuit is measured with `DelegatingBlake3sHasher`, which keeps the verifier's
+interface and its digests but takes each digest from an oracle and binds the call's inputs and
+output into a Horner fingerprint. Two effects compound: the compressions leave the circuit, and a
+digest becomes the two field elements it travels the transcript as instead of 32 bytes, which
+drops the Merkle path's conditional swap from thirty-two selects per level to two.
+
+**That circuit is not sound on its own.** Nothing yet forces the oracle's digests to be the hashes
+the VM proved; the fingerprint is the hook a linking argument would use, and it is what the 10,590
+gates buy. The baseline is not proved in the test either — 5.6M gates is a 2^23 outer circuit,
+against 2^16 for the delegated one.
+
+Two limits the run makes concrete. The client proof is zk, but the recursion stage re-proves the
+same statement without it, because the in-circuit verifier rejects salted leaves
+(`whir_recursive_verifier.hpp` asserts `!config.zk`). And the VM's 6.4 s dominates the sequencer's
+delegated path, so the VM prover, not the recursion circuit, is what to optimise next.
+
 ## Parameters
 
 | Symbol | Meaning | Value |
@@ -112,7 +147,15 @@ header comment is the constraint-level reference.
 - **Linking argument**: expose the per-compression IO (message words at the first G row;
   `blk_len`/`blk_flags`/`chain` on the preceding boundary row; output words on the output rows) to
   a consuming circuit via a databus-style log-derivative argument over a shared transcript, so a
-  Noir/UltraHonk recursive WHIR verifier can consume hash results without hashing.
+  Noir/UltraHonk recursive WHIR verifier can consume hash results without hashing. The VM side is
+  the missing half: it must recompute the fingerprint `whir_settlement.test.cpp` builds, over the
+  32-byte message the circuit absorbs rather than the 64-byte blocks the trace holds.
+- **Cheaper binding**: the fingerprint costs one gate per field element, and the leaf values it
+  absorbs are already transcript data the circuit holds. Binding a leaf by a value the verifier
+  computes anyway would remove most of the 10,590 gates.
+- **zk on the recursion path**: salted leaves are one extra absorbed element per leaf, which the
+  delegated hasher would carry for free; the blinding and the extra variable in the WHIR config are
+  the real work.
 - **Recursive Blake3VM verifier**: sumcheck over 184 entities plus a ~131-term Shplemini MSM,
   independent of the batch size; needed for step 4 of the flow.
 - **ZK**: the machine is sequencer-side, so the non-ZK sumcheck suffices for now; Libra masking can
