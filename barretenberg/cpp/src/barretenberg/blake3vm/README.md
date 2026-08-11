@@ -142,6 +142,57 @@ header comment is the constraint-level reference.
 - The VK is per-circuit-size: the precomputed selectors depend only on the trace length. A
   deployment would pin a fixed size the way the ECCVM does.
 
+## The linking argument
+
+`whir_settlement.test.cpp` demonstrates what is missing: tampering with a Merkle sibling in the
+query openings makes the inner proof fail native verification, while the delegated circuit stays
+satisfiable when the oracle replays the honest digests. In-circuit hashing was the only thing
+constraining that sibling.
+
+The link must establish that the sequence of `(input, digest)` pairs the circuit consumed is the
+sequence the VM proved. Three of the four ways to do that are unsound or unaffordable, and ruling
+them out pins the design.
+
+**A fingerprint under a challenge fixed before the circuit is built is forgeable.** With claims
+`c_i` and a Horner fingerprint `F = Σ cᵢ γⁱ`, a prover that learns `γ` before choosing the `c_i`
+solves one linear equation in one free claim. Every digest the oracle answers is such a free claim:
+the prover picks fake digests to satisfy the Merkle root checks, then tunes one of them to land `F`
+on the target. This holds however `γ` is derived — from the inner proof, from the VM's
+commitments, or from a hash of both — as long as the circuit's own claims are not committed first.
+
+**Deriving the challenge in-circuit costs more than it saves.** `γ = Poseidon2(claims)` is
+unforgeable because `γ` depends on the claims, but it is 3,530 permutations for 10,590 elements,
+about 265,000 gates, and the VM cannot recompute a Poseidon2 hash to match it.
+
+**Publishing the claims defeats the purpose.** 10,590 field elements is a 338 KB settled proof, and
+an aggregator would have to absorb every one of them.
+
+What remains is the standard construction, and it is the one Goblin already uses to bind an Ultra
+circuit to the ECCVM: **the claims live in a committed column of each proof, and the two are
+compared**. Since both proofs are KZG over BN254 against the same SRS, and a commitment is
+`Σ vᵢ·Gᵢ`, two columns carrying the same values at the same indices have the *same group element*.
+The check is `C_circuit == C_vm` — no shared challenge, no in-circuit hashing, and binding follows
+from KZG binding alone.
+
+Three pieces build it:
+
+1. **A 32-byte domain tag.** The hasher separates leaves and nodes with a single tag byte, so every
+   field element in a hash input straddles the VM's 32-bit message words at a one-byte offset, and
+   a leaf's chunks straddle compression boundaries. Widening the tag to one field element makes
+   every hash input a whole number of aligned field elements. It is close to free natively: a node
+   goes from 65 to 96 bytes, which is two Blake3 blocks either way.
+2. **A `link` column in the VM**, holding the claim field elements, reconstructed row-locally from
+   the `mx_b`/`my_b` byte columns the G rows already carry (four round-0 rows per field element)
+   and from `out_*` on the output rows.
+3. **The same column in the recursion proof.** `MegaCircuitBuilder`'s databus gives a committed
+   column whose entries are circuit witnesses; the recursion circuit appends each claim to it.
+   Indexing the column by VM row keeps the VM side row-local at the cost of one bus entry per VM
+   row (~233,000 gates, since each entry emits a read gate). Indexing it densely costs ~10,600
+   instead, and needs a permutation inside the VM to gather the claims out of trace order.
+
+Either layout leaves the recursion circuit far below the 5,604,393 gates of in-circuit hashing:
+about 272,000 sparse, about 50,000 dense.
+
 ## Roadmap
 
 - **Linking argument**: expose the per-compression IO (message words at the first G row;
