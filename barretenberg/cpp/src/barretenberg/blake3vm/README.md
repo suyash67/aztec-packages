@@ -174,24 +174,34 @@ compared**. Since both proofs are KZG over BN254 against the same SRS, and a com
 The check is `C_circuit == C_vm` — no shared challenge, no in-circuit hashing, and binding follows
 from KZG binding alone.
 
-Three pieces build it:
+The VM's half is built: `claims` carries the sequence, `Blake3VMClaimRelation` pins each row's
+contribution to the trace data that row already holds, and `Blake3VMLinkRelation` gathers them into
+the dense `link_value` column. `Blake3VMTests.ClaimVectorIsTheHashedData` rebuilds the hashed byte
+stream from the claims, and `TamperedLinkColumnFails` shows a link column that does not carry the
+trace's claims cannot prove.
 
-1. **A 32-byte domain tag.** The hasher separates leaves and nodes with a single tag byte, so every
-   field element in a hash input straddles the VM's 32-bit message words at a one-byte offset, and
-   a leaf's chunks straddle compression boundaries. Widening the tag to one field element makes
-   every hash input a whole number of aligned field elements. It is close to free natively: a node
-   goes from 65 to 96 bytes, which is two Blake3 blocks either way.
-2. **A `link` column in the VM**, holding the claim field elements, reconstructed row-locally from
-   the `mx_b`/`my_b` byte columns the G rows already carry (four round-0 rows per field element)
-   and from `out_*` on the output rows.
-3. **The same column in the recursion proof.** `MegaCircuitBuilder`'s databus gives a committed
-   column whose entries are circuit witnesses; the recursion circuit appends each claim to it.
-   Indexing the column by VM row keeps the VM side row-local at the cost of one bus entry per VM
-   row (~233,000 gates, since each entry emits a read gate). Indexing it densely costs ~10,600
-   instead, and needs a permutation inside the VM to gather the claims out of trace order.
+The claim encoding is the hashed bytes themselves, eight at a time: entry `j` is
+`w_lo + 2³²·w_hi` for the word pair the trace exposes on one row. Chunking at eight bytes rather
+than at field elements is what keeps the VM side row-local, since the one-byte domain tag offsets
+every field element against the VM's 32-bit words.
 
-Either layout leaves the recursion circuit far below the 5,604,393 gates of in-circuit hashing:
-about 272,000 sparse, about 50,000 dense.
+What remains is the consuming circuit's half:
+
+- **Emit the same vector.** The delegating hasher builds each call's byte buffer already, so it can
+  witness the eight-byte chunks directly. It must then prove they recombine to the field elements
+  it holds — the buffer is a run of pieces of mixed width (a 1-byte tag, 16-byte digest halves,
+  32-byte leaf values), each offset one byte by the tag, so each piece boundary needs a
+  `(1 byte, 7 bytes)` split with the byte range-constrained. About 2-3 gates per piece.
+- **Commit it.** `MegaCircuitBuilder`'s databus gives a committed column of circuit witnesses. Its
+  polynomial starts at `NUM_DISABLED_ROWS_IN_SUMCHECK` rather than 0 — an offset bb maintains for
+  cross-flavor commitment compatibility, which is the same property this link relies on — so the
+  VM's link section must start there too.
+- **Compare.** `C_calldata == C_link` as group elements, checked by whoever verifies both proofs.
+  `DelegatedCircuitIsForgeableWithoutTheLink` then becomes the green test: the tampered sibling
+  changes the circuit's claims, so the two commitments diverge.
+
+Costed at ~42,500 chunks and ~15,000 pieces, the circuit's half is roughly 87,000 gates, putting
+the linked recursion circuit near 140,000 — against 5,604,393 with the hashing in circuit.
 
 ## Roadmap
 
