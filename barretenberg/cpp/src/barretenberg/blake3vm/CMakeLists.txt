@@ -1,0 +1,1 @@
+barretenberg_module(blake3vm sumcheck commitment_schemes crypto_blake3s honk)
