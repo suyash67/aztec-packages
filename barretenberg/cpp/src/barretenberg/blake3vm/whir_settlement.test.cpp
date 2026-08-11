@@ -1,9 +1,12 @@
+#include <algorithm>
 #include <chrono>
+#include <set>
 #include <gtest/gtest.h>
 #include <iomanip>
 #include <sstream>
 
 #include "barretenberg/blake3vm/blake3vm_circuit_builder.hpp"
+#include "barretenberg/circuit_checker/circuit_checker.hpp"
 #include "barretenberg/blake3vm/blake3vm_prover.hpp"
 #include "barretenberg/blake3vm/blake3vm_verifier.hpp"
 #include "barretenberg/commitment_schemes/whir/stdlib/transparent_honk_recursive_verifier.hpp"
@@ -56,6 +59,9 @@ class HashOracle {
     void reset(Builder& builder)
     {
         calls_.clear();
+        output_indices_.clear();
+        node_input_indices_.clear();
+        received_digest_indices_.clear();
         gamma_ = FF::from_witness(&builder, fr::random_element());
         accumulator_ = FF::from_witness(&builder, fr(0));
         // Both stand in for values a real link would draw from the transcript, so neither may enter
@@ -68,14 +74,24 @@ class HashOracle {
         builder_ = &builder;
     }
 
-    /** @brief Run one Blake3s call, record it for the VM, and return its digest. */
+    /**
+     * @brief Answer one Blake3s call, recording the input the circuit actually supplied.
+     * @details With `replay` set the answer is the given digest rather than the hash of that input,
+     * which is precisely the freedom an unlinked oracle leaves a prover.
+     */
     std::array<uint8_t, 32> hash(std::span<const uint8_t> input)
     {
         std::array<uint8_t, 32> digest{};
-        blake3::blake3s(input, digest);
+        if (replay_.empty()) {
+            blake3::blake3s(input, digest);
+        } else {
+            digest = replay_.at(calls_.size()).digest;
+        }
         calls_.push_back({ std::vector<uint8_t>(input.begin(), input.end()), digest });
         return digest;
     }
+
+    void set_replay(std::vector<Call> answers) { replay_ = std::move(answers); }
 
     /**
      * @brief Fold one field element into the fingerprint.
@@ -93,6 +109,28 @@ class HashOracle {
         ++absorbed_;
     }
 
+    void record_output(uint32_t index) { output_indices_.insert(index); }
+    void record_node_input(uint32_t index) { node_input_indices_.push_back(index); }
+    /** @brief A digest the circuit read off the proof stream rather than got from the oracle. */
+    void record_received_digest(uint32_t index) { received_digest_indices_.push_back(index); }
+    const std::vector<uint32_t>& received_digests() const { return received_digest_indices_; }
+
+    /**
+     * @brief Witnesses the delegated circuit reads from the proof and feeds only to the oracle.
+     * @details Merkle siblings: in-circuit hashing was the only thing that constrained them, so with
+     * the hashing delegated and unlinked nothing in the circuit pins their values.
+     */
+    std::vector<uint32_t> unconstrained_siblings() const
+    {
+        std::vector<uint32_t> siblings;
+        for (const uint32_t index : node_input_indices_) {
+            if (!output_indices_.contains(index)) {
+                siblings.push_back(index);
+            }
+        }
+        return siblings;
+    }
+
     const std::vector<Call>& calls() const { return calls_; }
     size_t link_gates() const { return link_gates_; }
     size_t absorbed() const { return absorbed_; }
@@ -100,10 +138,14 @@ class HashOracle {
 
   private:
     std::vector<Call> calls_;
+    std::vector<Call> replay_;
     FF gamma_;
     FF accumulator_;
     size_t link_gates_ = 0;
     size_t absorbed_ = 0;
+    std::set<uint32_t> output_indices_;
+    std::vector<uint32_t> node_input_indices_;
+    std::vector<uint32_t> received_digest_indices_;
     Builder* builder_ = nullptr;
 };
 
@@ -182,6 +224,11 @@ template <typename Builder_> class DelegatingBlake3sHasher {
         std::memcpy(input.data() + 1, left_bytes.data(), 32);
         std::memcpy(input.data() + 33, right_bytes.data(), 32);
 
+        for (const FF& element : { left[0], left[1], right[0], right[1] }) {
+            if (!element.is_constant()) {
+                oracle().record_node_input(element.get_witness_index());
+            }
+        }
         const std::array<uint8_t, 32> digest = oracle().hash(input);
         const OriginTag tag(digest_tag(left), digest_tag(right));
         const Digest result = witness_digest(builder, digest, tag);
@@ -192,7 +239,15 @@ template <typename Builder_> class DelegatingBlake3sHasher {
         return result;
     }
 
-    static Digest from_fields(Builder_&, std::span<const FF> fields) { return { fields[0], fields[1] }; }
+    static Digest from_fields(Builder_&, std::span<const FF> fields)
+    {
+        for (size_t half = 0; half < DIGEST_NUM_FIELDS; ++half) {
+            if (!fields[half].is_constant()) {
+                oracle().record_received_digest(fields[half].get_witness_index());
+            }
+        }
+        return { fields[0], fields[1] };
+    }
     static std::vector<FF> to_fields(const Digest& digest) { return { digest[0], digest[1] }; }
 
     static Digest conditional_assign(const Bool& predicate, const Digest& lhs, const Digest& rhs)
@@ -214,6 +269,8 @@ template <typename Builder_> class DelegatingBlake3sHasher {
         Digest result{ FF::from_witness(&builder, fields[0]), FF::from_witness(&builder, fields[1]) };
         result[0].set_origin_tag(tag);
         result[1].set_origin_tag(tag);
+        oracle().record_output(result[0].get_witness_index());
+        oracle().record_output(result[1].get_witness_index());
         return result;
     }
 
@@ -290,13 +347,18 @@ ClientProof prove_on_client(size_t num_gates, bool zk)
     return { config, std::move(pk), std::move(proof), log_n, elapsed_ms(start) };
 }
 
-/** @brief Convert a native proof into circuit witnesses. */
-StdlibTranscript<Builder>::Proof to_stdlib_proof(Builder& builder, const HonkProof& proof)
+/** @brief Convert a native proof into circuit witnesses, optionally reporting where each one landed. */
+StdlibTranscript<Builder>::Proof to_stdlib_proof(Builder& builder,
+                                                  const HonkProof& proof,
+                                                  std::vector<uint32_t>* witness_indices = nullptr)
 {
     StdlibTranscript<Builder>::Proof stdlib_proof;
     stdlib_proof.reserve(proof.size());
     for (const fr& element : proof) {
         stdlib_proof.push_back(FF::from_witness(&builder, element));
+        if (witness_indices != nullptr) {
+            witness_indices->push_back(stdlib_proof.back().get_witness_index());
+        }
     }
     return stdlib_proof;
 }
@@ -331,6 +393,76 @@ class WhirSettlementTests : public ::testing::Test {
   public:
     static void SetUpTestSuite() { bb::srs::init_file_crs_factory(bb::srs::bb_crs_path()); }
 };
+
+/**
+ * @brief Without a link, the delegated circuit proves nothing about the hashes it consumed.
+ * @details The recursion circuit reads Merkle siblings from the proof stream and feeds them to the
+ * hash oracle. In-circuit hashing was the only thing that constrained them, so once it is delegated
+ * and nothing binds the oracle to the VM, a sibling can be changed to anything and the circuit
+ * stays satisfiable — a proof of a statement the native verifier rejects. This is what the linking
+ * argument has to close.
+ */
+TEST_F(WhirSettlementTests, DelegatedCircuitIsForgeableWithoutTheLink)
+{
+    const ClientProof client = prove_on_client(/*num_gates=*/100, /*zk=*/false);
+    ASSERT_TRUE(InnerHonk::verify(client.pk.vk, client.config, client.proof));
+
+    // An honest build, to learn the digests and to find a sibling the circuit only ever hashes.
+    std::vector<uint32_t> proof_witnesses;
+    std::vector<size_t> candidates;
+    std::vector<HashOracle::Call> honest_calls;
+    {
+        Builder honest;
+        oracle().reset(honest);
+        const auto stdlib_proof = to_stdlib_proof(honest, client.proof, &proof_witnesses);
+        std::ignore = DelegatedVerifier::verify(honest, client.pk.vk, client.config, stdlib_proof);
+        ASSERT_TRUE(CircuitChecker::check(honest)) << "the honest delegated circuit must be satisfiable";
+        honest_calls = oracle().calls();
+
+        // Merkle path siblings are read off the proof stream as digests. The query openings sit at
+        // the end of the proof and are read unhashed, so tampering there leaves every Fiat-Shamir
+        // challenge untouched; take the deepest candidates first.
+        for (const uint32_t index : oracle().received_digests()) {
+            const auto found = std::find(proof_witnesses.begin(), proof_witnesses.end(), index);
+            if (found != proof_witnesses.end()) {
+                candidates.push_back(size_t(std::distance(proof_witnesses.begin(), found)));
+            }
+        }
+        std::sort(candidates.begin(), candidates.end(), std::greater<>());
+        ASSERT_FALSE(candidates.empty()) << "expected digests reaching the oracle from the proof stream";
+    }
+
+    // Corrupting one makes the proof invalid: the sibling no longer hashes to the path. A prover
+    // free to choose the oracle's answers replies with the honest digests anyway.
+    bool forgery_accepted = false;
+    size_t forged_index = 0;
+    for (size_t attempt = 0; attempt < 8 && attempt < candidates.size(); ++attempt) {
+        forged_index = candidates[attempt];
+        HonkProof forged = client.proof;
+        forged[forged_index] += 1;
+        if (InnerHonk::verify(client.pk.vk, client.config, forged)) {
+            continue; // not actually load-bearing for the statement
+        }
+
+        Builder attack;
+        oracle().reset(attack);
+        oracle().set_replay(honest_calls);
+        const auto stdlib_proof = to_stdlib_proof(attack, forged);
+        std::ignore = DelegatedVerifier::verify(attack, client.pk.vk, client.config, stdlib_proof);
+        if (CircuitChecker::check(attack)) {
+            forgery_accepted = true;
+            break;
+        }
+    }
+
+    EXPECT_TRUE(forgery_accepted) << "the forgery this documents has been closed; make this the green test";
+    info("\n    Forgery: proof element ",
+         forged_index,
+         " is a Merkle sibling the circuit only hands to the hash oracle.\n"
+         "    Tampering with it makes native verification fail, yet the delegated circuit stays\n"
+         "    satisfiable when the oracle replays the honest digests. The delegated recursion proof\n"
+         "    therefore does not imply the inner proof verifies.\n");
+}
 
 /**
  * @brief The whole flow, with the recursion step's Merkle hashing priced both ways.
