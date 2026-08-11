@@ -85,8 +85,8 @@ TEST_F(Blake3VMTests, RelationCorrectness)
     expect_no_failures(Base::check<Blake3VMWiringRelation<FF>>(polynomials, params, "Wiring"), "Wiring");
     expect_no_failures(Base::check<Blake3VMZeroRowRelation<FF>>(polynomials, params, "ZeroRow"), "ZeroRow");
     expect_no_failures(Base::check<Blake3VMClaimRelation<FF>>(polynomials, params, "Claim"), "Claim");
-    expect_no_failures(Base::check<Blake3VMLinkRelation<FF>, /*has_linearly_dependent=*/true>(polynomials, params, "Link"),
-                       "Link");
+    expect_no_failures(
+        Base::check<Blake3VMLinkRelation<FF>, /*has_linearly_dependent=*/true>(polynomials, params, "Link"), "Link");
     bb::constexpr_for<0, Blake3VMTraceLayout::NUM_LOOKUP_SETS, 1>([&]<size_t SET>() {
         const std::string label = "Lookup" + std::to_string(SET);
         expect_no_failures(
@@ -142,12 +142,16 @@ TEST_F(Blake3VMTests, ClaimVectorIsTheHashedData)
     }
     EXPECT_EQ(entry, builder.claims.size());
 
-    // And the trace's dense link column is that vector, which is what gets committed.
+    // And the trace's dense link column is that vector, which is what gets committed. It starts at
+    // the databus offset so a consuming Mega circuit's calldata column aligns with it index for index.
     Flavor::ProverPolynomials polynomials(builder);
+    constexpr size_t offset = NUM_DISABLED_ROWS_IN_SUMCHECK;
+    EXPECT_EQ(polynomials.link_value.get(offset - 1), FF(0)) << "the link column must start at the databus offset";
     for (size_t i = 0; i < builder.claims.size(); ++i) {
-        ASSERT_EQ(polynomials.link_value.get(i), builder.claims[i]) << "link column diverges at " << i;
+        ASSERT_EQ(polynomials.link_value.get(offset + i), builder.claims[i]) << "link column diverges at " << i;
     }
-    EXPECT_EQ(polynomials.link_value.get(builder.claims.size()), FF(0)) << "the link column must end with the claims";
+    EXPECT_EQ(polynomials.link_value.get(offset + builder.claims.size()), FF(0))
+        << "the link column must end with the claims";
 }
 
 // A link column that does not carry the trace's claims must not prove.
@@ -155,7 +159,7 @@ TEST_F(Blake3VMTests, TamperedLinkColumnFails)
 {
     Blake3VMCircuitBuilder builder = typical_builder();
     Blake3VMProver prover(builder);
-    prover.key->polynomials.link_value.at(7) += 1;
+    prover.key->polynomials.link_value.at(NUM_DISABLED_ROWS_IN_SUMCHECK + 7) += 1;
     const HonkProof proof = prover.construct_proof();
 
     Blake3VMVerifier verifier(prover.verification_key);

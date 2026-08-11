@@ -10,15 +10,19 @@
  * its round-0 G rows and a digest's four chunks on the output rows of the call's final compression.
  *
  * `claim_value` is what a row contributes and is pinned row-locally by
- * `Blake3VMClaimRelation`; `link_value` is the dense copy. A log-derivative permutation over the
- * pairs (index, value) forces the two multisets to agree:
+ * `Blake3VMClaimRelation`; `link_value` is the dense copy, laid out so entry i sits at row
+ * NUM_DISABLED_ROWS_IN_SUMCHECK + i — the same offset bb's databus polynomials use, so the section
+ * aligns index for index with a consuming Mega circuit's calldata column. A log-derivative
+ * permutation over the pairs (index, value) forces the two multisets to agree:
  *
- *   Σ_{claim rows} 1/(claim_index + β·claim_value + γ) − Σ_{link rows} 1/(row_index + β·link_value + γ) = 0
+ *   Σ_{claim rows} 1/(claim_index + OFFSET + β·claim_value + γ)
+ *     − Σ_{link rows} 1/(row_index + β·link_value + γ) = 0
  *
  * Indices appear in both tuples, so a permutation of the *values* alone cannot satisfy it: entry i
- * on one side can only be matched by index i on the other.
+ * on one side can only be matched by index OFFSET + i on the other.
  */
 
+#include "barretenberg/constants.hpp"
 #include "barretenberg/honk/proof_system/logderivative_library.hpp"
 #include "barretenberg/relations/relation_types.hpp"
 
@@ -79,7 +83,11 @@ template <typename FF_> class Blake3VMLinkRelationImpl {
     {
         using View = typename Accumulator::View;
         static_assert(lookup_index == 0);
-        return Accumulator(View(in.claim_index)) + Accumulator(View(in.claim_value)) * params.beta + params.gamma;
+        // The dense link section starts at NUM_DISABLED_ROWS_IN_SUMCHECK — the offset bb's databus
+        // polynomials use — so that a consuming Mega circuit's calldata column carries the claims at
+        // the same indices and the two commitments can be compared directly.
+        return Accumulator(View(in.claim_index)) + FF(NUM_DISABLED_ROWS_IN_SUMCHECK) +
+               Accumulator(View(in.claim_value)) * params.beta + params.gamma;
     }
 
     template <typename Accumulator, size_t table_index, typename AllEntities, typename Parameters>

@@ -15,12 +15,14 @@ compression function removes that cost from the recursion: the intended flow is
 1. a client produces a WHIR-Honk proof (transparent, hash-based, Blake3s Merkle trees);
 2. a sequencer verifies it natively (milliseconds) for a soft confirmation;
 3. the sequencer proves the verification recursively, delegating every Blake3s compression to a
-   Blake3VM proof, so the UltraHonk circuit keeps only the (cheap) non-hash verifier logic;
+   Blake3VM proof, so the recursion circuit keeps only the (cheap) non-hash verifier logic plus
+   the committed chunk column that links it to the VM;
 4. many such proofs are aggregated into one.
 
 This module implements the standalone machine (step 3's hash side): trace builder, flavor,
-relations, prover, and verifier, together with the VM's half of the linking argument that binds a
-consuming circuit's hash claims to the trace.
+relations, prover, and verifier, together with the complete linking argument that binds a consuming
+circuit's hash claims to the trace — the VM's dense claim column, the consuming circuit's committed
+chunk column, and the commitment equality between them.
 
 Measured on an M4 Pro (native arm64 build with `DISABLE_ASM=1`): 1,000 64-byte compressions fill a
 2^16-row trace and prove in **1.14 s**, verify natively in **6 ms**, with a **29,184-byte** proof
@@ -31,35 +33,35 @@ circuit.
 
 `whir_settlement.test.cpp` runs every stage of that flow on one statement and prices the recursion
 step both ways. Nothing in it is modelled: the client proof is produced and verified, both
-recursion circuits are built, the VM proves the hash workload the delegated circuit consumed, and
-the settled proofs are produced and verified. It takes about 20 s and peaks near 6 GB, almost all
-of it the in-circuit-Blake3s baseline.
+recursion circuits are built, the VM proves the hash workload the delegated circuit consumed, the
+settled proofs are produced and verified, and the link's commitment equality is checked between
+them. It takes about 25 s and peaks near 6 GB, almost all of it the in-circuit-Blake3s baseline.
 
 | Stage | Measurement |
 |---|---|
-| client proves (2^13 statement, zk WHIR) | 4.8 s, 189,440-byte proof |
-| sequencer verifies natively → soft confirmation | 10 ms |
+| client proves (2^13 statement, zk WHIR) | 3.5 s, 189,440-byte proof |
+| sequencer verifies natively → soft confirmation | 8 ms |
 | recursion, Blake3s in circuit | **5,604,393 gates** (5,288,073 = 94% Merkle hashing) |
-| recursion, hashing delegated | **49,553 gates** — 113x smaller |
-| ↳ of which the link fingerprint | 10,590 gates binding 10,590 field elements |
-| Blake3VM over the same workload | 1,541 calls / 3,880 compressions, 2^18 trace, 6.4 s prove, 10 ms verify, 30,080-byte proof |
-| settle the delegated circuit | 2^16 outer, 244 ms prove, 5 ms verify, 13,664-byte proof |
-| aggregate 2 client proofs | 2^17 outer, 48,027 gates per client proof |
+| recursion, hashing delegated and linked | **166,021 gates** — 33x smaller |
+| ↳ of which the link's chunk side | 124,236 gates committing 37,204 chunks |
+| Blake3VM over the same workload | 1,541 calls / 3,880 compressions, 2^18 trace, 6.0 s prove, 11 ms verify, 31,296-byte proof |
+| settle the delegated circuit (MegaHonk) | 2^18 outer, 696 ms prove, 7 ms verify, 17,696-byte proof |
+| link check `C_calldata == C_link` | accepted, both commitments read from the two proofs |
+| aggregate 2 client proofs | 2^19 outer, 164,511 gates per client proof |
 
 The delegated circuit is measured with `DelegatingBlake3sHasher`, which keeps the verifier's
-interface and its digests but takes each digest from an oracle and binds the call's inputs and
-output into a Horner fingerprint. Two effects compound: the compressions leave the circuit, and a
-digest becomes the two field elements it travels the transcript as instead of 32 bytes, which
-drops the Merkle path's conditional swap from thirty-two selects per level to two.
-
-**That circuit is not sound on its own.** Nothing yet forces the oracle's digests to be the hashes
-the VM proved; the fingerprint is the hook a linking argument would use, and it is what the 10,590
-gates buy. The baseline is not proved in the test either — 5.6M gates is a 2^23 outer circuit,
-against 2^16 for the delegated one.
+interface and its digests but takes each digest from an oracle, witnesses the hashed bytes eight at
+a time, and commits them in the circuit's databus calldata column — the circuit's half of the
+linking argument. Two effects compound: the compressions leave the circuit, and a digest becomes
+the two field elements it travels the transcript as instead of 32 bytes, which drops the Merkle
+path's conditional swap from thirty-two selects per level to two. The settlement stage verifies
+both proofs and checks that the circuit's calldata commitment equals the VM proof's link column
+commitment. The baseline is not proved in the test — 5.6M gates is a 2^23 outer circuit, against
+2^18 for the delegated one.
 
 Two limits the run makes concrete. The client proof is zk, but the recursion stage re-proves the
 same statement without it, because the in-circuit verifier rejects salted leaves
-(`whir_recursive_verifier.hpp` asserts `!config.zk`). And the VM's 6.4 s dominates the sequencer's
+(`whir_recursive_verifier.hpp` asserts `!config.zk`). And the VM's 6.0 s dominates the sequencer's
 delegated path, so the VM prover, not the recursion circuit, is what to optimise next.
 
 ## Parameters
@@ -138,17 +140,20 @@ header comment is the constraint-level reference.
   chaining an arbitrary CV.
 - `blk_len`/`blk_flags` are range-checked at first use (they enter round 0 as XOR operands whose
   bytes are table reads). Their *semantics* (that `blk_len` is the true byte length, flags follow
-  the chunk schedule) are the batch author's claim, exposed per compression; a consumer of the VM
-  must bind them, which is the linking argument's job.
+  the chunk schedule) are the batch author's claim, exposed per compression. The linking argument
+  binds them through the digest claims: the parameters enter the compression the VM proves, so a
+  batch with a different schedule produces a different digest for the same message bytes, and a
+  consuming circuit whose digests must chain to a committed Merkle root cannot absorb that
+  difference without a Blake3s collision.
 - The VK is per-circuit-size: the precomputed selectors depend only on the trace length. A
   deployment would pin a fixed size the way the ECCVM does.
 
 ## The linking argument
 
-`whir_settlement.test.cpp` demonstrates what is missing: tampering with a Merkle sibling in the
-query openings makes the inner proof fail native verification, while the delegated circuit stays
-satisfiable when the oracle replays the honest digests. In-circuit hashing was the only thing
-constraining that sibling.
+Delegation on its own proves nothing: the delegated circuit reads Merkle siblings off the proof
+stream and only ever hands them to the hash oracle, so with the compressions gone, tampering with a
+sibling makes the inner proof fail native verification while the circuit stays satisfiable when the
+oracle replays the honest digests. In-circuit hashing was the only thing constraining that sibling.
 
 The link must establish that the sequence of `(input, digest)` pairs the circuit consumed is the
 sequence the VM proved. Three of the four ways to do that are unsound or unaffordable, and ruling
@@ -175,46 +180,52 @@ compared**. Since both proofs are KZG over BN254 against the same SRS, and a com
 The check is `C_circuit == C_vm` — no shared challenge, no in-circuit hashing, and binding follows
 from KZG binding alone.
 
-The VM's half is built: `claims` carries the sequence, `Blake3VMClaimRelation` pins each row's
-contribution to the trace data that row already holds, and `Blake3VMLinkRelation` gathers them into
-the dense `link_value` column. `Blake3VMTests.ClaimVectorIsTheHashedData` rebuilds the hashed byte
-stream from the claims, and `TamperedLinkColumnFails` shows a link column that does not carry the
-trace's claims cannot prove.
-
 The claim encoding is the hashed bytes themselves, eight at a time: entry `j` is
 `w_lo + 2³²·w_hi` for the word pair the trace exposes on one row. Chunking at eight bytes rather
 than at field elements is what keeps the VM side row-local, since the one-byte domain tag offsets
 every field element against the VM's 32-bit words.
 
-What remains is the consuming circuit's half:
+Both halves are built:
 
-- **Emit the same vector.** The delegating hasher builds each call's byte buffer already, so it can
-  witness the eight-byte chunks directly. It must then prove they recombine to the field elements
-  it holds — the buffer is a run of pieces of mixed width (a 1-byte tag, 16-byte digest halves,
-  32-byte leaf values), each offset one byte by the tag, so each piece boundary needs a
-  `(1 byte, 7 bytes)` split with the byte range-constrained. About 2-3 gates per piece.
-- **Commit it.** `MegaCircuitBuilder`'s databus gives a committed column of circuit witnesses. Its
-  polynomial starts at `NUM_DISABLED_ROWS_IN_SUMCHECK` rather than 0 — an offset bb maintains for
-  cross-flavor commitment compatibility, which is the same property this link relies on — so the
-  VM's link section must start there too.
-- **Compare.** `C_calldata == C_link` as group elements, checked by whoever verifies both proofs.
-  `DelegatedCircuitIsForgeableWithoutTheLink` then becomes the green test: the tampered sibling
-  changes the circuit's claims, so the two commitments diverge.
+- **The VM's half.** `claims` carries the sequence, `Blake3VMClaimRelation` pins each row's
+  contribution to the trace data that row already holds, and `Blake3VMLinkRelation` gathers them
+  into the dense `link_value` column. `Blake3VMTests.ClaimVectorIsTheHashedData` rebuilds the
+  hashed byte stream from the claims, and `TamperedLinkColumnFails` shows a link column that does
+  not carry the trace's claims cannot prove.
+- **The circuit's half.** `DelegatingBlake3sHasher` witnesses each call's eight-byte chunks, proves
+  they recombine to the field elements it holds, and appends every chunk to the Mega databus
+  calldata column. A tagged buffer offsets every piece (16-byte digest halves, 32-byte leaf values)
+  one byte against the chunk grid, so each piece carries a `(7 bytes, 8-byte middles, 1 byte)`
+  split; both split parts are range-constrained. The ranges are what make the split sound: the
+  chunks are pinned to the VM's byte-built claims by the commitment equality, and range-checked
+  splits make the byte decomposition unique, so the recombination pins the field element itself —
+  without them a prover can shift one piece and a neighbour's split in tandem and claim different
+  field elements recombine to the same honest chunks. Chained buffers open with the previous digest
+  instead of the tag, stay 8-byte aligned, and need neither splits nor ranges.
+- **The comparison.** Both proofs are KZG over the same SRS and both columns start at
+  `NUM_DISABLED_ROWS_IN_SUMCHECK` — the offset bb's databus polynomials use for cross-flavor
+  commitment compatibility, which is the same property this link relies on — so
+  `C_calldata == C_link` as group elements is the entire check, performed by whoever verifies both
+  proofs. Nothing about the claims crosses the transcript.
 
-Costed at ~42,500 chunks and ~15,000 pieces, the circuit's half is roughly 87,000 gates, putting
-the linked recursion circuit near 140,000 — against 5,604,393 with the hashing in circuit.
+`WhirSettlementTests.TamperedSiblingDivergesTheLinkCommitments` is the argument end to end: the
+honest circuit's calldata commitment equals the VM's link commitment, while a tampered sibling —
+still satisfiable in-circuit, since the oracle's digests are free witnesses — diverges from the
+link column of every VM proof a prover could produce: the honest workload differs in the tampered
+message chunks, and the circuit's actual calls hash to digests that differ from the replayed honest
+ones. `FullPipelineWithAndWithoutTheVM` performs the check on commitments read from the two real
+proofs.
+
+Measured, the circuit's half costs 124,236 gates for 37,204 chunks (busread gates, splits, and
+range checks), putting the linked recursion circuit at 166,021 gates — against 5,604,393 with the
+hashing in circuit.
 
 ## Roadmap
 
-- **Linking argument**: expose the per-compression IO (message words at the first G row;
-  `blk_len`/`blk_flags`/`chain` on the preceding boundary row; output words on the output rows) to
-  a consuming circuit via a databus-style log-derivative argument over a shared transcript, so a
-  Noir/UltraHonk recursive WHIR verifier can consume hash results without hashing. The VM side is
-  the missing half: it must recompute the fingerprint `whir_settlement.test.cpp` builds, over the
-  32-byte message the circuit absorbs rather than the 64-byte blocks the trace holds.
-- **Cheaper binding**: the fingerprint costs one gate per field element, and the leaf values it
-  absorbs are already transcript data the circuit holds. Binding a leaf by a value the verifier
-  computes anyway would remove most of the 10,590 gates.
+- **Cheaper chunk side**: the link's 124,236 gates are three quarters of the delegated circuit —
+  one busread gate per chunk plus the splits and range checks. A dedicated append-only bus gate
+  (no read machinery), batched range checks, and skipping the zero-padding chunks' busreads would
+  each take a measurable slice.
 - **zk on the recursion path**: salted leaves are one extra absorbed element per leaf, which the
   delegated hasher would carry for free; the blinding and the extra variable in the WHIR config are
   the real work.

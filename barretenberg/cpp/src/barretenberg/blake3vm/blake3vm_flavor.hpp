@@ -12,6 +12,7 @@
 #include "barretenberg/blake3vm/blake3vm_circuit_builder.hpp"
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
 #include "barretenberg/commitment_schemes/kzg/kzg.hpp"
+#include "barretenberg/constants.hpp"
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
 #include "barretenberg/flavor/flavor.hpp"
 #include "barretenberg/flavor/flavor_macros.hpp"
@@ -425,9 +426,14 @@ class Blake3VMFlavor {
             }
             this->row_index = Polynomial(dyadic_size);
             this->q_round0 = Polynomial(active_rows, dyadic_size);
+            // The dense link section lives at rows [NUM_DISABLED_ROWS_IN_SUMCHECK,
+            // NUM_DISABLED_ROWS_IN_SUMCHECK + num_claims): the offset bb's databus polynomials use,
+            // so a consuming Mega circuit's calldata commitment can be compared with link_value's.
             const size_t num_claims = builder.claims.size();
-            this->link_value = Polynomial(num_claims, dyadic_size);
-            this->q_link = Polynomial(num_claims, dyadic_size);
+            const size_t link_offset = NUM_DISABLED_ROWS_IN_SUMCHECK;
+            BB_ASSERT_LTE(link_offset + num_claims, dyadic_size, "the link section must fit the trace");
+            this->link_value = Polynomial(num_claims, dyadic_size, link_offset);
+            this->q_link = Polynomial(num_claims, dyadic_size, link_offset);
             this->lagrange_first = Polynomial(1, dyadic_size);
             this->lagrange_first.at(0) = 1;
             this->lagrange_last = Polynomial(1, dyadic_size, dyadic_size - 1);
@@ -437,8 +443,8 @@ class Blake3VMFlavor {
                 this->row_index.at(i) = i;
             }
             for (size_t i = 0; i < num_claims; ++i) {
-                this->link_value.at(i) = builder.claims[i];
-                this->q_link.at(i) = 1;
+                this->link_value.at(link_offset + i) = builder.claims[i];
+                this->q_link.at(link_offset + i) = 1;
             }
 
             // XOR table and read counts.

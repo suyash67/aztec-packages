@@ -42,6 +42,7 @@ bool Blake3VMVerifier::verify_proof(const HonkProof& proof)
             commitment = transcript->template receive_from_prover<Commitment>(label);
         }
     }
+    link_commitment = commitments.link_value;
 
     // Logup challenges and inverse commitments.
     const FF beta = transcript->template get_challenge<FF>("beta");

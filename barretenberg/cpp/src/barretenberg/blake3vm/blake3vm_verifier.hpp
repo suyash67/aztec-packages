@@ -10,6 +10,7 @@ class Blake3VMVerifier {
   public:
     using Flavor = Blake3VMFlavor;
     using FF = Flavor::FF;
+    using Commitment = Flavor::Commitment;
     using VerificationKey = Flavor::VerificationKey;
     using Transcript = Flavor::Transcript;
 
@@ -21,6 +22,10 @@ class Blake3VMVerifier {
     std::shared_ptr<VerificationKey> verification_key;
     std::shared_ptr<Transcript> transcript;
     RelationParameters<FF> relation_parameters;
+    // The proof's commitment to the dense claim column, retained for the linking argument: a
+    // consuming circuit's proof carries the same claims in its calldata column, and the link check
+    // is equality of the two commitments (README.md, "The linking argument").
+    Commitment link_commitment;
 };
 
 } // namespace bb
