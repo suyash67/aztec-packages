@@ -56,13 +56,45 @@ linking argument. Two effects compound: the compressions leave the circuit, and 
 the two field elements it travels the transcript as instead of 32 bytes, which drops the Merkle
 path's conditional swap from thirty-two selects per level to two. The settlement stage verifies
 both proofs and checks that the circuit's calldata commitment equals the VM proof's link column
-commitment. The baseline is not proved in the test — 5.6M gates is a 2^23 outer circuit, against
-2^18 for the delegated one.
+commitment. The baseline is not proved in this test — a separate disabled test settles it, priced
+against the delegated path below.
 
 Two limits the run makes concrete. The client proof is zk, but the recursion stage re-proves the
 same statement without it, because the in-circuit verifier rejects salted leaves
 (`whir_recursive_verifier.hpp` asserts `!config.zk`). And the VM's 6.0 s dominates the sequencer's
 delegated path, so the VM prover, not the recursion circuit, is what to optimise next.
+
+### The recursion step, proved both ways
+
+The pipeline test leaves the 5.6M-gate baseline unproved to stay fast;
+`DISABLED_BaselineInCircuitRecursionProof` settles it for real (run with
+`--gtest_also_run_disabled_tests`, ~40 s). Same statement, same machine, both paths measured with
+real proofs end to end:
+
+| | Blake3s in circuit | delegated + linked |
+|---|---|---|
+| recursion circuit | 5,604,393 gates → 2^23 rows | 166,021 gates → 2^18 rows |
+| circuit proof | 20.2 s (UltraHonk) | 0.70 s (MegaHonk) |
+| Blake3VM proof | — | 6.0 s (2^18 trace) |
+| **sequencer proves, total** | **20.2 s** | **6.7 s** |
+| verification | 6 ms | 18 ms (both proofs + the link's group-element equality) |
+| settled proof bytes | 13,632 | 48,992 (17,696 + 31,296) |
+| outer-circuit rows per client proof | 5,604,393 | 164,511 — **34x more proofs per aggregator** |
+
+The delegated path pays with a second proof to verify and ~35 KB of extra proof bytes; it wins
+everywhere a sequencer is actually constrained:
+
+- **3x prover time today, with the headroom on one side.** 90% of the delegated path is the VM
+  prover, which is unoptimised — nearly every VM column is byte-valued, so small-scalar commitment
+  hints and per-column sizing attack exactly where the 6.0 s goes. The circuit proof itself is
+  already 29x faster than the baseline's, and the two proofs are independent, so a two-core
+  sequencer sees 6.0 s wall clock.
+- **The baseline's 20.2 s buys one client proof.** A 2^23 proving key is spent entirely on a single
+  verification; batching N clients means N such proofs (2^25 for four clients). The delegated
+  aggregator fits 34x more client proofs per outer circuit, and the VM amortises the other way:
+  one VM proof covers the whole batch's hashing, with verification cost independent of batch size.
+- **Memory follows circuit size.** The baseline settlement peaks near 6 GB for one client proof;
+  the delegated outer circuit is a 2^18 MegaHonk key.
 
 ## Parameters
 

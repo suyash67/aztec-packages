@@ -595,6 +595,60 @@ TEST_F(WhirSettlementTests, TamperedSiblingDivergesTheLinkCommitments)
 }
 
 /**
+ * @brief Prices the baseline the pipeline test declines to prove: settling the recursion circuit
+ * with the Blake3s compressions inside it.
+ * @details 5.6M gates make a 2^23-row UltraHonk proof; the delegated path settles the same
+ * statement as a 2^18 MegaHonk proof plus a 2^18 Blake3VM proof. Disabled because it needs
+ * several minutes and tens of GB; run manually with --gtest_also_run_disabled_tests. Its
+ * measurements are recorded in README.md, "The recursion step, proved both ways".
+ */
+TEST_F(WhirSettlementTests, DISABLED_BaselineInCircuitRecursionProof)
+{
+    const ClientProof client = prove_on_client(/*num_gates=*/100, /*zk=*/false);
+    ASSERT_TRUE(InnerHonk::verify(client.pk.vk, client.config, client.proof));
+
+    auto start = std::chrono::steady_clock::now();
+    size_t baseline_gates = 0;
+    // Scoped so the multi-GB builder is released before proving; only the instance's polynomials
+    // survive.
+    auto prover_instance = [&] {
+        Builder baseline;
+        const auto stdlib_proof = to_stdlib_proof(baseline, client.proof);
+        const std::vector<FF> public_inputs =
+            InCircuitVerifier::verify(baseline, client.pk.vk, client.config, stdlib_proof);
+        for (const FF& input : public_inputs) {
+            baseline.set_public_input(input.get_witness_index());
+        }
+        baseline_gates = baseline.get_num_finalized_gates_inefficient();
+        DefaultIO::add_default(baseline);
+        return std::make_shared<ProverInstance_<UltraFlavor>>(baseline);
+    }();
+    const size_t build_ms = elapsed_ms(start);
+
+    auto verification_key = std::make_shared<UltraFlavor::VerificationKey>(prover_instance->get_precomputed());
+    const size_t log_dyadic = prover_instance->log_dyadic_size();
+    UltraProver_<UltraFlavor> outer_prover(prover_instance, verification_key);
+    start = std::chrono::steady_clock::now();
+    const HonkProof outer_proof = outer_prover.construct_proof();
+    const size_t prove_ms = elapsed_ms(start);
+
+    auto vk_and_hash = std::make_shared<UltraFlavor::VKAndHash>(verification_key);
+    start = std::chrono::steady_clock::now();
+    UltraVerifier_<UltraFlavor, DefaultIO> outer_verifier(vk_and_hash);
+    const bool outer_ok = outer_verifier.verify_proof(outer_proof).result;
+    const size_t verify_ms = elapsed_ms(start);
+    EXPECT_TRUE(outer_ok);
+
+    Section("Baseline: settle the recursion circuit with Blake3s in circuit")
+        .row("recursion circuit", with_unit(baseline_gates, "gates"))
+        .row("outer circuit", "2^" + std::to_string(log_dyadic))
+        .row("build circuit + instance", with_unit(build_ms, "ms"))
+        .row("prove", with_unit(prove_ms, "ms"))
+        .row("verify", with_unit(verify_ms, "ms"))
+        .row("proof", with_unit(outer_proof.size() * sizeof(fr), "B"));
+}
+
+/**
  * @brief The whole flow, with the recursion step's Merkle hashing priced both ways.
  * @details Every number printed is measured on this run: nothing is modelled. The delegated
  * circuit's proof carries its chunk column commitment, the VM's proof carries its link column
