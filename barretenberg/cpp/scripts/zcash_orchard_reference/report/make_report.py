@@ -66,59 +66,90 @@ def fmt_bytes(b):
     return f"{b / 1024:.1f} KiB"
 
 
-def chart(series, metric, title, unit_fmt, log_y, counts, ylabel):
-    """series: list of (key, label, cls, dashed, {actions: value})."""
-    W, H = 640, 330
-    L, R, T, B = 64, 20, 18, 46
+SHORT_LABELS = {
+    "zcash": "Zcash halo2",
+    "halo2-honk-pasta": "halo2 gates · Pasta",
+    "halo2-honk-bn254": "halo2 gates · BN254",
+    "ultra-zk-pasta": "UltraHonk · Pasta",
+    "ultra-zk-bn254": "UltraHonk · BN254",
+}
+
+
+def tick_time(s):
+    if s < 1:
+        ms = s * 1e3
+        return f"{ms:g} ms"
+    return f"{s:g} s"
+
+
+def chart(series, title, log_y, counts, ylabel, tick_fmt, value_fmt):
+    """series: list of (key, label, cls, dashed, {actions: value}). One line per system, labelled at its last point."""
+    W, H = 960, 440
+    L, R, T, B = 110, 190, 20, 58
     xs = counts
     vals = [v for *_, d in series for a, v in d.items() if a in xs]
     if not vals:
         return ""
     lo, hi = min(vals), max(vals)
     if log_y:
-        lo_e = math.floor(math.log10(lo) * 2) / 2
-        hi_e = math.ceil(math.log10(hi) * 2) / 2
-        ticks = []
-        e = math.floor(lo_e)
-        while e <= hi_e + 1e-9:
-            for m in (1, 2, 5):
-                t = m * 10**e
-                if 10**lo_e * 0.999 <= t <= 10**hi_e * 1.001:
-                    ticks.append(t)
-            e += 1
-        ymap = lambda v: T + (H - T - B) * (hi_e - math.log10(v)) / (hi_e - lo_e)
+        nice = [m * 10**e for e in range(-4, 3) for m in (1, 2, 5)]
+        ticks = [t for t in nice if lo / 1.6 <= t <= hi * 1.6]
+        y_lo, y_hi = min(ticks[0], lo / 1.25), max(ticks[-1], hi * 1.25)
+        ymap = lambda v: T + (H - T - B) * (math.log10(y_hi) - math.log10(v)) / (math.log10(y_hi) - math.log10(y_lo))
     else:
-        top = hi * 1.1
+        top = hi * 1.08
         step = 10 ** math.floor(math.log10(top / 4))
         for m in (1, 2, 5, 10):
             if top / (m * step) <= 6:
                 step *= m
                 break
-        ticks = [i * step for i in range(int(top / step) + 1)]
-        top = ticks[-1] if ticks[-1] >= hi else ticks[-1] + step
-        ymap = lambda v: T + (H - T - B) * (1 - v / top)
-    xmap = lambda a: L + (W - L - R) * (math.log2(a) / math.log2(xs[-1]) if xs[-1] > 1 else 0)
+        ticks = [i * step for i in range(int(math.ceil(top / step)) + 1)]
+        y_hi = ticks[-1]
+        ymap = lambda v: T + (H - T - B) * (1 - v / y_hi)
+    span = math.log2(xs[-1]) if xs[-1] > 1 else 1
+    xmap = lambda a: L + 18 + (W - L - R - 36) * math.log2(a) / span
     out = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{title}">']
     for t in ticks:
         y = ymap(t)
-        out.append(f'<line class="grid" x1="{L}" x2="{W - R}" y1="{y:.1f}" y2="{y:.1f}"/>')
-        out.append(f'<text class="tick" x="{L - 8}" y="{y + 4:.1f}" text-anchor="end">{unit_fmt(t)}</text>')
+        out.append(f'<line class="grid" x1="{L}" x2="{W - R + 8}" y1="{y:.1f}" y2="{y:.1f}"/>')
+        out.append(f'<text class="tick" x="{L - 10}" y="{y + 4.5:.1f}" text-anchor="end">{tick_fmt(t)}</text>')
+    out.append(f'<line class="baseline" x1="{L}" x2="{W - R + 8}" y1="{H - B}" y2="{H - B}"/>')
     for a in xs:
         x = xmap(a)
-        out.append(f'<line class="grid faint" x1="{x:.1f}" x2="{x:.1f}" y1="{T}" y2="{H - B}"/>')
-        out.append(f'<text class="tick" x="{x:.1f}" y="{H - B + 18}" text-anchor="middle">{a}</text>')
-    out.append(f'<text class="axis" x="{(L + W - R) / 2}" y="{H - 6}" text-anchor="middle">Actions per proof</text>')
+        out.append(f'<line class="baseline" x1="{x:.1f}" x2="{x:.1f}" y1="{H - B}" y2="{H - B + 6}"/>')
+        out.append(f'<text class="tick" x="{x:.1f}" y="{H - B + 24}" text-anchor="middle">{a}</text>')
+    out.append(f'<text class="axis" x="{(L + W - R) / 2}" y="{H - 8}" text-anchor="middle">Actions per proof</text>')
     out.append(
-        f'<text class="axis" transform="translate(14 {(T + H - B) / 2}) rotate(-90)" text-anchor="middle">{ylabel}</text>'
+        f'<text class="axis" transform="translate(20 {(T + H - B) / 2}) rotate(-90)" text-anchor="middle">{ylabel}</text>'
     )
+    # End-of-line labels, spread apart vertically so they never overlap.
+    ends = []
     for key, label, cls, dashed, d in series:
-        pts = [(xmap(a), ymap(d[a])) for a in xs if a in d]
+        pts = [(a, xmap(a), ymap(d[a])) for a in xs if a in d]
         if not pts:
             continue
-        path = " ".join(f"{'M' if i == 0 else 'L'}{x:.1f},{y:.1f}" for i, (x, y) in enumerate(pts))
+        path = " ".join(f"{'M' if i == 0 else 'L'}{x:.1f},{y:.1f}" for i, (_, x, y) in enumerate(pts))
         out.append(f'<path class="line {cls}{" dashed" if dashed else ""}" d="{path}"><title>{label}</title></path>')
-        for (x, y), a in zip(pts, [a for a in xs if a in d]):
-            out.append(f'<circle class="dot {cls}" cx="{x:.1f}" cy="{y:.1f}" r="3.5"><title>{label}: {unit_fmt(d[a])} at {a}</title></circle>')
+        for a, x, y in pts:
+            out.append(
+                f'<circle class="dot {cls}" cx="{x:.1f}" cy="{y:.1f}" r="4.5"><title>{label}: {value_fmt(d[a])} at {a} Actions</title></circle>'
+            )
+        a_last, x_last, y_last = pts[-1]
+        ends.append([y_last, x_last, key, cls, value_fmt(d[a_last])])
+    ends.sort()
+    gap = 34
+    for i in range(1, len(ends)):
+        ends[i][0] = max(ends[i][0], ends[i - 1][0] + gap)
+    overflow = ends[-1][0] - (H - B) if ends else 0
+    if overflow > 0:
+        for e in ends:
+            e[0] -= overflow
+        for i in range(len(ends) - 2, -1, -1):
+            ends[i][0] = min(ends[i][0], ends[i + 1][0] - gap)
+    for y, x, key, cls, v in ends:
+        lx = W - R + 18
+        out.append(f'<text class="endlabel {cls}" x="{lx}" y="{y - 2:.1f}">{SHORT_LABELS[key]}</text>')
+        out.append(f'<text class="endvalue" x="{lx}" y="{y + 14:.1f}">{v}</text>')
     out.append("</svg>")
     return "\n".join(out)
 
@@ -190,19 +221,20 @@ def main():
     tmpl = (Path(__file__).parent / "report_template.html").read_text()
     html = tmpl
     html = html.replace("{{LEGEND}}", legend())
+    def in_kib(d):
+        return [(k, lab, cls, dashed, {a: v / 1024 for a, v in vals.items()}) for k, lab, cls, dashed, vals in d]
     html = html.replace(
-        "{{CHART_PROVE}}", chart(series(mt, "prove"), "prove", "Prover time", fmt_time, True, counts_mt, "Prover time")
+        "{{CHART_PROVE}}", chart(series(mt, "prove"), "Prover time", True, counts_mt, "Prover time (log scale)", tick_time, fmt_time)
     )
     html = html.replace(
-        "{{CHART_VERIFY}}", chart(series(mt, "verify"), "verify", "Verifier time", fmt_time, True, counts_mt, "Verifier time")
+        "{{CHART_VERIFY}}", chart(series(mt, "verify"), "Verifier time", True, counts_mt, "Verifier time (log scale)", tick_time, fmt_time)
     )
     html = html.replace(
-        "{{CHART_SIZE}}",
-        chart(series(mt, "size"), "size", "Proof size", lambda b: f"{b / 1024:.0f} KiB", False, counts_mt, "Proof size"),
+        "{{CHART_SIZE}}", chart(in_kib(series(mt, "size")), "Proof size", False, counts_mt, "Proof size", lambda t: f"{t:g} KiB", lambda v: f"{v:.1f} KiB")
     )
     html = html.replace(
         "{{CHART_PROVE_ST}}",
-        chart(series(st, "prove"), "prove", "Prover time, one thread", fmt_time, True, counts_st, "Prover time"),
+        chart(series(st, "prove"), "Prover time, one thread", True, counts_st, "Prover time (log scale)", tick_time, fmt_time),
     )
     html = html.replace("{{TABLE_PROVE}}", table(mt, "prove", fmt_time, counts_mt))
     html = html.replace("{{TABLE_VERIFY}}", table(mt, "verify", fmt_time, counts_mt))
@@ -216,6 +248,9 @@ def main():
                 v = mt.get(key, {}).get(a, {}).get(m)
                 if v is not None:
                     html = html.replace("{{" + f"{key}:{a}:{m}" + "}}", fmt_bytes(v) if m == "size" else fmt_time(v))
+            r = mt.get(key, {}).get(a, {}).get("rows")
+            if r is not None:
+                html = html.replace("{{" + f"{key}:{a}:rows_n" + "}}", f"{r:,}")
         for a in counts_st:
             v = st.get(key, {}).get(a, {}).get("prove")
             if v is not None:
