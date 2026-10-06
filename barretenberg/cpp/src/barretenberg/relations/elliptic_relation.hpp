@@ -7,6 +7,7 @@
 #pragma once
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
 #include "barretenberg/ecc/curves/grumpkin/grumpkin.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/relations/relation_types.hpp"
 
 namespace bb {
@@ -74,6 +75,8 @@ template <typename FF_> class EllipticRelationImpl {
             return bb::g1::curve_b;
         } else if constexpr (FF::modulus == grumpkin::fq::modulus) {
             return grumpkin::g1::curve_b;
+        } else if constexpr (FF::modulus == pallas::fq::modulus) {
+            return pallas::g1::curve_b;
         } else {
             static_assert(!std::is_same_v<FF, FF>, "Unsupported field type for elliptic relation");
         }
