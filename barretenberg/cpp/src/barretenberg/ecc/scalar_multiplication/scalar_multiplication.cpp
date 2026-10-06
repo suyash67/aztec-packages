@@ -8,6 +8,7 @@
 #include "barretenberg/ecc/groups/precomputed_generators_bn254_impl.hpp"
 #include "barretenberg/ecc/groups/precomputed_generators_grumpkin_impl.hpp"
 
+#include "./pippenger_generic.hpp"
 #include "./process_buckets.hpp"
 #include "./scalar_multiplication.hpp"
 #include "barretenberg/common/thread.hpp"
@@ -679,9 +680,11 @@ typename Curve::Element pippenger(PolynomialSpan<const typename Curve::ScalarFie
                                   size_t dedup_info) noexcept
 {
     if constexpr (!Curve::Group::USE_ENDOMORPHISM) {
-        // The `_fast` pipeline is tuned around GLV-split scalars; curves without a usable 128-bit GLV split (Pasta)
-        // always take the legacy Pippenger.
-        return legacy::pippenger<Curve>(scalars, points, handle_edge_cases);
+        // The `_fast` and legacy pipelines are tuned around GLV-split scalars; curves without a usable 128-bit GLV
+        // split (Pasta) use the full-width bucket method.
+        static_cast<void>(handle_edge_cases);
+        static_cast<void>(dedup_info);
+        return generic::pippenger<Curve>(scalars, points);
     } else {
         if (use_legacy_msm()) {
             return legacy::pippenger<Curve>(scalars, points, handle_edge_cases);
@@ -696,7 +699,8 @@ typename Curve::Element pippenger_unsafe(PolynomialSpan<const typename Curve::Sc
                                          size_t dedup_info) noexcept
 {
     if constexpr (!Curve::Group::USE_ENDOMORPHISM) {
-        return legacy::pippenger_unsafe<Curve>(scalars, points);
+        static_cast<void>(dedup_info);
+        return generic::pippenger<Curve>(scalars, points);
     } else {
         if (use_legacy_msm()) {
             return legacy::pippenger_unsafe<Curve>(scalars, points);
@@ -721,7 +725,17 @@ std::vector<typename Curve::AffineElement> MSM<Curve>::batch_multi_scalar_mul(
     bool handle_edge_cases,
     std::span<const uint32_t> dedup_infos) noexcept
 {
-    if (!Curve::Group::USE_ENDOMORPHISM || use_legacy_msm()) {
+    if constexpr (!Curve::Group::USE_ENDOMORPHISM) {
+        static_cast<void>(handle_edge_cases);
+        static_cast<void>(dedup_infos);
+        std::vector<AffineElement> results(scalars.size());
+        for (size_t i = 0; i < scalars.size(); ++i) {
+            results[i] = AffineElement(generic::pippenger<Curve>(
+                PolynomialSpan<const ScalarField>(scalars[i].start_index, scalars[i].span), points));
+        }
+        return results;
+    }
+    if (use_legacy_msm()) {
         // Adapt the rewrite's (single shared points + per-MSM PolynomialSpan) shape to the
         // legacy per-MSM (points span, scalar span) shape. dedup_hints are dropped.
         const size_t k = scalars.size();

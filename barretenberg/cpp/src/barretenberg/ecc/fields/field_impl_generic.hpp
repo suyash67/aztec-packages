@@ -264,6 +264,25 @@ template <class T> constexpr field<T> field<T>::reduce_255() const noexcept
     return { val.data[0], val.data[1], val.data[2], val.data[3] };
 }
 
+template <class T> constexpr field<T> field<T>::reduce_once_255() const noexcept
+{
+    static_assert(MODULUS_IS_255_BITS);
+    // not_modulus == 2^256 - modulus; the addition carries iff the value is >= modulus.
+    uint64_t t0 = data[0] + not_modulus.data[0];
+    uint64_t c = t0 < data[0];
+    auto t1 = addc(data[1], not_modulus.data[1], c, c);
+    auto t2 = addc(data[2], not_modulus.data[2], c, c);
+    auto t3 = addc(data[3], not_modulus.data[3], c, c);
+    const uint64_t selection_mask = 0ULL - c;
+    const uint64_t selection_mask_inverse = ~selection_mask;
+    return {
+        (data[0] & selection_mask_inverse) | (t0 & selection_mask),
+        (data[1] & selection_mask_inverse) | (t1 & selection_mask),
+        (data[2] & selection_mask_inverse) | (t2 & selection_mask),
+        (data[3] & selection_mask_inverse) | (t3 & selection_mask),
+    };
+}
+
 ///////////////////////
 ///// ADD and SUB /////
 ///////////////////////
@@ -282,6 +301,10 @@ template <class T> constexpr field<T> field<T>::add(const field& other) const no
         auto r1 = addc(data[1], other.data[1], c, c);
         auto r2 = addc(data[2], other.data[2], c, c);
         auto r3 = addc(data[3], other.data[3], c, c);
+        if (c == 0) [[likely]] {
+            // reduced inputs: the sum is below 2p
+            return field{ r0, r1, r2, r3 }.reduce_once_255();
+        }
         while (c != 0) {
             uint64_t b = 0;
             r0 = sbb(r0, modulus.data[0], b, b);
@@ -363,6 +386,10 @@ template <class T> constexpr field<T> field<T>::subtract(const field& other) con
     // recall that borrow is in the size-2 set {0, 2^64 - 1}.
     if constexpr (MODULUS_IS_255_BITS) {
         // add p until the 2^256 borrow is cancelled by a carry, then fully reduce
+        if (borrow == 0) [[likely]] {
+            // reduced inputs: a - b is already in [0, p)
+            return field{ r0, r1, r2, r3 }.reduce_once_255();
+        }
         while (borrow != 0) {
             uint64_t carry = 0;
             r0 = addc(r0, modulus.data[0], carry, carry);
@@ -754,7 +781,15 @@ template <class T> constexpr std::array<uint64_t, WASM_NUM_LIMBS> field<T>::wasm
 template <class T> constexpr field<T> field<T>::montgomery_mul(const field& other) const noexcept
 {
     if constexpr (MODULUS_IS_255_BITS) {
+#if defined(__SIZEOF_INT128__) && !defined(__wasm__)
+        if (std::is_constant_evaluated()) {
+            return montgomery_mul_big(other).reduce_255();
+        }
+#else
         return montgomery_mul_big(other).reduce_255();
+#endif
+        // The top limb of a 255-bit modulus is below 2^63 - 1, so the no-carry CIOS below is exact for inputs in
+        // [0, p) and returns a value in [0, 2p).
     } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         return montgomery_mul_big(other);
     }
@@ -806,6 +841,9 @@ template <class T> constexpr field<T> field<T>::montgomery_mul(const field& othe
     t3 = c + a;
     {
         field result{ t0, t1, t2, t3 };
+        if constexpr (MODULUS_IS_255_BITS) {
+            return result.reduce_once_255();
+        }
         if (!std::is_constant_evaluated()) {
             result.assert_coarse_form();
         }
@@ -951,7 +989,7 @@ template <class T> constexpr field<T> field<T>::montgomery_mul(const field& othe
 template <class T> constexpr field<T> field<T>::montgomery_square() const noexcept
 {
     if constexpr (MODULUS_IS_255_BITS) {
-        return montgomery_mul_big(*this).reduce_255();
+        return montgomery_mul(*this);
     } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         return montgomery_mul_big(*this);
     }

@@ -627,6 +627,8 @@ template <class Params_> struct alignas(32) field {
     BB_INLINE constexpr field reduce() const noexcept;
     // Subtract the modulus until the value is in [0, p). Only used for 255-bit moduli (see MODULUS_IS_255_BITS).
     BB_INLINE constexpr field reduce_255() const noexcept;
+    // One branchless conditional subtraction of the modulus: maps [0, 2p) to [0, p). 255-bit moduli only.
+    BB_INLINE constexpr field reduce_once_255() const noexcept;
     BB_INLINE constexpr field add(const field& other) const noexcept;
     BB_INLINE constexpr field subtract(const field& other) const noexcept;
 
