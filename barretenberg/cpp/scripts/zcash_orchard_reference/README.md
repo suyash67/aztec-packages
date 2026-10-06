@@ -42,3 +42,8 @@ done
 
 `ultra-zk-bn254` needs the BN254 SRS in `~/.bb-crs`. The Pasta systems use halo2's transparent generators, derived on
 the fly.
+
+## Report
+
+`report/make_report.py results report/orchard-benchmarks.html` renders the HTML report (charts and tables) from the
+result files, using `report/report_template.html`.

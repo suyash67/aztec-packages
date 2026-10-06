@@ -1,0 +1,213 @@
+<title>Orchard Action Proving Benchmarks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Martian+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&display=swap">
+<style>
+/* Layout: one reading column (~70ch) with full-width figure rows; charts and tables share the column grid. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #1b2230;
+  --muted: #5b6577;
+  --rule: #d9dee7;
+  --grid: #e5e9f0;
+  --accent: #0f6f74;
+  --best: #e3f2ef;
+  --s-zcash: #2b2f38;
+  --s-h2p: #0f8a8f;
+  --s-h2b: #0f8a8f;
+  --s-ulp: #c2582b;
+  --s-ulb: #c2582b;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --font-data: "Martian Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --surface: #1a1f28; --fg: #e4e8ef; --muted: #9aa4b5; --rule: #2c3442; --grid: #252c38;
+    --accent: #4fc3c6; --best: #173634; --s-zcash: #e4e8ef; --s-h2p: #4fc3c6; --s-h2b: #4fc3c6; --s-ulp: #f08a5d; --s-ulb: #f08a5d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a1f28; --fg: #e4e8ef; --muted: #9aa4b5; --rule: #2c3442; --grid: #252c38;
+  --accent: #4fc3c6; --best: #173634; --s-zcash: #e4e8ef; --s-h2p: #4fc3c6; --s-h2b: #4fc3c6; --s-ulp: #f08a5d; --s-ulb: #f08a5d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 var(--font-body); }
+.page { max-width: 1060px; margin: 0 auto; padding-block: 40px 80px; padding-inline: 20px; display: grid; gap: 56px; }
+header { display: grid; gap: 14px; max-width: 72ch; }
+.eyebrow { font: 500 12px/1.4 var(--font-data); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 750 clamp(30px, 5vw, 46px)/1.08 var(--font-display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font: 600 26px/1.2 var(--font-display); margin: 0; text-wrap: balance; }
+h3 { font: 700 17px/1.3 var(--font-body); margin: 0; }
+p { margin: 0; }
+.lede { font-size: 18px; color: var(--muted); }
+section { display: grid; gap: 18px; min-width: 0; }
+.page > *, section > * { min-width: 0; }
+.prose { display: grid; gap: 12px; max-width: 72ch; }
+.prose ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+code, .mono { font-family: var(--font-data); font-size: .86em; overflow-wrap: anywhere; }
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 20px; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+figcaption { font: 700 15px/1.3 var(--font-body); }
+figcaption small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+svg { width: 100%; height: auto; display: block; }
+svg .grid { stroke: var(--grid); stroke-width: 1; }
+svg .grid.faint { stroke-dasharray: 2 4; }
+svg .tick { fill: var(--muted); font: 11px var(--font-data); }
+svg .axis { fill: var(--muted); font: 12px var(--font-body); }
+svg .line { fill: none; stroke-width: 2.4; stroke-linejoin: round; stroke-linecap: round; }
+svg .line.dashed { stroke-dasharray: 7 5; }
+svg .dot { stroke: var(--surface); stroke-width: 1.5; }
+.s-zcash { stroke: var(--s-zcash); fill: var(--s-zcash); }
+.s-h2p { stroke: var(--s-h2p); fill: var(--s-h2p); }
+.s-h2b { stroke: var(--s-h2b); fill: var(--s-h2b); }
+.s-ulp { stroke: var(--s-ulp); fill: var(--s-ulp); }
+.s-ulb { stroke: var(--s-ulb); fill: var(--s-ulb); }
+svg .line.s-zcash { stroke-width: 3.2; }
+svg path.line { fill: none; }
+.legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 10px 24px; }
+.legend li { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.legend svg { width: 32px; flex: none; margin-top: 7px; }
+.legend span { display: grid; min-width: 0; }
+.legend small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 9px 14px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--rule); }
+thead th { font: 500 11px/1.3 var(--font-data); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+tbody th { text-align: left; font-weight: 700; font-size: 14px; }
+tbody tr:last-child > * { border-bottom: none; }
+td { font: 13px var(--font-data); }
+td.best { background: var(--best); font-weight: 500; }
+td.na { color: var(--muted); }
+td small { display: block; color: var(--muted); font-size: 11px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: 0; }
+.sw.s-zcash { background: var(--s-zcash); } .sw.s-h2p { background: var(--s-h2p); } .sw.s-ulp { background: var(--s-ulp); }
+.sw.s-h2b { background: transparent; border: 2px solid var(--s-h2b); } .sw.s-ulb { background: transparent; border: 2px solid var(--s-ulb); }
+.config { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.config article { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.config dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 14px; }
+.config dt { color: var(--muted); }
+.config dd { margin: 0; min-width: 0; }
+.takeaways { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.takeaways div { border-top: 3px solid var(--accent); padding-top: 10px; display: grid; gap: 6px; }
+.takeaways b { font: 600 22px/1.2 var(--font-display); }
+footer { color: var(--muted); font-size: 14px; max-width: 72ch; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="page">
+<header>
+  <p class="eyebrow">Barretenberg · Zcash Orchard Action circuit</p>
+  <h1>Proving the Orchard Action in barretenberg</h1>
+  <p class="lede">Four barretenberg implementations of Zcash's Orchard Action statement, two arithmetizations on two curve cycles, measured against the production halo2 prover that Zcash runs today.</p>
+</header>
+
+<section aria-labelledby="summary">
+  <h2 id="summary">Summary</h2>
+  <div class="takeaways">
+    <div><b>{{ratio:zcash:halo2-honk-pasta:1:prove}} faster</b><p>halo2 gates on a Honk prover with the halo2 IPA prove one Action in {{halo2-honk-pasta:1:prove}}, against {{zcash:1:prove}} for Zcash's prover. Same curves, same gates, same PCS family; the difference is Sumcheck in place of halo2's quotient polynomial.</p></div>
+    <div><b>{{ratio:zcash:halo2-honk-pasta:16:prove}} at 16 Actions</b><p>16 Actions take {{halo2-honk-pasta:16:prove}} against {{zcash:16:prove}}, and the proof is {{halo2-honk-pasta:16:size}} instead of {{zcash:16:size}}: barretenberg proves all Actions in one circuit, so the proof grows only logarithmically.</p></div>
+    <div><b>{{zcash:1:size}} vs {{halo2-honk-pasta:1:size}}</b><p>For a single Action the Zcash proof is smaller. Sumcheck sends a univariate per round and ZK masking adds Libra commitments; halo2's single-Action proof is mostly evaluations at a few points.</p></div>
+    <div><b>Wide gates pay off</b><p>On Pasta, UltraHonk's 4-wire gates need {{ratio:ultra-zk-pasta:halo2-honk-pasta:1:rows}} the rows of Orchard's halo2 layout and prove {{ratio:ultra-zk-pasta:halo2-honk-pasta:1:prove}} slower ({{ultra-zk-pasta:1:prove}}). The halo2 IPA's linear verifier also grows with the larger trace.</p></div>
+    <div><b>BN254 verifies in ~7 ms</b><p>At 16 Actions the KZG configurations verify in {{ultra-zk-bn254:16:verify}} (UltraHonk) and {{halo2-honk-bn254:16:verify}} (halo2 gates), barely more than for one; the IPA verifiers are linear in the trace length, as halo2's is.</p></div>
+  </div>
+</section>
+
+<section aria-labelledby="configs">
+  <h2 id="configs">Configurations</h2>
+  <div class="prose">
+    <p>Every configuration proves the full Action statement (Merkle path, value commitment, nullifier, spend authority, diversified address, old and new note commitments, and the enable flags) with zero knowledge, and verifies the proof. The BN254 variants replace Pallas with Grumpkin as the embedded curve: Sinsemilla, Poseidon and the fixed bases are re-derived over the BN254 scalar field with the same domain strings, so they measure the cost of the same statement on that cycle rather than Zcash's exact instance.</p>
+  </div>
+  <div class="config">
+    <article>
+      <h3><i class="sw s-zcash"></i>Zcash halo2 (production)</h3>
+      <dl><dt>Prover</dt><dd><span class="mono">orchard</span> 0.16 <span class="mono">create_proof</span>, post-NU6.2 circuit</dd>
+      <dt>Circuit</dt><dd>halo2 PLONKish, K = 11, one circuit instance per Action</dd>
+      <dt>Commitment</dt><dd>Vesta, halo2 IPA (transparent)</dd>
+      <dt>Transcript</dt><dd>BLAKE2b</dd></dl>
+    </article>
+    <article>
+      <h3><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</h3>
+      <dl><dt>Circuit</dt><dd>Orchard's halo2 layout and gates (10 advice, 8 fixed, Sinsemilla and range lookups) as a custom Honk flavor; Actions stacked in one trace</dd>
+      <dt>Proof system</dt><dd>Sumcheck with ZK (Libra, row masking), Gemini with shift-by-2, Shplonk</dd>
+      <dt>Commitment</dt><dd>Vesta, halo2's IPA with halo2's generators</dd>
+      <dt>Transcript</dt><dd>BLAKE2b, halo2 personalization</dd></dl>
+    </article>
+    <article>
+      <h3><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</h3>
+      <dl><dt>Circuit</dt><dd>the same layout ported to BN254/Grumpkin (25-word canonicity checks, re-derived fixed-base tables, BN254 overflow check)</dd>
+      <dt>Commitment</dt><dd>BN254, KZG (Ignition SRS)</dd>
+      <dt>Transcript</dt><dd>Poseidon2</dd></dl>
+    </article>
+    <article>
+      <h3><i class="sw s-ulp"></i>UltraHonk · Pasta</h3>
+      <dl><dt>Circuit</dt><dd>UltraHonk relations over F<sub>p</sub>, written with raw arithmetic, elliptic, lookup and range gates (Sinsemilla and fixed-base windows as lookup tables)</dd>
+      <dt>Proof system</dt><dd>UltraZK Oink, Sumcheck, Shplemini</dd>
+      <dt>Commitment</dt><dd>Vesta, halo2 IPA</dd>
+      <dt>Transcript</dt><dd>BLAKE2b</dd></dl>
+    </article>
+    <article>
+      <h3><i class="sw s-ulb"></i>UltraHonk · BN254</h3>
+      <dl><dt>Circuit</dt><dd>barretenberg's stdlib (<span class="mono">cycle_group</span>, ROM tables, <span class="mono">field_t</span>) over BN254/Grumpkin</dd>
+      <dt>Proof system</dt><dd>UltraZK, padded to a constant proof size (log n = 25)</dd>
+      <dt>Commitment</dt><dd>BN254, KZG</dd>
+      <dt>Transcript</dt><dd>Poseidon2</dd></dl>
+    </article>
+  </div>
+  {{LEGEND}}
+</section>
+
+<section aria-labelledby="prover">
+  <h2 id="prover">Prover time</h2>
+  <div class="figs">
+    <figure>{{CHART_PROVE}}<figcaption>Four threads<small>Median wall-clock time to prove, witness synthesis included (halo2's create_proof synthesizes internally). Log scale.</small></figcaption></figure>
+    <figure>{{CHART_PROVE_ST}}<figcaption>One thread<small>Same measurement with a single thread.</small></figcaption></figure>
+  </div>
+  {{TABLE_PROVE}}
+  {{TABLE_PROVE_ST}}
+</section>
+
+<section aria-labelledby="verifier">
+  <h2 id="verifier">Verifier time and proof size</h2>
+  <div class="figs">
+    <figure>{{CHART_VERIFY}}<figcaption>Verifier time<small>One proof, four threads. The IPA verifier is linear in the circuit size (an MSM over the generators); KZG ends in a pairing check. Log scale.</small></figcaption></figure>
+    <figure>{{CHART_SIZE}}<figcaption>Proof size<small>Curve points compressed to 32 bytes as halo2 serializes them; public inputs excluded.</small></figcaption></figure>
+  </div>
+  {{TABLE_VERIFY}}
+  {{TABLE_SIZE}}
+</section>
+
+<section aria-labelledby="circuits">
+  <h2 id="circuits">Circuit size</h2>
+  <div class="prose">
+    <p>Rows (halo2 layouts) or gates (Ultra) used, with the power-of-two trace size the prover runs over. halo2's layout packs one Action into 2<sup>11</sup> rows of a wide table (10 advice columns, 45 selectors); the Ultra circuits use 4 wires and need 6 (Pasta, hand-written gates) to 13 (BN254, stdlib) times as many rows.</p>
+  </div>
+  {{TABLE_ROWS}}
+  <div class="prose">
+    <p>Key generation (all precomputed polynomials and their commitments) for reference:</p>
+  </div>
+  {{TABLE_KEYGEN}}
+</section>
+
+<section aria-labelledby="notes">
+  <h2 id="notes">Method and caveats</h2>
+  <div class="prose">
+    <ul>
+      <li>Machine: 4 vCPU Intel Xeon at 2.1 GHz. barretenberg is built with the <span class="mono">default</span> CMake preset (release, clang); Zcash with <span class="mono">cargo --release</span>. Medians of 3 to 5 runs after a warm-up.</li>
+      <li>Zcash's prover builds one circuit per Action and proves all of them in one <span class="mono">create_proof</span>; its proof grows linearly with the number of Actions. barretenberg proves one circuit holding all Actions.</li>
+      <li>BN254 configurations rely on a trusted setup and give roughly 100 to 110 bits of security; the Pasta configurations are transparent with roughly 126 bits, as Zcash.</li>
+      <li>The UltraHonk BN254 prover pads Sumcheck and Gemini to log n = 25 so that recursive verifiers have a fixed shape; this adds rounds to the proof and to verification but little prover work.</li>
+      <li>Pasta multi-scalar multiplications use a full-width bucket method without the GLV endomorphism, matching the technique of <span class="mono">pasta_curves</span>' multiexp. Both curves admit GLV; using it, and batched affine bucket additions, are open optimizations for every Pasta configuration.</li>
+      <li>The halo2 IPA prover computes the first four rounds as MSMs over the original generators and folds the generators explicitly afterwards; its verifier, like halo2's, does one MSM over all generators.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <p>Code: <span class="mono">barretenberg/cpp/src/barretenberg/zcash</span> (curves in <span class="mono">ecc/curves/pasta</span>). The Zcash baseline and test vectors come from <span class="mono">barretenberg/cpp/scripts/zcash_orchard_reference</span>.</p>
+</footer>
+</div>
