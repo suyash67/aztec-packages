@@ -71,3 +71,15 @@ TEST(UltraPastaHonk, UnsatisfiedCircuitFails)
     auto proof = ultra_pasta_prove(instance, vk);
     EXPECT_FALSE(ultra_pasta_verify(vk, proof));
 }
+
+// The VK hash checked by the verifier is the full F_p value that Oink hashes into the transcript (not reduced modulo
+// the BN254 scalar field).
+TEST(UltraPastaHonk, VerificationKeyHashIsTranscriptHash)
+{
+    auto builder = small_circuit();
+    auto instance = std::make_shared<UltraPastaProverInstance>(builder);
+    auto vk = std::make_shared<UltraPastaZKFlavor::VerificationKey>(instance->get_precomputed());
+    const UltraPastaZKFlavor::VKAndHash vk_and_hash(vk);
+    EXPECT_EQ(vk_and_hash.hash, FF(vk->hash_with_origin_tagging(OriginTag())));
+    EXPECT_EQ(uint256_t(vk_and_hash.hash), UltraPastaZKFlavor::HashFunction::hash(vk->to_field_elements()));
+}

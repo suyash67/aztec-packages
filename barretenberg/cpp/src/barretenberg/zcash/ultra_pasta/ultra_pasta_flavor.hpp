@@ -66,7 +66,17 @@ class UltraPastaZKFlavor : public UltraZKFlavor {
 
     using ProverPolynomials = ProverPolynomialsBase<AllEntities<Polynomial>, AllValues, Polynomial>;
     using PrecomputedData = PrecomputedData_<Polynomial, NUM_PRECOMPUTED_ENTITIES>;
-    using VerificationKey = NativeVerificationKey_<PrecomputedEntities<Commitment>, Codec, HashFunction, CommitmentKey>;
+    /**
+     * @brief The native VK, with its hash as an element of F_p (the base class returns a BN254 scalar, which would
+     * reduce the BLAKE2b digest modulo r).
+     */
+    class VerificationKey
+        : public NativeVerificationKey_<PrecomputedEntities<Commitment>, Codec, HashFunction, CommitmentKey> {
+      public:
+        using Base = NativeVerificationKey_<PrecomputedEntities<Commitment>, Codec, HashFunction, CommitmentKey>;
+        using Base::Base;
+        FF hash() const { return FF(HashFunction::hash(this->to_field_elements())); }
+    };
     using VKAndHash = VKAndHash_<FF, VerificationKey>;
     using PartiallyEvaluatedMultivariates =
         PartiallyEvaluatedMultivariatesBase<AllEntities<Polynomial>, ProverPolynomials, Polynomial>;
