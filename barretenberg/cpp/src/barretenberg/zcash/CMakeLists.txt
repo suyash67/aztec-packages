@@ -1,1 +1,1 @@
-barretenberg_module(zcash ecc crypto_poseidon2 polynomials commitment_schemes sumcheck honk stdlib_primitives)
+barretenberg_module(zcash ecc crypto_poseidon2 polynomials commitment_schemes sumcheck honk stdlib_primitives ultra_honk circuit_checker)

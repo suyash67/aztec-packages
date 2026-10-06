@@ -55,7 +55,13 @@ template <typename Cycle> struct Orchard {
         AffineElement q_merkle_crh;
         AffineElement q_note_commit;
         AffineElement q_commit_ivk;
+    };
 
+    /**
+     * @brief Window tables of the fixed bases for halo2's fixed-base multiplication (built on first use: for cycles
+     * other than Pasta the z-values are searched for, which is slow).
+     */
+    struct FixedBases {
         FixedBase<Cycle> fb_spend_auth_g;
         FixedBase<Cycle> fb_value_commit_r;
         FixedBase<Cycle> fb_note_commit_r;
@@ -77,6 +83,16 @@ template <typename Cycle> struct Orchard {
             c.q_merkle_crh = Sins::Q(MERKLE_CRH_DOMAIN);
             c.q_note_commit = Sins::Q(std::string(NOTE_COMMIT_DOMAIN) + "-M");
             c.q_commit_ivk = Sins::Q(std::string(COMMIT_IVK_DOMAIN) + "-M");
+            return c;
+        }();
+        return c;
+    }
+
+    static const FixedBases& fixed_bases()
+    {
+        static const FixedBases f = []() {
+            const auto& k = constants();
+            FixedBases f;
             auto zs = [&](const AffineElement& g, size_t windows, std::span<const uint64_t> published) {
                 if constexpr (std::is_same_v<Cycle, PastaCycle>) {
                     return std::vector<uint64_t>(published.begin(), published.end());
@@ -86,21 +102,21 @@ template <typename Cycle> struct Orchard {
                 }
             };
             using namespace orchard_constants;
-            c.fb_spend_auth_g =
-                FixedBase<Cycle>::make(c.spend_auth_g, NUM_WINDOWS, zs(c.spend_auth_g, NUM_WINDOWS, SPEND_AUTH_G_Z));
-            c.fb_value_commit_r = FixedBase<Cycle>::make(
-                c.value_commit_r, NUM_WINDOWS, zs(c.value_commit_r, NUM_WINDOWS, VALUE_COMMIT_R_Z));
-            c.fb_note_commit_r =
-                FixedBase<Cycle>::make(c.note_commit_r, NUM_WINDOWS, zs(c.note_commit_r, NUM_WINDOWS, NOTE_COMMIT_R_Z));
-            c.fb_commit_ivk_r =
-                FixedBase<Cycle>::make(c.commit_ivk_r, NUM_WINDOWS, zs(c.commit_ivk_r, NUM_WINDOWS, COMMIT_IVK_R_Z));
-            c.fb_nullifier_k =
-                FixedBase<Cycle>::make(c.nullifier_k, NUM_WINDOWS, zs(c.nullifier_k, NUM_WINDOWS, NULLIFIER_K_Z));
-            c.fb_value_commit_v = FixedBase<Cycle>::make(
-                c.value_commit_v, NUM_WINDOWS_SHORT, zs(c.value_commit_v, NUM_WINDOWS_SHORT, VALUE_COMMIT_V_Z));
-            return c;
+            f.fb_spend_auth_g =
+                FixedBase<Cycle>::make(k.spend_auth_g, NUM_WINDOWS, zs(k.spend_auth_g, NUM_WINDOWS, SPEND_AUTH_G_Z));
+            f.fb_value_commit_r = FixedBase<Cycle>::make(
+                k.value_commit_r, NUM_WINDOWS, zs(k.value_commit_r, NUM_WINDOWS, VALUE_COMMIT_R_Z));
+            f.fb_note_commit_r =
+                FixedBase<Cycle>::make(k.note_commit_r, NUM_WINDOWS, zs(k.note_commit_r, NUM_WINDOWS, NOTE_COMMIT_R_Z));
+            f.fb_commit_ivk_r =
+                FixedBase<Cycle>::make(k.commit_ivk_r, NUM_WINDOWS, zs(k.commit_ivk_r, NUM_WINDOWS, COMMIT_IVK_R_Z));
+            f.fb_nullifier_k =
+                FixedBase<Cycle>::make(k.nullifier_k, NUM_WINDOWS, zs(k.nullifier_k, NUM_WINDOWS, NULLIFIER_K_Z));
+            f.fb_value_commit_v = FixedBase<Cycle>::make(
+                k.value_commit_v, NUM_WINDOWS_SHORT, zs(k.value_commit_v, NUM_WINDOWS_SHORT, VALUE_COMMIT_V_Z));
+            return f;
         }();
-        return c;
+        return f;
     }
 
     // P* = I2LEBSP_255(x(P)) || ỹ(P)

@@ -55,7 +55,7 @@ TEST(ZcashOrchard, GeneratorsMatchOrchard)
 
 TEST(ZcashOrchard, FixedBaseLagrangeCoefficientsInterpolateWindowTable)
 {
-    const auto& fb = PastaOrchard::constants().fb_spend_auth_g;
+    const auto& fb = PastaOrchard::fixed_bases().fb_spend_auth_g;
     for (size_t w : { size_t{ 0 }, size_t{ 1 }, size_t{ 84 } }) {
         for (size_t k = 0; k < 8; ++k) {
             Fp x = 0;

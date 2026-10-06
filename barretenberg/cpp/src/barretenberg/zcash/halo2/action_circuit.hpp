@@ -70,7 +70,7 @@ template <typename Cycle> class ActionCircuit {
     static void synthesize_action(C& c, const Witness& w, size_t pi_offset, CircuitVersion version)
     {
         Builder& b = c.builder();
-        const auto& k = O::constants();
+        const auto& fb = O::fixed_bases();
 
         // Witness private inputs that are used across multiple checks.
         Cell psi_old = c.assign_free_advice(0, w.psi_old);
@@ -90,8 +90,8 @@ template <typename Cycle> class ActionCircuit {
         Cell magnitude = c.assign_free_advice(9, FF(magnitude_u64));
         Cell sign = c.assign_free_advice(9, negative ? -FF(1) : FF(1));
         {
-            Point commitment = c.mul_fixed_short(magnitude, sign, k.fb_value_commit_v);
-            Point blind = c.mul_fixed_full(w.rcv, k.fb_value_commit_r);
+            Point commitment = c.mul_fixed_short(magnitude, sign, fb.fb_value_commit_v);
+            Point blind = c.mul_fixed_full(w.rcv, fb.fb_value_commit_r);
             Point cv_net = c.add(commitment, blind);
             b.constrain_instance(cv_net.x, pi_offset + CV_NET_X);
             b.constrain_instance(cv_net.y, pi_offset + CV_NET_Y);
@@ -101,7 +101,7 @@ template <typename Cycle> class ActionCircuit {
         Cell nf_old = [&]() {
             Cell hash = c.poseidon_hash(nk, rho_old);
             Cell scalar = c.add_field(hash, psi_old);
-            Point product = c.mul_fixed_base_field(scalar, k.fb_nullifier_k);
+            Point product = c.mul_fixed_base_field(scalar, fb.fb_nullifier_k);
             Point nf = c.add(cm_old, product);
             b.constrain_instance(nf.x, pi_offset + NF_OLD);
             return nf.x;
@@ -109,7 +109,7 @@ template <typename Cycle> class ActionCircuit {
 
         // Spend authority.
         {
-            Point alpha_commitment = c.mul_fixed_full(w.alpha, k.fb_spend_auth_g);
+            Point alpha_commitment = c.mul_fixed_full(w.alpha, fb.fb_spend_auth_g);
             Point rk = c.add(alpha_commitment, ak_P);
             b.constrain_instance(rk.x, pi_offset + RK_X);
             b.constrain_instance(rk.y, pi_offset + RK_Y);
@@ -206,7 +206,8 @@ template <typename Cycle> class ActionCircuit {
         MessagePiece dp = c.from_subpieces(cfg, { { d_0.cell.value, 9 }, d_1 });
 
         const auto& k = O::constants();
-        auto [commitment, zs] = c.commit(cfg, k.q_commit_ivk, k.fb_commit_ivk_r, { a, bp, cp, dp }, rivk);
+        const auto& fb = O::fixed_bases();
+        auto [commitment, zs] = c.commit(cfg, k.q_commit_ivk, fb.fb_commit_ivk_r, { a, bp, cp, dp }, rivk);
         const Cell ivk = commitment.x;
         const Cell z13_a = zs[0][13];
         const Cell z13_c = zs[2][13];
@@ -321,7 +322,8 @@ template <typename Cycle> class ActionCircuit {
         RangeConstrainedCell d_1_cell = y_canonicity(c, pk_d.y, d_1);
 
         const auto& k = O::constants();
-        auto [cm, zs] = c.commit(cfg, k.q_note_commit, k.fb_note_commit_r, { a, bp, cp, dp, ep, fp, gp, hp }, rcm);
+        const auto& fb = O::fixed_bases();
+        auto [cm, zs] = c.commit(cfg, k.q_note_commit, fb.fb_note_commit_r, { a, bp, cp, dp, ep, fp, gp, hp }, rcm);
         const Cell z13_a = zs[0][13];
         const Cell z13_c = zs[2][13];
         const Cell z1_d = zs[3][1];
