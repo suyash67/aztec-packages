@@ -290,7 +290,7 @@ template <class Curve> class ScalarMultiplicationSafeModeTest : public ::testing
     }
 };
 
-using CurveTypes = ::testing::Types<bb::curve::BN254, bb::curve::Grumpkin>;
+using CurveTypes = ::testing::Types<bb::curve::BN254, bb::curve::Grumpkin, bb::curve::Pallas, bb::curve::Vesta>;
 TYPED_TEST_SUITE(ScalarMultiplicationSafeModeTest, CurveTypes);
 
 TYPED_TEST(ScalarMultiplicationSafeModeTest, DuplicatePoints)

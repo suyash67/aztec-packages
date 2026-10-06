@@ -14,12 +14,14 @@
  *   - BN254:     Fq (base field), Fr (scalar field)
  *   - secp256k1: Fq (base field), Fr (scalar field)
  *   - secp256r1: Fq (base field), Fr (scalar field)
+ *   - Pasta:     Fp (Pallas base / Vesta scalar), Fq (Pallas scalar / Vesta base)
  *
  * Note: Grumpkin reuses BN254's fq/fr (swapped), so no separate config is needed.
  */
 
 #include "barretenberg/ecc/curves/bn254/fq.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/ecc/curves/secp256k1/secp256k1.hpp"
 #include "barretenberg/ecc/curves/secp256r1/secp256r1.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
@@ -111,6 +113,28 @@ struct Secp256r1FrTestConfig {
         "115792089210356248762697446949407573529996955224135760342422259061068512044369";
     static constexpr bool has_cube_root = false;
     static constexpr bool has_primitive_root = false;
+};
+
+struct PastaFpTestConfig {
+    using Params = pasta::FpParams;
+    using Field = pasta::fp;
+    // Pallas base field / Vesta scalar field: 2^254 + 45560315531419706090280762371685220353
+    // Reference: https://github.com/zcash/pasta
+    static constexpr const char* expected_modulus_decimal =
+        "28948022309329048855892746252171976963363056481941560715954676764349967630337";
+    static constexpr bool has_cube_root = true;
+    static constexpr bool has_primitive_root = true;
+};
+
+struct PastaFqTestConfig {
+    using Params = pasta::FqParams;
+    using Field = pasta::fq;
+    // Pallas scalar field / Vesta base field: 2^254 + 45560315531506369815346746415080538113
+    // Reference: https://github.com/zcash/pasta
+    static constexpr const char* expected_modulus_decimal =
+        "28948022309329048855892746252171976963363056481941647379679742748393362948097";
+    static constexpr bool has_cube_root = true;
+    static constexpr bool has_primitive_root = true;
 };
 
 } // namespace
@@ -348,6 +372,8 @@ using FieldTestTypes = ::testing::Types<Bn254FqTestConfig,
                                         Secp256k1FqTestConfig,
                                         Secp256k1FrTestConfig,
                                         Secp256r1FqTestConfig,
-                                        Secp256r1FrTestConfig>;
+                                        Secp256r1FrTestConfig,
+                                        PastaFpTestConfig,
+                                        PastaFqTestConfig>;
 
 INSTANTIATE_TYPED_TEST_SUITE_P(AllFields, FieldConstantsTest, FieldTestTypes);

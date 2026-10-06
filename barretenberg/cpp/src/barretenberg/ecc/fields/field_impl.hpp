@@ -777,6 +777,11 @@ template <class T> constexpr uint64_t field<T>::is_msb_set_word() const noexcept
 
 template <class T> constexpr bool field<T>::is_zero() const noexcept
 {
+    if constexpr (MODULUS_IS_255_BITS) {
+        // an unreduced 256-bit value may be any multiple of p below 2^256
+        const field reduced = reduce_255();
+        return (reduced.data[0] | reduced.data[1] | reduced.data[2] | reduced.data[3]) == 0;
+    }
     // Use bitwise OR (not || or && operator) so neither chain short-circuits: the running time must not depend on
     // whether the value is zero, on which limb of the modulus first matches/diverges, or on which form
     // (raw 0 vs the modulus) is being tested.

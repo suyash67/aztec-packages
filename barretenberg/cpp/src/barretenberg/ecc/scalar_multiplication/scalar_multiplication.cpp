@@ -643,6 +643,22 @@ template curve::BN254::Element pippenger_unsafe<curve::BN254>(PolynomialSpan<con
 
 template class bb::scalar_multiplication::legacy::MSM<bb::curve::Grumpkin>;
 template class bb::scalar_multiplication::legacy::MSM<bb::curve::BN254>;
+namespace bb::scalar_multiplication::legacy {
+template curve::Pallas::Element pippenger<curve::Pallas>(PolynomialSpan<const curve::Pallas::ScalarField> scalars,
+                                                         std::span<const curve::Pallas::AffineElement> points,
+                                                         bool handle_edge_cases = true) noexcept;
+template curve::Pallas::Element pippenger_unsafe<curve::Pallas>(
+    PolynomialSpan<const curve::Pallas::ScalarField> scalars, std::span<const curve::Pallas::AffineElement> points);
+} // namespace bb::scalar_multiplication::legacy
+template class bb::scalar_multiplication::legacy::MSM<bb::curve::Pallas>;
+namespace bb::scalar_multiplication::legacy {
+template curve::Vesta::Element pippenger<curve::Vesta>(PolynomialSpan<const curve::Vesta::ScalarField> scalars,
+                                                       std::span<const curve::Vesta::AffineElement> points,
+                                                       bool handle_edge_cases = true) noexcept;
+template curve::Vesta::Element pippenger_unsafe<curve::Vesta>(PolynomialSpan<const curve::Vesta::ScalarField> scalars,
+                                                              std::span<const curve::Vesta::AffineElement> points);
+} // namespace bb::scalar_multiplication::legacy
+template class bb::scalar_multiplication::legacy::MSM<bb::curve::Vesta>;
 
 // ===================================================================================
 // Public MSM facade implementation (see scalar_multiplication.hpp). Routes to the
@@ -662,10 +678,16 @@ typename Curve::Element pippenger(PolynomialSpan<const typename Curve::ScalarFie
                                   bool handle_edge_cases,
                                   size_t dedup_info) noexcept
 {
-    if (use_legacy_msm()) {
+    if constexpr (!Curve::Group::USE_ENDOMORPHISM) {
+        // The `_fast` pipeline is tuned around GLV-split scalars; curves without a usable 128-bit GLV split (Pasta)
+        // always take the legacy Pippenger.
         return legacy::pippenger<Curve>(scalars, points, handle_edge_cases);
+    } else {
+        if (use_legacy_msm()) {
+            return legacy::pippenger<Curve>(scalars, points, handle_edge_cases);
+        }
+        return pippenger_fast<Curve>(scalars, points, handle_edge_cases, dedup_info);
     }
-    return pippenger_fast<Curve>(scalars, points, handle_edge_cases, dedup_info);
 }
 
 template <typename Curve>
@@ -673,10 +695,14 @@ typename Curve::Element pippenger_unsafe(PolynomialSpan<const typename Curve::Sc
                                          std::span<const typename Curve::AffineElement> points,
                                          size_t dedup_info) noexcept
 {
-    if (use_legacy_msm()) {
+    if constexpr (!Curve::Group::USE_ENDOMORPHISM) {
         return legacy::pippenger_unsafe<Curve>(scalars, points);
+    } else {
+        if (use_legacy_msm()) {
+            return legacy::pippenger_unsafe<Curve>(scalars, points);
+        }
+        return pippenger_unsafe_fast<Curve>(scalars, points, dedup_info);
     }
-    return pippenger_unsafe_fast<Curve>(scalars, points, dedup_info);
 }
 
 template <typename Curve>
@@ -695,7 +721,7 @@ std::vector<typename Curve::AffineElement> MSM<Curve>::batch_multi_scalar_mul(
     bool handle_edge_cases,
     std::span<const uint32_t> dedup_infos) noexcept
 {
-    if (use_legacy_msm()) {
+    if (!Curve::Group::USE_ENDOMORPHISM || use_legacy_msm()) {
         // Adapt the rewrite's (single shared points + per-MSM PolynomialSpan) shape to the
         // legacy per-MSM (points span, scalar span) shape. dedup_hints are dropped.
         const size_t k = scalars.size();
@@ -711,7 +737,11 @@ std::vector<typename Curve::AffineElement> MSM<Curve>::batch_multi_scalar_mul(
         }
         return legacy::MSM<Curve>::batch_multi_scalar_mul(legacy_points, legacy_scalars, handle_edge_cases);
     }
-    return MSM_fast<Curve>::batch_multi_scalar_mul(points, scalars, handle_edge_cases, dedup_infos);
+    if constexpr (Curve::Group::USE_ENDOMORPHISM) {
+        return MSM_fast<Curve>::batch_multi_scalar_mul(points, scalars, handle_edge_cases, dedup_infos);
+    } else {
+        return {};
+    }
 }
 
 template curve::BN254::Element pippenger<curve::BN254>(PolynomialSpan<const curve::BN254::ScalarField> scalars,
@@ -731,5 +761,22 @@ template curve::Grumpkin::Element pippenger_unsafe<curve::Grumpkin>(
     size_t dedup_info) noexcept;
 template class MSM<curve::BN254>;
 template class MSM<curve::Grumpkin>;
+template curve::Pallas::Element pippenger<curve::Pallas>(PolynomialSpan<const curve::Pallas::ScalarField> scalars,
+                                                         std::span<const curve::Pallas::AffineElement> points,
+                                                         bool handle_edge_cases,
+                                                         size_t dedup_info) noexcept;
+template curve::Pallas::Element pippenger_unsafe<curve::Pallas>(
+    PolynomialSpan<const curve::Pallas::ScalarField> scalars,
+    std::span<const curve::Pallas::AffineElement> points,
+    size_t dedup_info) noexcept;
+template class MSM<curve::Pallas>;
+template curve::Vesta::Element pippenger<curve::Vesta>(PolynomialSpan<const curve::Vesta::ScalarField> scalars,
+                                                       std::span<const curve::Vesta::AffineElement> points,
+                                                       bool handle_edge_cases,
+                                                       size_t dedup_info) noexcept;
+template curve::Vesta::Element pippenger_unsafe<curve::Vesta>(PolynomialSpan<const curve::Vesta::ScalarField> scalars,
+                                                              std::span<const curve::Vesta::AffineElement> points,
+                                                              size_t dedup_info) noexcept;
+template class MSM<curve::Vesta>;
 
 } // namespace bb::scalar_multiplication

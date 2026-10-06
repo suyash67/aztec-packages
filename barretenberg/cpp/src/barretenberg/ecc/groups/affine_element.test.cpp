@@ -4,6 +4,7 @@
 #include "barretenberg/common/test.hpp"
 #include "barretenberg/ecc/curves/bn254/g1.hpp"
 #include "barretenberg/ecc/curves/grumpkin/grumpkin.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/ecc/curves/secp256k1/secp256k1.hpp"
 #include "barretenberg/ecc/curves/secp256r1/secp256r1.hpp"
 #include "barretenberg/ecc/fields/field_conversion.hpp"
@@ -665,7 +666,7 @@ template <typename G1> class TestAffineElement : public testing::Test {
 };
 
 // using TestTypes = testing::Types<bb::g1>;
-using TestTypes = testing::Types<bb::g1, grumpkin::g1, secp256k1::g1, secp256r1::g1>;
+using TestTypes = testing::Types<bb::g1, grumpkin::g1, secp256k1::g1, secp256r1::g1, pallas::g1, vesta::g1>;
 } // namespace
 
 TYPED_TEST_SUITE(TestAffineElement, TestTypes);
@@ -713,7 +714,9 @@ TYPED_TEST(TestAffineElement, FixedInfinityPoint)
 
 TYPED_TEST(TestAffineElement, PointCompressionUnsafe)
 {
-    if constexpr (TypeParam::Fq::modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
+    // from_compressed_unsafe is only defined for 256-bit base fields (e.g. secp256k1); the Pasta fields are "large"
+    // (>= 2^254) but leave bit 255 free.
+    if constexpr ((TypeParam::Fq::modulus >> 255) == uint256_t(1)) {
         TestFixture::test_point_compression_unsafe();
     } else {
         GTEST_SKIP();

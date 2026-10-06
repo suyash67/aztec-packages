@@ -18,6 +18,7 @@
 
 #include "barretenberg/ecc/curves/bn254/bn254.hpp"
 #include "barretenberg/ecc/curves/grumpkin/grumpkin.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
 
 #include "./bitvector.hpp"
@@ -84,6 +85,8 @@ template <typename Curve> class MSM {
         static const AffineElement offset_generator = []() {
             if constexpr (std::same_as<typename Curve::Group, bb::g1>) {
                 return get_precomputed_generators<typename Curve::Group, "ECCVM_OFFSET_GENERATOR", 1>()[0];
+            } else if constexpr (std::same_as<Curve, curve::Pallas> || std::same_as<Curve, curve::Vesta>) {
+                return Curve::Group::derive_generators("DEFAULT_DOMAIN_SEPARATOR", 1)[0];
             } else {
                 return get_precomputed_generators<typename Curve::Group, "DEFAULT_DOMAIN_SEPARATOR", 8>()[0];
             }
@@ -401,6 +404,8 @@ typename Curve::Element pippenger_unsafe(PolynomialSpan<const typename Curve::Sc
 
 extern template class MSM<curve::Grumpkin>;
 extern template class MSM<curve::BN254>;
+extern template class MSM<curve::Pallas>;
+extern template class MSM<curve::Vesta>;
 
 } // namespace bb::scalar_multiplication::legacy
 
@@ -445,6 +450,23 @@ extern template curve::BN254::Element pippenger_unsafe<curve::BN254>(
 extern template curve::Grumpkin::Element pippenger_unsafe<curve::Grumpkin>(
     PolynomialSpan<const curve::Grumpkin::ScalarField> scalars,
     std::span<const curve::Grumpkin::AffineElement> points,
+    size_t dedup_info) noexcept;
+extern template curve::Pallas::Element pippenger<curve::Pallas>(
+    PolynomialSpan<const curve::Pallas::ScalarField> scalars,
+    std::span<const curve::Pallas::AffineElement> points,
+    bool handle_edge_cases,
+    size_t dedup_info) noexcept;
+extern template curve::Pallas::Element pippenger_unsafe<curve::Pallas>(
+    PolynomialSpan<const curve::Pallas::ScalarField> scalars,
+    std::span<const curve::Pallas::AffineElement> points,
+    size_t dedup_info) noexcept;
+extern template curve::Vesta::Element pippenger<curve::Vesta>(PolynomialSpan<const curve::Vesta::ScalarField> scalars,
+                                                              std::span<const curve::Vesta::AffineElement> points,
+                                                              bool handle_edge_cases,
+                                                              size_t dedup_info) noexcept;
+extern template curve::Vesta::Element pippenger_unsafe<curve::Vesta>(
+    PolynomialSpan<const curve::Vesta::ScalarField> scalars,
+    std::span<const curve::Vesta::AffineElement> points,
     size_t dedup_info) noexcept;
 
 template <typename Curve> class MSM {

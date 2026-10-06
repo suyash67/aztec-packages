@@ -1,6 +1,7 @@
 #include "barretenberg/ecc/curves/bn254/g1.hpp"
 #include "barretenberg/ecc/curves/bn254/g2.hpp"
 #include "barretenberg/ecc/curves/grumpkin/grumpkin.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/ecc/curves/secp256k1/secp256k1.hpp"
 #include "barretenberg/ecc/curves/secp256r1/secp256r1.hpp"
 #include <gtest/gtest.h>
@@ -406,7 +407,7 @@ template <typename G_> class TestElement : public testing::Test {
     }
 };
 
-using TestTypes = testing::Types<bb::g1, bb::g2, grumpkin::g1, secp256k1::g1, secp256r1::g1>;
+using TestTypes = testing::Types<bb::g1, bb::g2, grumpkin::g1, secp256k1::g1, secp256r1::g1, pallas::g1, vesta::g1>;
 } // namespace
 
 TYPED_TEST_SUITE(TestElement, TestTypes);

@@ -16,6 +16,7 @@
 
 #include "barretenberg/ecc/curves/bn254/fq.hpp"
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/ecc/curves/secp256k1/secp256k1.hpp"
 #include "barretenberg/ecc/curves/secp256r1/secp256r1.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
@@ -68,13 +69,14 @@ template <typename F> class PrimeFieldTest : public ::testing::Test {
 };
 
 // Register all prime field types
-using PrimeFieldTypes = ::testing::Types<bb::fq, bb::fr, secp256k1::fq, secp256k1::fr, secp256r1::fq, secp256r1::fr>;
+using PrimeFieldTypes =
+    ::testing::Types<bb::fq, bb::fr, secp256k1::fq, secp256k1::fr, secp256r1::fq, secp256r1::fr, pasta::fp, pasta::fq>;
 
 // Fields where sqrt() works correctly
-using SqrtFieldTypes = ::testing::Types<bb::fq, bb::fr, secp256k1::fq, secp256r1::fq>;
+using SqrtFieldTypes = ::testing::Types<bb::fq, bb::fr, secp256k1::fq, secp256r1::fq, pasta::fp, pasta::fq>;
 
 // Fields that have cube_root_of_unity() defined
-using CubeRootFieldTypes = ::testing::Types<bb::fq, bb::fr, secp256k1::fq, secp256k1::fr>;
+using CubeRootFieldTypes = ::testing::Types<bb::fq, bb::fr, secp256k1::fq, secp256k1::fr, pasta::fp, pasta::fq>;
 
 // Fields whose modulus is 256 bits.
 using TwoFiftySixBitFieldTypes = ::testing::Types<secp256k1::fq, secp256k1::fr>;
@@ -600,8 +602,8 @@ TYPED_TEST(PrimeFieldTest, BoundaryArithmetic)
             p_minus_offset.self_from_montgomery_form_reduced();
             a = p_minus_offset + two_256_minus_p_elt;
 
-            // Verify internal representation is 2^256 - offset
-            if (offset == 1) {
+            // Verify internal representation is 2^256 - offset (255-bit moduli keep values fully reduced instead)
+            if (offset == 1 && !F::MODULUS_IS_255_BITS) {
                 for (size_t i = 0; i < 4; ++i) {
                     EXPECT_EQ(a.data[i], 0xFFFFFFFFFFFFFFFFULL);
                 }

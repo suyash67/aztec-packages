@@ -222,7 +222,9 @@ constexpr uint64_t field<T>::square_accumulate([[maybe_unused]] const uint64_t a
  */
 template <class T> constexpr field<T> field<T>::reduce() const noexcept
 {
-    if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
+    if constexpr (MODULUS_IS_255_BITS) {
+        return reduce_255();
+    } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         uint256_t val{ data[0], data[1], data[2], data[3] };
         if (val >= modulus) {
             val -= modulus;
@@ -249,6 +251,19 @@ template <class T> constexpr field<T> field<T>::reduce() const noexcept
     };
 }
 
+/**
+ * @brief Full reduction for moduli in [2^254, 2^255): any 256-bit value is below 4p, so at most three subtractions.
+ */
+template <class T> constexpr field<T> field<T>::reduce_255() const noexcept
+{
+    static_assert(MODULUS_IS_255_BITS);
+    uint256_t val{ data[0], data[1], data[2], data[3] };
+    while (val >= modulus) {
+        val -= modulus;
+    }
+    return { val.data[0], val.data[1], val.data[2], val.data[3] };
+}
+
 ///////////////////////
 ///// ADD and SUB /////
 ///////////////////////
@@ -259,7 +274,25 @@ template <class T> constexpr field<T> field<T>::reduce() const noexcept
 
 template <class T> constexpr field<T> field<T>::add(const field& other) const noexcept
 {
-    if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
+    if constexpr (MODULUS_IS_255_BITS) {
+        // Inputs are normally reduced, so the sum is below 2p < 2^256; the carry branch only handles callers that
+        // built a field element from raw, unreduced limbs.
+        uint64_t r0 = data[0] + other.data[0];
+        uint64_t c = r0 < data[0];
+        auto r1 = addc(data[1], other.data[1], c, c);
+        auto r2 = addc(data[2], other.data[2], c, c);
+        auto r3 = addc(data[3], other.data[3], c, c);
+        while (c != 0) {
+            uint64_t b = 0;
+            r0 = sbb(r0, modulus.data[0], b, b);
+            r1 = sbb(r1, modulus.data[1], b, b);
+            r2 = sbb(r2, modulus.data[2], b, b);
+            r3 = sbb(r3, modulus.data[3], b, b);
+            // a borrow out of 2^256 cancels the carry into 2^256
+            c = (b != 0) ? 0 : c;
+        }
+        return field{ r0, r1, r2, r3 }.reduce_255();
+    } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         uint64_t r0 = data[0] + other.data[0];
         uint64_t c = r0 < data[0];
         auto r1 = addc(data[1], other.data[1], c, c);
@@ -328,7 +361,18 @@ template <class T> constexpr field<T> field<T>::subtract(const field& other) con
     uint64_t r3 = sbb(data[3], other.data[3], borrow, borrow);
 
     // recall that borrow is in the size-2 set {0, 2^64 - 1}.
-    if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
+    if constexpr (MODULUS_IS_255_BITS) {
+        // add p until the 2^256 borrow is cancelled by a carry, then fully reduce
+        while (borrow != 0) {
+            uint64_t carry = 0;
+            r0 = addc(r0, modulus.data[0], carry, carry);
+            r1 = addc(r1, modulus.data[1], carry, carry);
+            r2 = addc(r2, modulus.data[2], carry, carry);
+            r3 = addc(r3, modulus.data[3], carry, carry);
+            borrow = (carry != 0) ? 0 : borrow;
+        }
+        return field{ r0, r1, r2, r3 }.reduce_255();
+    } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         // add the modulus if borrow != 0, i.e., if other > self as uint256_t.
         r0 += (modulus.data[0] & borrow);
         uint64_t carry = r0 < (modulus.data[0] & borrow);
@@ -709,7 +753,9 @@ template <class T> constexpr std::array<uint64_t, WASM_NUM_LIMBS> field<T>::wasm
 #endif
 template <class T> constexpr field<T> field<T>::montgomery_mul(const field& other) const noexcept
 {
-    if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
+    if constexpr (MODULUS_IS_255_BITS) {
+        return montgomery_mul_big(other).reduce_255();
+    } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         return montgomery_mul_big(other);
     }
 #if defined(__SIZEOF_INT128__) && !defined(__wasm__)
@@ -904,7 +950,9 @@ template <class T> constexpr field<T> field<T>::montgomery_mul(const field& othe
  */
 template <class T> constexpr field<T> field<T>::montgomery_square() const noexcept
 {
-    if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
+    if constexpr (MODULUS_IS_255_BITS) {
+        return montgomery_mul_big(*this).reduce_255();
+    } else if constexpr (modulus.data[3] >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) {
         return montgomery_mul_big(*this);
     }
 #if defined(__SIZEOF_INT128__) && !defined(__wasm__)

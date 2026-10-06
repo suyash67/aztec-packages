@@ -233,6 +233,11 @@ template <class Params_> struct alignas(32) field {
 
     static constexpr uint256_t modulus =
         uint256_t{ Params::modulus_0, Params::modulus_1, Params::modulus_2, Params::modulus_3 };
+    // Moduli in [2^254, 2^255) (e.g. the Pasta fields) take the large-modulus code path but, unlike 256-bit moduli,
+    // satisfy 2p < 2^256, so a single conditional subtraction does not reduce an arbitrary 256-bit value. For these
+    // moduli every arithmetic operation keeps its output fully reduced in [0, p).
+    static constexpr bool MODULUS_IS_255_BITS =
+        (Params::modulus_3 >= MODULUS_TOP_LIMB_LARGE_THRESHOLD) && ((Params::modulus_3 >> 63) == 0);
 #if defined(__SIZEOF_INT128__) && !defined(__wasm__)
     static constexpr uint256_t r_squared_uint{
         Params_::r_squared_0, Params_::r_squared_1, Params_::r_squared_2, Params_::r_squared_3
@@ -620,6 +625,8 @@ template <class Params_> struct alignas(32) field {
                                                           uint64_t& carry_lo,
                                                           uint64_t& carry_hi) noexcept;
     BB_INLINE constexpr field reduce() const noexcept;
+    // Subtract the modulus until the value is in [0, p). Only used for 255-bit moduli (see MODULUS_IS_255_BITS).
+    BB_INLINE constexpr field reduce_255() const noexcept;
     BB_INLINE constexpr field add(const field& other) const noexcept;
     BB_INLINE constexpr field subtract(const field& other) const noexcept;
 
