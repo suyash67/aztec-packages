@@ -115,6 +115,7 @@ add_subdirectory(barretenberg/translator_vm)
 add_subdirectory(barretenberg/ultra_honk)
 add_subdirectory(barretenberg/vm2_stub)
 add_subdirectory(barretenberg/wasi)
+add_subdirectory(barretenberg/zcash)
 
 if(NOT BB_LITE)
     add_subdirectory(barretenberg/lmdblib)

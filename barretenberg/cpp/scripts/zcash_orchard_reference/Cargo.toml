@@ -1,0 +1,15 @@
+[package]
+name = "orchard_bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+orchard = { path = "orchard", features = ["circuit", "multicore"] }
+rand = { version = "0.10", features = ["std", "std_rng", "sys_rng"] }
+serde_json = "1"
+pasta_curves = "0.6"
+group = "0.14"
+ff = "0.14"
+
+[profile.release]
+debug = false

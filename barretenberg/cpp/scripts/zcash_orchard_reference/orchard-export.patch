@@ -1,0 +1,94 @@
+diff --git a/src/builder.rs b/src/builder.rs
+index 8f2aee7..2983e72 100644
+--- a/src/builder.rs
++++ b/src/builder.rs
+@@ -1568,6 +1568,11 @@ pub struct Unproven {
+ 
+ #[cfg(feature = "circuit")]
+ impl<S: InProgressSignatures> InProgress<Unproven, S> {
++    /// Exposes the Action circuits for test-vector export (local patch).
++    pub fn export_circuits(&self) -> &[crate::circuit::Circuit] {
++        &self.proof.circuits
++    }
++
+     /// Creates the proof for this bundle.
+     ///
+     /// # Errors
+diff --git a/src/circuit.rs b/src/circuit.rs
+index 276bf91..71e1956 100644
+--- a/src/circuit.rs
++++ b/src/circuit.rs
+@@ -2117,3 +2117,73 @@ mod tests {
+         }
+     }
+ }
++
++// ---------------------------------------------------------------------------------------------
++// Test-vector export (local patch used to generate barretenberg's Orchard test vectors).
++// ---------------------------------------------------------------------------------------------
++fn export_fe<F: ff::PrimeField<Repr = [u8; 32]>>(f: &F) -> alloc::string::String {
++    let mut s = alloc::string::String::from("0x");
++    for b in f.to_repr().iter().rev() {
++        s.push_str(&alloc::format!("{:02x}", b));
++    }
++    s
++}
++
++fn export_point(p: &pallas::Point) -> (alloc::string::String, alloc::string::String) {
++    let a = p.to_affine();
++    match Option::<_>::from(a.coordinates()) {
++        Some(c) => {
++            let c: pasta_curves::arithmetic::Coordinates<pallas::Affine> = c;
++            (export_fe(c.x()), export_fe(c.y()))
++        }
++        None => ("0x00".into(), "0x00".into()),
++    }
++}
++
++impl Circuit {
++    /// Exports every private witness of this Action circuit as (name, hex) pairs.
++    pub fn export_witness(&self) -> Vec<(alloc::string::String, alloc::string::String)> {
++        use core::cell::RefCell;
++        let out = RefCell::new(Vec::new());
++        let push = |k: &str, v: alloc::string::String| out.borrow_mut().push((k.into(), v));
++        let push_pt = |k: &str, p: &pallas::Point| {
++            let (x, y) = export_point(p);
++            push(&alloc::format!("{k}_x"), x);
++            push(&alloc::format!("{k}_y"), y);
++        };
++        self.path.map(|p| {
++            for (i, n) in p.iter().enumerate() {
++                push(&alloc::format!("path_{i}"), export_fe(&n.inner()));
++            }
++        });
++        self.pos.map(|p| push("pos", alloc::format!("{p}")));
++        self.g_d_old.map(|p| push_pt("g_d_old", &p));
++        self.pk_d_old.map(|p| push_pt("pk_d_old", &p.inner()));
++        self.v_old.map(|v| push("v_old", alloc::format!("{}", v.inner())));
++        self.rho_old.map(|v| push("rho_old", export_fe(&v.into_inner())));
++        self.psi_old.map(|v| push("psi_old", export_fe(&v)));
++        self.rcm_old.as_ref().map(|v| push("rcm_old", export_fe(&v.inner())));
++        self.cm_old.as_ref().map(|v| push_pt("cm_old", &v.inner()));
++        self.alpha.map(|v| push("alpha", export_fe(&v)));
++        self.ak.as_ref().map(|v| {
++            let p: pallas::Point = v.into();
++            push_pt("ak", &p)
++        });
++        self.nk.map(|v| push("nk", export_fe(&v.inner())));
++        self.rivk.map(|v| push("rivk", export_fe(&v.inner())));
++        self.g_d_new.map(|p| push_pt("g_d_new", &p));
++        self.pk_d_new.map(|p| push_pt("pk_d_new", &p.inner()));
++        self.v_new.map(|v| push("v_new", alloc::format!("{}", v.inner())));
++        self.psi_new.map(|v| push("psi_new", export_fe(&v)));
++        self.rcm_new.as_ref().map(|v| push("rcm_new", export_fe(&v.inner())));
++        self.rcv.as_ref().map(|v| push("rcv", export_fe(&v.inner())));
++        out.into_inner()
++    }
++}
++
++impl Instance {
++    /// Exports the 10 public inputs (instance column rows 0..9).
++    pub fn export_public_inputs(&self) -> Vec<alloc::string::String> {
++        self.to_halo2_instance()[0].iter().map(export_fe).collect()
++    }
++}
