@@ -1,6 +1,7 @@
 #pragma once
 
 #include "barretenberg/zcash/halo2/layout.hpp"
+#include "barretenberg/zcash/primitives/cycle.hpp"
 #include "barretenberg/zcash/primitives/poseidon.hpp"
 
 #include <array>
@@ -48,8 +49,13 @@ inline constexpr std::array<size_t, NUM_SELECTORS> ANCHOR_SHIFT = [] {
     return shift;
 }();
 
-/// Number of polynomial identities of each gate.
-inline constexpr std::array<size_t, NUM_SELECTORS> GATE_SIZE = [] {
+/**
+ * @brief Number of polynomial identities of each gate. The Pasta circuit is orchard's; the BN254/Grumpkin port replaces
+ * the gadgets that depend on the Pasta moduli (canonicity checks, variable-base multiplication overflow check), which
+ * changes the identities of those gates (see OrchardGates::evaluate).
+ */
+constexpr std::array<size_t, NUM_SELECTORS> gate_sizes(bool pasta)
+{
     std::array<size_t, NUM_SELECTORS> n{};
     n[Q_ORCHARD] = 4;
     n[Q_ADD_FIELD] = 1;
@@ -62,11 +68,11 @@ inline constexpr std::array<size_t, NUM_SELECTORS> GATE_SIZE = [] {
     n[Q_MUL_HI_3] = n[Q_MUL_LO_3] = 4;
     n[Q_MUL_DECOMPOSE_VAR] = 2;
     n[Q_MUL_LSB] = 3;
-    n[Q_MUL_OVERFLOW] = 5;
+    n[Q_MUL_OVERFLOW] = pasta ? 5 : 7;
     n[Q_MUL_FIXED_RUNNING_SUM] = 4;
     n[Q_MUL_FIXED_FULL] = 4;
     n[Q_MUL_FIXED_SHORT] = 4;
-    n[Q_MUL_FIXED_BASE_FIELD] = 8;
+    n[Q_MUL_FIXED_BASE_FIELD] = pasta ? 8 : 5;
     n[Q_POSEIDON_FULL] = 3;
     n[Q_POSEIDON_PARTIAL] = 4;
     n[Q_POSEIDON_PAD_AND_ADD] = 3;
@@ -77,51 +83,56 @@ inline constexpr std::array<size_t, NUM_SELECTORS> GATE_SIZE = [] {
     n[Q_LOOKUP] = 0;
     n[Q_RUNNING] = 0;
     n[Q_BITSHIFT] = 1;
-    n[Q_COMMIT_IVK] = 14;
+    n[Q_COMMIT_IVK] = pasta ? 14 : 17;
     n[Q_NOTECOMMIT_B] = 3;
     n[Q_NOTECOMMIT_D] = 3;
     n[Q_NOTECOMMIT_E] = 1;
     n[Q_NOTECOMMIT_G] = 2;
     n[Q_NOTECOMMIT_H] = 2;
-    n[Q_NOTECOMMIT_G_D] = 5;
-    n[Q_NOTECOMMIT_PK_D] = 4;
+    n[Q_NOTECOMMIT_G_D] = pasta ? 5 : 7;
+    n[Q_NOTECOMMIT_PK_D] = pasta ? 4 : 8;
     n[Q_NOTECOMMIT_VALUE] = 1;
-    n[Q_NOTECOMMIT_RHO] = 4;
-    n[Q_NOTECOMMIT_PSI] = 5;
-    n[Q_Y_CANON] = 7;
+    n[Q_NOTECOMMIT_RHO] = pasta ? 4 : 8;
+    n[Q_NOTECOMMIT_PSI] = pasta ? 5 : 9;
+    n[Q_Y_CANON] = pasta ? 7 : 8;
     return n;
-}();
+}
 
-inline constexpr size_t NUM_GATE_CONSTRAINTS = [] {
-    size_t n = 0;
-    for (size_t s : GATE_SIZE) {
-        n += s;
-    }
-    return n;
-}();
+/// Gate sizes, offsets and the selector of every constraint, for the Pasta circuit or the BN254 port.
+template <bool PASTA> struct GateMetadata {
+    static constexpr std::array<size_t, NUM_SELECTORS> GATE_SIZE = gate_sizes(PASTA);
 
-/// Index of the first constraint of each gate.
-inline constexpr std::array<size_t, NUM_SELECTORS> GATE_OFFSET = [] {
-    std::array<size_t, NUM_SELECTORS> out{};
-    size_t n = 0;
-    for (size_t s = 0; s < NUM_SELECTORS; ++s) {
-        out[s] = n;
-        n += GATE_SIZE[s];
-    }
-    return out;
-}();
-
-/// The selector gating each constraint.
-inline constexpr std::array<size_t, NUM_GATE_CONSTRAINTS> CONSTRAINT_SELECTOR = [] {
-    std::array<size_t, NUM_GATE_CONSTRAINTS> out{};
-    size_t i = 0;
-    for (size_t s = 0; s < NUM_SELECTORS; ++s) {
-        for (size_t j = 0; j < GATE_SIZE[s]; ++j) {
-            out[i++] = s;
+    static constexpr size_t NUM_GATE_CONSTRAINTS = [] {
+        size_t n = 0;
+        for (size_t s : GATE_SIZE) {
+            n += s;
         }
-    }
-    return out;
-}();
+        return n;
+    }();
+
+    /// Index of the first constraint of each gate.
+    static constexpr std::array<size_t, NUM_SELECTORS> GATE_OFFSET = [] {
+        std::array<size_t, NUM_SELECTORS> out{};
+        size_t n = 0;
+        for (size_t s = 0; s < NUM_SELECTORS; ++s) {
+            out[s] = n;
+            n += GATE_SIZE[s];
+        }
+        return out;
+    }();
+
+    /// The selector gating each constraint.
+    static constexpr std::array<size_t, NUM_GATE_CONSTRAINTS> CONSTRAINT_SELECTOR = [] {
+        std::array<size_t, NUM_GATE_CONSTRAINTS> out{};
+        size_t i = 0;
+        for (size_t s = 0; s < NUM_SELECTORS; ++s) {
+            for (size_t j = 0; j < GATE_SIZE[s]; ++j) {
+                out[i++] = s;
+            }
+        }
+        return out;
+    }();
+};
 
 /// Highest total degree (selector included) over all gates: the fixed-base Lagrange interpolation and the 3-bit window
 /// range checks have degree 8 in the advice cells.
@@ -140,11 +151,41 @@ inline constexpr size_t RANGE_CHECK_COLUMN = 9;
 
 template <typename Cycle> struct OrchardGates {
     using FF = typename Cycle::FF;
+    static constexpr bool IS_PASTA = std::is_same_v<Cycle, PastaCycle>;
+    using Metadata = GateMetadata<IS_PASTA>;
+    static constexpr auto GATE_SIZE = Metadata::GATE_SIZE;
+    static constexpr auto GATE_OFFSET = Metadata::GATE_OFFSET;
+    static constexpr size_t NUM_GATE_CONSTRAINTS = Metadata::NUM_GATE_CONSTRAINTS;
+    static constexpr auto CONSTRAINT_SELECTOR = Metadata::CONSTRAINT_SELECTOR;
     using Poseidon = PoseidonP128Pow5T3<FF>;
 
     static FF two_pow(size_t k) { return FF(uint256_t(1) << k); }
     static FF t_p() { return FF(uint256_t(FF::modulus) - (uint256_t(1) << 254)); }
     static FF t_q() { return FF(uint256_t(Cycle::EmbeddedScalar::modulus) - (uint256_t(1) << 254)); }
+
+    // ---- BN254 / Grumpkin port constants
+    // A field element x < r encoded on 255 bits is canonical iff bit 254 is 0 and, when bits 252..253 are both set,
+    // bits 250..251 are 0 and the low 250 bits are below t_r = r - 3 * 2^252 (~2^246.6).
+    static uint256_t t_r_uint() { return uint256_t(FF::modulus) - (uint256_t(3) << 252); }
+    static FF t_r() { return FF(t_r_uint()); }
+    // Number of 10-bit words of the canonicity range check (L + 2^250 - t_r < 2^250).
+    static constexpr size_t CANONICITY_WORDS = IS_PASTA ? 13 : 25;
+    // Variable-base mul computes [k + 2^254] T for the 255-bit k it decomposes; on Grumpkin k = alpha + t' with
+    // t' = 2 q - 2^254, and the overflow check proves t' <= k < t' + r over the integers.
+    static uint256_t var_mul_offset()
+    {
+        const uint256_t q(Cycle::EmbeddedScalar::modulus);
+        return IS_PASTA ? q - (uint256_t(1) << 254) : (q + q) - (uint256_t(1) << 254);
+    }
+    static uint256_t var_mul_upper() { return var_mul_offset() + uint256_t(FF::modulus) - 1; }
+    static FF lo130(const uint256_t& x) { return FF(x.slice(0, 130)); }
+    static FF hi130(const uint256_t& x) { return FF(x.slice(130, 256)); }
+    // Indicator of t == 3 for t in [0, 4).
+    template <typename T> static T is_three(const T& t)
+    {
+        static const FF inv6 = FF(6).invert();
+        return t * (t - FF(1)) * (t - FF(2)) * inv6;
+    }
 
     template <typename T> static T range_check(const T& word, size_t range)
     {
@@ -359,18 +400,41 @@ template <typename Cycle> struct OrchardGates {
         });
         // ---- ECC: variable-base mul, overflow check (a6, a7, a8)
         gate(Q_MUL_OVERFLOW, [&](auto c) {
-            const T z_0 = A(1, 6, -1);
-            const T z_130 = A(1, 6, 0);
-            const T eta = A(1, 6, 1);
-            const T k_254 = A(1, 7, -1);
-            const T alpha = A(1, 7, 0);
-            const T s_minus_lo_130 = A(1, 7, 1);
-            const T s = A(1, 8, 0);
-            c(s - (alpha + k_254 * two_pow(130)));
-            c(z_0 - alpha - t_q());
-            c(k_254 * (z_130 - two_pow(124)));
-            c(k_254 * s_minus_lo_130);
-            c((one - k_254) * (one - z_130 * eta) * s_minus_lo_130);
+            if constexpr (IS_PASTA) {
+                const T z_0 = A(1, 6, -1);
+                const T z_130 = A(1, 6, 0);
+                const T eta = A(1, 6, 1);
+                const T k_254 = A(1, 7, -1);
+                const T alpha = A(1, 7, 0);
+                const T s_minus_lo_130 = A(1, 7, 1);
+                const T s = A(1, 8, 0);
+                c(s - (alpha + k_254 * two_pow(130)));
+                c(z_0 - alpha - t_q());
+                c(k_254 * (z_130 - two_pow(124)));
+                c(k_254 * s_minus_lo_130);
+                c((one - k_254) * (one - z_130 * eta) * s_minus_lo_130);
+            } else {
+                // rows (anchor = halo2 row - 1): [z_0, b_1, b_2], [z_130, alpha, d1_lo], [d1_hi, d2_lo, d2_hi]
+                const T z_0 = A(1, 6, -1);
+                const T b_1 = A(1, 7, -1);
+                const T b_2 = A(1, 8, -1);
+                const T z_130 = A(1, 6, 0);
+                const T alpha = A(1, 7, 0);
+                const T d1_lo = A(1, 8, 0);
+                const T d1_hi = A(1, 6, 1);
+                const T d2_lo = A(1, 7, 1);
+                const T d2_hi = A(1, 8, 1);
+                const uint256_t t = var_mul_offset();
+                const uint256_t u = var_mul_upper();
+                const T k_lo = z_0 - z_130 * two_pow(130);
+                c(z_0 - alpha - FF(t));
+                c(k_lo - lo130(t) + b_1 * two_pow(130) - d1_lo);
+                c(z_130 - hi130(t) - b_1 - d1_hi);
+                c(lo130(u) - k_lo + b_2 * two_pow(130) - d2_lo);
+                c(hi130(u) - z_130 - b_2 - d2_hi);
+                c(bool_check(b_1));
+                c(bool_check(b_2));
+            }
         });
 
         // ---- ECC: fixed-base mul (window = a4, u = a5, x_p = a0, y_p = a1, Lagrange coefficients f0..f7, z)
@@ -411,23 +475,38 @@ template <typename Cycle> struct OrchardGates {
             c(sign * y_p - y_a);
         });
         gate(Q_MUL_FIXED_BASE_FIELD, [&](auto c) {
-            const T alpha = A(1, 6, -1);
-            const T z_84_alpha = A(1, 8, -1);
-            const T alpha_0 = alpha - z_84_alpha * two_pow(252);
-            const T alpha_1 = A(1, 7, 0);
-            const T alpha_2 = A(1, 8, 0);
-            const T alpha_0_prime = A(1, 6, 0);
-            const T z_13_alpha_0_prime = A(1, 6, 1);
-            const T z_44_alpha = A(1, 7, 1);
-            const T z_43_alpha = A(1, 8, 1);
-            c(alpha_2 * alpha_1);
-            c(alpha_2 * (z_44_alpha - z_84_alpha * two_pow(120)));
-            c(alpha_2 * bool_check(z_43_alpha - z_44_alpha * FF(8)));
-            c(alpha_2 * z_13_alpha_0_prime);
-            c(range_check(alpha_1, 4));
-            c(bool_check(alpha_2));
-            c(z_84_alpha - (alpha_1 + alpha_2 * FF(4)));
-            c(alpha_0_prime - (alpha_0 + two_pow(130) - t_p()));
+            if constexpr (IS_PASTA) {
+                const T alpha = A(1, 6, -1);
+                const T z_84_alpha = A(1, 8, -1);
+                const T alpha_0 = alpha - z_84_alpha * two_pow(252);
+                const T alpha_1 = A(1, 7, 0);
+                const T alpha_2 = A(1, 8, 0);
+                const T alpha_0_prime = A(1, 6, 0);
+                const T z_13_alpha_0_prime = A(1, 6, 1);
+                const T z_44_alpha = A(1, 7, 1);
+                const T z_43_alpha = A(1, 8, 1);
+                c(alpha_2 * alpha_1);
+                c(alpha_2 * (z_44_alpha - z_84_alpha * two_pow(120)));
+                c(alpha_2 * bool_check(z_43_alpha - z_44_alpha * FF(8)));
+                c(alpha_2 * z_13_alpha_0_prime);
+                c(range_check(alpha_1, 4));
+                c(bool_check(alpha_2));
+                c(z_84_alpha - (alpha_1 + alpha_2 * FF(4)));
+                c(alpha_0_prime - (alpha_0 + two_pow(130) - t_p()));
+            } else {
+                const T alpha = A(1, 6, -1);
+                const T z_84_alpha = A(1, 8, -1);
+                const T alpha_0 = alpha - z_84_alpha * two_pow(252);
+                const T alpha_1 = A(1, 7, 0);
+                const T alpha_2 = A(1, 8, 0);
+                const T alpha_0_prime = A(1, 6, 0);
+                const T z_25_alpha_0_prime = A(1, 6, 1);
+                c(range_check(alpha_1, 4));
+                c(alpha_2);
+                c(z_84_alpha - (alpha_1 + alpha_2 * FF(4)));
+                c(alpha_0_prime - (alpha_0 + two_pow(250) - t_r()));
+                c(is_three(alpha_1) * z_25_alpha_0_prime);
+            }
         });
 
         // ---- Poseidon (state a6..a8, partial sbox a5, rc_a f2..f4, rc_b f5..f7)
@@ -545,33 +624,75 @@ template <typename Cycle> struct OrchardGates {
 
         // ---- CommitIvk canonicity (a0..a8)
         gate(Q_COMMIT_IVK, [&](auto c) {
-            const T ak = A(0, 0, 0);
-            const T nk = A(0, 0, 1);
-            const T a = A(0, 1, 0);
-            const T b_whole = A(0, 2, 0);
-            const T cc = A(0, 1, 1);
-            const T d_whole = A(0, 2, 1);
-            const T b_0 = A(0, 3, 0);
-            const T b_1 = A(0, 4, 0);
-            const T b_2 = A(0, 5, 0);
-            const T d_0 = A(0, 3, 1);
-            const T d_1 = A(0, 4, 1);
-            c(bool_check(b_1));
-            c(bool_check(d_1));
-            c(b_whole - (b_0 + b_1 * two_pow(4) + b_2 * two_pow(5)));
-            c(d_whole - (d_0 + d_1 * two_pow(9)));
-            c(a + b_0 * two_pow(250) + b_1 * two_pow(254) - ak);
-            c(b_2 + cc * two_pow(5) + d_0 * two_pow(245) + d_1 * two_pow(254) - nk);
-            // ak canonicity
-            c(b_1 * b_0);
-            c(b_1 * A(0, 6, 0));
-            c(a + two_pow(130) - t_p() - A(0, 7, 0));
-            c(b_1 * A(0, 8, 0));
-            // nk canonicity
-            c(d_1 * d_0);
-            c(d_1 * A(0, 6, 1));
-            c(b_2 + cc * two_pow(5) + two_pow(140) - t_p() - A(0, 7, 1));
-            c(d_1 * A(0, 8, 1));
+            if constexpr (IS_PASTA) {
+                const T ak = A(0, 0, 0);
+                const T nk = A(0, 0, 1);
+                const T a = A(0, 1, 0);
+                const T b_whole = A(0, 2, 0);
+                const T cc = A(0, 1, 1);
+                const T d_whole = A(0, 2, 1);
+                const T b_0 = A(0, 3, 0);
+                const T b_1 = A(0, 4, 0);
+                const T b_2 = A(0, 5, 0);
+                const T d_0 = A(0, 3, 1);
+                const T d_1 = A(0, 4, 1);
+                c(bool_check(b_1));
+                c(bool_check(d_1));
+                c(b_whole - (b_0 + b_1 * two_pow(4) + b_2 * two_pow(5)));
+                c(d_whole - (d_0 + d_1 * two_pow(9)));
+                c(a + b_0 * two_pow(250) + b_1 * two_pow(254) - ak);
+                c(b_2 + cc * two_pow(5) + d_0 * two_pow(245) + d_1 * two_pow(254) - nk);
+                // ak canonicity
+                c(b_1 * b_0);
+                c(b_1 * A(0, 6, 0));
+                c(a + two_pow(130) - t_p() - A(0, 7, 0));
+                c(b_1 * A(0, 8, 0));
+                // nk canonicity
+                c(d_1 * d_0);
+                c(d_1 * A(0, 6, 1));
+                c(b_2 + cc * two_pow(5) + two_pow(140) - t_p() - A(0, 7, 1));
+                c(d_1 * A(0, 8, 1));
+            } else {
+                const T ak = A(0, 0, 0);
+                const T nk = A(0, 0, 1);
+                const T a = A(0, 1, 0);
+                const T b_whole = A(0, 2, 0);
+                const T cc = A(0, 1, 1);
+                const T d_whole = A(0, 2, 1);
+                const T b_0 = A(0, 3, 0);
+                const T b_1 = A(0, 4, 0);
+                const T b_2 = A(0, 5, 0);
+                const T d_0 = A(0, 3, 1);
+                const T d_1 = A(0, 4, 1);
+                const T d_lo = A(0, 5, 1);
+                // ak: t_hi = bits 252..253, b_0 - 4 t_hi = bits 250..251
+                const T t_hi_ak = A(0, 6, 0);
+                const T a_prime = A(0, 7, 0);
+                const T z25_a_prime = A(0, 8, 0);
+                const T t_lo_ak = b_0 - t_hi_ak * FF(4);
+                // nk: d_0 = d_lo + 2^5 (t_lo + 4 t_hi)
+                const T t_hi_nk = A(0, 6, 1);
+                const T l_prime = A(0, 7, 1);
+                const T z25_l_prime = A(0, 8, 1);
+                const T t_lo_nk = A(0, 9, 1);
+                c(b_whole - (b_0 + b_1 * two_pow(4) + b_2 * two_pow(5)));
+                c(d_whole - (d_0 + d_1 * two_pow(9)));
+                c(a + b_0 * two_pow(250) + b_1 * two_pow(254) - ak);
+                c(b_2 + cc * two_pow(5) + d_0 * two_pow(245) + d_1 * two_pow(254) - nk);
+                c(b_1);
+                c(d_1);
+                c(range_check(t_hi_ak, 4));
+                c(range_check(t_lo_ak, 4));
+                c(is_three(t_hi_ak) * t_lo_ak);
+                c(is_three(t_hi_ak) * z25_a_prime);
+                c(a + two_pow(250) - t_r() - a_prime);
+                c(range_check(t_hi_nk, 4));
+                c(range_check(t_lo_nk, 4));
+                c(d_0 - (d_lo + t_lo_nk * two_pow(5) + t_hi_nk * two_pow(7)));
+                c(is_three(t_hi_nk) * t_lo_nk);
+                c(is_three(t_hi_nk) * z25_l_prime);
+                c(b_2 + cc * two_pow(5) + d_lo * two_pow(245) + two_pow(250) - t_r() - l_prime);
+            }
         });
 
         // ---- NoteCommit (col_l = a6, col_m = a7, col_r = a8, col_z = a9)
@@ -616,31 +737,71 @@ template <typename Cycle> struct OrchardGates {
             c(h - (h_0 + h_1 * two_pow(5)));
         });
         gate(Q_NOTECOMMIT_G_D, [&](auto c) {
-            const T gd_x = A(0, L, 0);
-            const T b_0 = A(0, M, 0);
-            const T b_1 = A(0, M, 1);
-            const T a = A(0, R, 0);
-            const T a_prime = A(0, R, 1);
-            const T z13_a = A(0, Z, 0);
-            const T z13_a_prime = A(0, Z, 1);
-            c(a + b_0 * two_pow(250) + b_1 * two_pow(254) - gd_x);
-            c(a + two_pow(130) - t_p() - a_prime);
-            c(b_1 * b_0);
-            c(b_1 * z13_a);
-            c(b_1 * z13_a_prime);
+            if constexpr (IS_PASTA) {
+                const T gd_x = A(0, L, 0);
+                const T b_0 = A(0, M, 0);
+                const T b_1 = A(0, M, 1);
+                const T a = A(0, R, 0);
+                const T a_prime = A(0, R, 1);
+                const T z13_a = A(0, Z, 0);
+                const T z13_a_prime = A(0, Z, 1);
+                c(a + b_0 * two_pow(250) + b_1 * two_pow(254) - gd_x);
+                c(a + two_pow(130) - t_p() - a_prime);
+                c(b_1 * b_0);
+                c(b_1 * z13_a);
+                c(b_1 * z13_a_prime);
+            } else {
+                const T gd_x = A(0, L, 0);
+                const T b_0 = A(0, M, 0);
+                const T b_1 = A(0, M, 1);
+                const T a = A(0, R, 0);
+                const T a_prime = A(0, R, 1);
+                const T t_hi = A(0, Z, 0);
+                const T z25_a_prime = A(0, Z, 1);
+                const T t_lo = b_0 - t_hi * FF(4);
+                c(a + b_0 * two_pow(250) + b_1 * two_pow(254) - gd_x);
+                c(a + two_pow(250) - t_r() - a_prime);
+                c(b_1);
+                c(range_check(t_hi, 4));
+                c(range_check(t_lo, 4));
+                c(is_three(t_hi) * t_lo);
+                c(is_three(t_hi) * z25_a_prime);
+            }
         });
         gate(Q_NOTECOMMIT_PK_D, [&](auto c) {
-            const T pkd_x = A(0, L, 0);
-            const T b_3 = A(0, M, 0);
-            const T d_0 = A(0, M, 1);
-            const T cc = A(0, R, 0);
-            const T b3_c_prime = A(0, R, 1);
-            const T z13_c = A(0, Z, 0);
-            const T z14_b3_c_prime = A(0, Z, 1);
-            c(b_3 + cc * two_pow(4) + d_0 * two_pow(254) - pkd_x);
-            c(b_3 + cc * two_pow(4) + two_pow(140) - t_p() - b3_c_prime);
-            c(d_0 * z13_c);
-            c(d_0 * z14_b3_c_prime);
+            if constexpr (IS_PASTA) {
+                const T pkd_x = A(0, L, 0);
+                const T b_3 = A(0, M, 0);
+                const T d_0 = A(0, M, 1);
+                const T cc = A(0, R, 0);
+                const T b3_c_prime = A(0, R, 1);
+                const T z13_c = A(0, Z, 0);
+                const T z14_b3_c_prime = A(0, Z, 1);
+                c(b_3 + cc * two_pow(4) + d_0 * two_pow(254) - pkd_x);
+                c(b_3 + cc * two_pow(4) + two_pow(140) - t_p() - b3_c_prime);
+                c(d_0 * z13_c);
+                c(d_0 * z14_b3_c_prime);
+            } else {
+                // rows: [x, low, mid, z24_mid], [t_lo, top, l_prime, z25_l_prime], [t_hi, w_lo]
+                const T x = A(0, L, 0);
+                const T low = A(0, M, 0);
+                const T mid = A(0, R, 0);
+                const T z24_mid = A(0, Z, 0);
+                const T t_lo = A(0, L, 1);
+                const T top = A(0, M, 1);
+                const T l_prime = A(0, R, 1);
+                const T z25_l_prime = A(0, Z, 1);
+                const T t_hi = A(0, L, 2);
+                const T w_lo = A(0, M, 2);
+                c(low + mid * two_pow(4) + top * two_pow(254) - x);
+                c(top);
+                c(z24_mid - (w_lo + t_lo * two_pow(6) + t_hi * two_pow(8)));
+                c(range_check(t_lo, 4));
+                c(range_check(t_hi, 4));
+                c(is_three(t_hi) * t_lo);
+                c(is_three(t_hi) * z25_l_prime);
+                c(low + mid * two_pow(4) - (t_lo + t_hi * FF(4)) * two_pow(250) + two_pow(250) - t_r() - l_prime);
+            }
         });
         gate(Q_NOTECOMMIT_VALUE, [&](auto c) {
             const T value = A(0, L, 0);
@@ -650,51 +811,118 @@ template <typename Cycle> struct OrchardGates {
             c(d_2 + d_3 * two_pow(8) + e_0 * two_pow(58) - value);
         });
         gate(Q_NOTECOMMIT_RHO, [&](auto c) {
-            const T rho = A(0, L, 0);
-            const T e_1 = A(0, M, 0);
-            const T g_0 = A(0, M, 1);
-            const T f = A(0, R, 0);
-            const T e1_f_prime = A(0, R, 1);
-            const T z13_f = A(0, Z, 0);
-            const T z14_e1_f_prime = A(0, Z, 1);
-            c(e_1 + f * two_pow(4) + g_0 * two_pow(254) - rho);
-            c(e_1 + f * two_pow(4) + two_pow(140) - t_p() - e1_f_prime);
-            c(g_0 * z13_f);
-            c(g_0 * z14_e1_f_prime);
+            if constexpr (IS_PASTA) {
+                const T rho = A(0, L, 0);
+                const T e_1 = A(0, M, 0);
+                const T g_0 = A(0, M, 1);
+                const T f = A(0, R, 0);
+                const T e1_f_prime = A(0, R, 1);
+                const T z13_f = A(0, Z, 0);
+                const T z14_e1_f_prime = A(0, Z, 1);
+                c(e_1 + f * two_pow(4) + g_0 * two_pow(254) - rho);
+                c(e_1 + f * two_pow(4) + two_pow(140) - t_p() - e1_f_prime);
+                c(g_0 * z13_f);
+                c(g_0 * z14_e1_f_prime);
+            } else {
+                // rows: [x, low, mid, z24_mid], [t_lo, top, l_prime, z25_l_prime], [t_hi, w_lo]
+                const T x = A(0, L, 0);
+                const T low = A(0, M, 0);
+                const T mid = A(0, R, 0);
+                const T z24_mid = A(0, Z, 0);
+                const T t_lo = A(0, L, 1);
+                const T top = A(0, M, 1);
+                const T l_prime = A(0, R, 1);
+                const T z25_l_prime = A(0, Z, 1);
+                const T t_hi = A(0, L, 2);
+                const T w_lo = A(0, M, 2);
+                c(low + mid * two_pow(4) + top * two_pow(254) - x);
+                c(top);
+                c(z24_mid - (w_lo + t_lo * two_pow(6) + t_hi * two_pow(8)));
+                c(range_check(t_lo, 4));
+                c(range_check(t_hi, 4));
+                c(is_three(t_hi) * t_lo);
+                c(is_three(t_hi) * z25_l_prime);
+                c(low + mid * two_pow(4) - (t_lo + t_hi * FF(4)) * two_pow(250) + two_pow(250) - t_r() - l_prime);
+            }
         });
         gate(Q_NOTECOMMIT_PSI, [&](auto c) {
-            const T psi = A(0, L, 0);
-            const T h_0 = A(0, L, 1);
-            const T g_1 = A(0, M, 0);
-            const T h_1 = A(0, M, 1);
-            const T g_2 = A(0, R, 0);
-            const T g1_g2_prime = A(0, R, 1);
-            const T z13_g = A(0, Z, 0);
-            const T z13_g1_g2_prime = A(0, Z, 1);
-            c(g_1 + g_2 * two_pow(9) + h_0 * two_pow(249) + h_1 * two_pow(254) - psi);
-            c(g_1 + g_2 * two_pow(9) + two_pow(130) - t_p() - g1_g2_prime);
-            c(h_1 * h_0);
-            c(h_1 * z13_g);
-            c(h_1 * z13_g1_g2_prime);
+            if constexpr (IS_PASTA) {
+                const T psi = A(0, L, 0);
+                const T h_0 = A(0, L, 1);
+                const T g_1 = A(0, M, 0);
+                const T h_1 = A(0, M, 1);
+                const T g_2 = A(0, R, 0);
+                const T g1_g2_prime = A(0, R, 1);
+                const T z13_g = A(0, Z, 0);
+                const T z13_g1_g2_prime = A(0, Z, 1);
+                c(g_1 + g_2 * two_pow(9) + h_0 * two_pow(249) + h_1 * two_pow(254) - psi);
+                c(g_1 + g_2 * two_pow(9) + two_pow(130) - t_p() - g1_g2_prime);
+                c(h_1 * h_0);
+                c(h_1 * z13_g);
+                c(h_1 * z13_g1_g2_prime);
+            } else {
+                // rows: [psi, g_1, g_2, t_hi], [h_0, h_1, l_prime, z25_l_prime], [h_lsb, t_lo]
+                const T psi = A(0, L, 0);
+                const T g_1 = A(0, M, 0);
+                const T g_2 = A(0, R, 0);
+                const T t_hi = A(0, Z, 0);
+                const T h_0 = A(0, L, 1);
+                const T h_1 = A(0, M, 1);
+                const T l_prime = A(0, R, 1);
+                const T z25_l_prime = A(0, Z, 1);
+                const T h_lsb = A(0, L, 2);
+                const T t_lo = A(0, M, 2);
+                c(g_1 + g_2 * two_pow(9) + h_0 * two_pow(249) + h_1 * two_pow(254) - psi);
+                c(h_1);
+                c(bool_check(h_lsb));
+                c(range_check(t_lo, 4));
+                c(range_check(t_hi, 4));
+                c(h_0 - (h_lsb + t_lo * FF(2) + t_hi * FF(8)));
+                c(is_three(t_hi) * t_lo);
+                c(is_three(t_hi) * z25_l_prime);
+                c(g_1 + g_2 * two_pow(9) + h_lsb * two_pow(249) + two_pow(250) - t_r() - l_prime);
+            }
         });
         gate(Q_Y_CANON, [&](auto c) {
-            const T y = A(0, 5, 0);
-            const T lsb = A(0, 6, 0);
-            const T k_0 = A(0, 7, 0);
-            const T k_2 = A(0, 8, 0);
-            const T k_3 = A(0, 9, 0);
-            const T j = A(0, 5, 1);
-            const T z1_j = A(0, 6, 1);
-            const T z13_j = A(0, 7, 1);
-            const T j_prime = A(0, 8, 1);
-            const T z13_j_prime = A(0, 9, 1);
-            c(bool_check(k_3));
-            c(j - (lsb + k_0 * two + z1_j * two_pow(10)));
-            c(y - (j + k_2 * two_pow(250) + k_3 * two_pow(254)));
-            c(j + two_pow(130) - t_p() - j_prime);
-            c(k_3 * k_2);
-            c(k_3 * z13_j);
-            c(k_3 * z13_j_prime);
+            if constexpr (IS_PASTA) {
+                const T y = A(0, 5, 0);
+                const T lsb = A(0, 6, 0);
+                const T k_0 = A(0, 7, 0);
+                const T k_2 = A(0, 8, 0);
+                const T k_3 = A(0, 9, 0);
+                const T j = A(0, 5, 1);
+                const T z1_j = A(0, 6, 1);
+                const T z13_j = A(0, 7, 1);
+                const T j_prime = A(0, 8, 1);
+                const T z13_j_prime = A(0, 9, 1);
+                c(bool_check(k_3));
+                c(j - (lsb + k_0 * two + z1_j * two_pow(10)));
+                c(y - (j + k_2 * two_pow(250) + k_3 * two_pow(254)));
+                c(j + two_pow(130) - t_p() - j_prime);
+                c(k_3 * k_2);
+                c(k_3 * z13_j);
+                c(k_3 * z13_j_prime);
+            } else {
+                const T y = A(0, 5, 0);
+                const T lsb = A(0, 6, 0);
+                const T k_0 = A(0, 7, 0);
+                const T k_2 = A(0, 8, 0);
+                const T k_3 = A(0, 9, 0);
+                const T j = A(0, 5, 1);
+                const T z1_j = A(0, 6, 1);
+                const T t_hi = A(0, 7, 1);
+                const T j_prime = A(0, 8, 1);
+                const T z25_j_prime = A(0, 9, 1);
+                const T t_lo = k_2 - t_hi * FF(4);
+                c(k_3);
+                c(j - (lsb + k_0 * two + z1_j * two_pow(10)));
+                c(y - (j + k_2 * two_pow(250) + k_3 * two_pow(254)));
+                c(j + two_pow(250) - t_r() - j_prime);
+                c(range_check(t_hi, 4));
+                c(range_check(t_lo, 4));
+                c(is_three(t_hi) * t_lo);
+                c(is_three(t_hi) * z25_j_prime);
+            }
         });
 
         BB_ASSERT_EQ(emitted, NUM_GATE_CONSTRAINTS);

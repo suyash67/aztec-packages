@@ -212,6 +212,10 @@ template <typename Cycle> class ActionCircuit {
         const Cell z13_a = zs[0][13];
         const Cell z13_c = zs[2][13];
 
+        if constexpr (!C::IS_PASTA) {
+            commit_ivk_canonicity_bn254(c, ak, nk, a, bp, cp, dp, b_0, b_1, b_2, d_0, d_1);
+            return ivk;
+        }
         auto [a_prime, z13_a_prime] = canonicity_check(c, a.cell.value + two_pow(130) - t_p(), 13);
         auto [b2_c_prime, z14_b2_c_prime] =
             canonicity_check(c, b_2.cell.value + cp.cell.value * two_pow(5) + two_pow(140) - t_p(), 14);
@@ -241,6 +245,95 @@ template <typename Cycle> class ActionCircuit {
         return ivk;
     }
 
+    // ------------------------------------------------------------------ BN254 port: CommitIvk canonicity
+    // ak = a + 2^250 b_0 + 2^254 b_1 and nk = b_2 + 2^5 c + 2^245 d_0 + 2^254 d_1 are canonical iff b_1 = d_1 = 0 and,
+    // when bits 252..253 are both set, bits 250..251 are zero and the low 250 bits are below t_r.
+    static void commit_ivk_canonicity_bn254(C& c,
+                                            const Cell& ak,
+                                            const Cell& nk,
+                                            const MessagePiece& a,
+                                            const MessagePiece& bp,
+                                            const MessagePiece& cp,
+                                            const MessagePiece& dp,
+                                            const RangeConstrainedCell& b_0,
+                                            const RangeConstrainedValue& b_1,
+                                            const RangeConstrainedCell& b_2,
+                                            const RangeConstrainedCell& d_0,
+                                            const RangeConstrainedValue& d_1)
+    {
+        using G = typename C::Gates;
+        Builder& b = c.builder();
+        const FF t_hi_ak = bitrange_subset(b_0.cell.value, 2, 4);
+        auto [a_prime, z25_a_prime] = canonicity_check(c, a.cell.value + two_pow(250) - G::t_r(), G::CANONICITY_WORDS);
+        const FF d_lo_val = bitrange_subset(d_0.cell.value, 0, 5);
+        const Cell d_lo = c.witness_short_check(d_lo_val, 5);
+        const FF t_lo_nk = bitrange_subset(d_0.cell.value, 5, 7);
+        const FF t_hi_nk = bitrange_subset(d_0.cell.value, 7, 9);
+        auto [l_prime, z25_l_prime] = canonicity_check(c,
+                                                       b_2.cell.value + cp.cell.value * two_pow(5) +
+                                                           d_lo_val * two_pow(245) + two_pow(250) - G::t_r(),
+                                                       G::CANONICITY_WORDS);
+        b.assign_region("Assign cells used in canonicity gate", [&](Region& r) {
+            r.enable_selector(selector(Q_COMMIT_IVK), 0);
+            r.copy_advice(ak, advice(0), 0);
+            r.copy_advice(a.cell, advice(1), 0);
+            r.copy_advice(bp.cell, advice(2), 0);
+            r.copy_advice(b_0.cell, advice(3), 0);
+            r.assign_advice(advice(4), 0, b_1.value);
+            r.copy_advice(b_2.cell, advice(5), 0);
+            r.assign_advice(advice(6), 0, t_hi_ak);
+            r.copy_advice(a_prime, advice(7), 0);
+            r.copy_advice(z25_a_prime, advice(8), 0);
+
+            r.copy_advice(nk, advice(0), 1);
+            r.copy_advice(cp.cell, advice(1), 1);
+            r.copy_advice(dp.cell, advice(2), 1);
+            r.copy_advice(d_0.cell, advice(3), 1);
+            r.assign_advice(advice(4), 1, d_1.value);
+            r.copy_advice(d_lo, advice(5), 1);
+            r.assign_advice(advice(6), 1, t_hi_nk);
+            r.copy_advice(l_prime, advice(7), 1);
+            r.copy_advice(z25_l_prime, advice(8), 1);
+            r.assign_advice(advice(9), 1, t_lo_nk);
+            return 0;
+        });
+    }
+
+    // BN254 port: canonicity of x = low + 2^4 mid + 2^254 top (pk_d.x or rho) given z24 of the 250-bit piece `mid`.
+    static void low_mid_top_canonicity_bn254(C& c,
+                                             size_t selector_index,
+                                             const Cell& x,
+                                             const Cell& low,
+                                             const Cell& mid,
+                                             const Cell& z24_mid,
+                                             const Cell& top)
+    {
+        using G = typename C::Gates;
+        Builder& b = c.builder();
+        const FF w_lo_val = bitrange_subset(z24_mid.value, 0, 6);
+        const Cell w_lo = c.witness_short_check(w_lo_val, 6);
+        const FF t_lo = bitrange_subset(z24_mid.value, 6, 8);
+        const FF t_hi = bitrange_subset(z24_mid.value, 8, 10);
+        auto [l_prime, z25_l_prime] = canonicity_check(
+            c,
+            low.value + mid.value * two_pow(4) - (t_lo + t_hi * FF(4)) * two_pow(250) + two_pow(250) - G::t_r(),
+            G::CANONICITY_WORDS);
+        b.assign_region("NoteCommit canonicity (BN254)", [&](Region& r) {
+            r.copy_advice(x, advice(COL_L), 0);
+            r.copy_advice(low, advice(COL_M), 0);
+            r.copy_advice(mid, advice(COL_R), 0);
+            r.copy_advice(z24_mid, advice(COL_Z), 0);
+            r.assign_advice(advice(COL_L), 1, t_lo);
+            r.copy_advice(top, advice(COL_M), 1);
+            r.copy_advice(l_prime, advice(COL_R), 1);
+            r.copy_advice(z25_l_prime, advice(COL_Z), 1);
+            r.assign_advice(advice(COL_L), 2, t_hi);
+            r.copy_advice(w_lo, advice(COL_M), 2);
+            r.enable_selector(selector(selector_index), 0);
+            return 0;
+        });
+    }
+
     // ------------------------------------------------------------------ NoteCommit (note_commit.rs)
     // col_l = a6, col_m = a7, col_r = a8, col_z = a9; y canonicity uses a5..a9.
     static constexpr size_t COL_L = 6;
@@ -259,6 +352,24 @@ template <typename Cycle> class ActionCircuit {
         const auto zs = c.witness_check(j_val, 25, true);
         const Cell j = zs[0];
         const Cell z1_j = zs[1];
+        if constexpr (!C::IS_PASTA) {
+            using G = typename C::Gates;
+            auto [j_prime, z25_j_prime] = canonicity_check(c, j.value + two_pow(250) - G::t_r(), G::CANONICITY_WORDS);
+            return b.assign_region("y canonicity", [&](Region& r) {
+                r.enable_selector(selector(Q_Y_CANON), 0);
+                r.copy_advice(y, advice(5), 0);
+                Cell lsb_cell = r.assign_advice(advice(6), 0, lsb.value);
+                r.copy_advice(k_0.cell, advice(7), 0);
+                r.copy_advice(k_2.cell, advice(8), 0);
+                r.assign_advice(advice(9), 0, k_3.value);
+                r.copy_advice(j, advice(5), 1);
+                r.copy_advice(z1_j, advice(6), 1);
+                r.assign_advice(advice(7), 1, bitrange_subset(k_2.cell.value, 2, 4));
+                r.copy_advice(j_prime, advice(8), 1);
+                r.copy_advice(z25_j_prime, advice(9), 1);
+                return RangeConstrainedCell{ lsb_cell, lsb.num_bits };
+            });
+        }
         const Cell z13_j = zs[13];
         auto [j_prime, z13_j_prime] = canonicity_check(c, j.value + two_pow(130) - t_p(), 13);
         return b.assign_region("y canonicity", [&](Region& r) {
@@ -332,14 +443,6 @@ template <typename Cycle> class ActionCircuit {
         const Cell g_2_cell = z1_g;
         const Cell z13_g = zs[6][13];
 
-        auto [a_prime, z13_a_prime] = canonicity_check(c, a.cell.value + two_pow(130) - t_p(), 13);
-        auto [b3_c_prime, z14_b3_c_prime] =
-            canonicity_check(c, b_3.cell.value + two_pow(4) * cp.cell.value + two_pow(140) - t_p(), 14);
-        auto [e1_f_prime, z14_e1_f_prime] =
-            canonicity_check(c, e_1.cell.value + two_pow(4) * fp.cell.value + two_pow(140) - t_p(), 14);
-        auto [g1_g2_prime, z13_g1_g2_prime] =
-            canonicity_check(c, g_1.cell.value + two_pow(9) * g_2_cell.value + two_pow(130) - t_p(), 13);
-
         // DecomposeB::assign
         Cell b_1_cell = b.assign_region("NoteCommit MessagePiece b", [&](Region& r) {
             r.enable_selector(selector(Q_NOTECOMMIT_B), 0);
@@ -384,64 +487,127 @@ template <typename Cycle> class ActionCircuit {
             r.copy_advice(h_0.cell, advice(COL_M), 0);
             return r.assign_advice(advice(COL_R), 0, h_1.value);
         });
-        // GdCanonicity::assign
-        b.assign_region("NoteCommit input g_d", [&](Region& r) {
-            r.copy_advice(g_d.x, advice(COL_L), 0);
-            r.copy_advice(b_0.cell, advice(COL_M), 0);
-            r.copy_advice(b_1_cell, advice(COL_M), 1);
-            r.copy_advice(a.cell, advice(COL_R), 0);
-            r.copy_advice(a_prime, advice(COL_R), 1);
-            r.copy_advice(z13_a, advice(COL_Z), 0);
-            r.copy_advice(z13_a_prime, advice(COL_Z), 1);
-            r.enable_selector(selector(Q_NOTECOMMIT_G_D), 0);
-            return 0;
-        });
-        // PkdCanonicity::assign
-        b.assign_region("NoteCommit input pk_d", [&](Region& r) {
-            r.copy_advice(pk_d.x, advice(COL_L), 0);
-            r.copy_advice(b_3.cell, advice(COL_M), 0);
-            r.copy_advice(d_0_cell, advice(COL_M), 1);
-            r.copy_advice(cp.cell, advice(COL_R), 0);
-            r.copy_advice(b3_c_prime, advice(COL_R), 1);
-            r.copy_advice(z13_c, advice(COL_Z), 0);
-            r.copy_advice(z14_b3_c_prime, advice(COL_Z), 1);
-            r.enable_selector(selector(Q_NOTECOMMIT_PK_D), 0);
-            return 0;
-        });
-        // ValueCanonicity::assign
-        b.assign_region("NoteCommit input value", [&](Region& r) {
-            r.copy_advice(value, advice(COL_L), 0);
-            r.copy_advice(d_2.cell, advice(COL_M), 0);
-            r.copy_advice(z1_d, advice(COL_R), 0);
-            r.copy_advice(e_0.cell, advice(COL_Z), 0);
-            r.enable_selector(selector(Q_NOTECOMMIT_VALUE), 0);
-            return 0;
-        });
-        // RhoCanonicity::assign
-        b.assign_region("NoteCommit input rho", [&](Region& r) {
-            r.copy_advice(rho, advice(COL_L), 0);
-            r.copy_advice(e_1.cell, advice(COL_M), 0);
-            r.copy_advice(g_0_cell, advice(COL_M), 1);
-            r.copy_advice(fp.cell, advice(COL_R), 0);
-            r.copy_advice(e1_f_prime, advice(COL_R), 1);
-            r.copy_advice(z13_f, advice(COL_Z), 0);
-            r.copy_advice(z14_e1_f_prime, advice(COL_Z), 1);
-            r.enable_selector(selector(Q_NOTECOMMIT_RHO), 0);
-            return 0;
-        });
-        // PsiCanonicity::assign
-        b.assign_region("NoteCommit input psi", [&](Region& r) {
-            r.copy_advice(psi, advice(COL_L), 0);
-            r.copy_advice(h_0.cell, advice(COL_L), 1);
-            r.copy_advice(g_1.cell, advice(COL_M), 0);
-            r.copy_advice(h_1_cell, advice(COL_M), 1);
-            r.copy_advice(z1_g, advice(COL_R), 0);
-            r.copy_advice(g1_g2_prime, advice(COL_R), 1);
-            r.copy_advice(z13_g, advice(COL_Z), 0);
-            r.copy_advice(z13_g1_g2_prime, advice(COL_Z), 1);
-            r.enable_selector(selector(Q_NOTECOMMIT_PSI), 0);
-            return 0;
-        });
+        if constexpr (C::IS_PASTA) {
+            auto [a_prime, z13_a_prime] = canonicity_check(c, a.cell.value + two_pow(130) - t_p(), 13);
+            auto [b3_c_prime, z14_b3_c_prime] =
+                canonicity_check(c, b_3.cell.value + two_pow(4) * cp.cell.value + two_pow(140) - t_p(), 14);
+            auto [e1_f_prime, z14_e1_f_prime] =
+                canonicity_check(c, e_1.cell.value + two_pow(4) * fp.cell.value + two_pow(140) - t_p(), 14);
+            auto [g1_g2_prime, z13_g1_g2_prime] =
+                canonicity_check(c, g_1.cell.value + two_pow(9) * g_2_cell.value + two_pow(130) - t_p(), 13);
+
+            // GdCanonicity::assign
+            b.assign_region("NoteCommit input g_d", [&](Region& r) {
+                r.copy_advice(g_d.x, advice(COL_L), 0);
+                r.copy_advice(b_0.cell, advice(COL_M), 0);
+                r.copy_advice(b_1_cell, advice(COL_M), 1);
+                r.copy_advice(a.cell, advice(COL_R), 0);
+                r.copy_advice(a_prime, advice(COL_R), 1);
+                r.copy_advice(z13_a, advice(COL_Z), 0);
+                r.copy_advice(z13_a_prime, advice(COL_Z), 1);
+                r.enable_selector(selector(Q_NOTECOMMIT_G_D), 0);
+                return 0;
+            });
+            // PkdCanonicity::assign
+            b.assign_region("NoteCommit input pk_d", [&](Region& r) {
+                r.copy_advice(pk_d.x, advice(COL_L), 0);
+                r.copy_advice(b_3.cell, advice(COL_M), 0);
+                r.copy_advice(d_0_cell, advice(COL_M), 1);
+                r.copy_advice(cp.cell, advice(COL_R), 0);
+                r.copy_advice(b3_c_prime, advice(COL_R), 1);
+                r.copy_advice(z13_c, advice(COL_Z), 0);
+                r.copy_advice(z14_b3_c_prime, advice(COL_Z), 1);
+                r.enable_selector(selector(Q_NOTECOMMIT_PK_D), 0);
+                return 0;
+            });
+            // ValueCanonicity::assign
+            b.assign_region("NoteCommit input value", [&](Region& r) {
+                r.copy_advice(value, advice(COL_L), 0);
+                r.copy_advice(d_2.cell, advice(COL_M), 0);
+                r.copy_advice(z1_d, advice(COL_R), 0);
+                r.copy_advice(e_0.cell, advice(COL_Z), 0);
+                r.enable_selector(selector(Q_NOTECOMMIT_VALUE), 0);
+                return 0;
+            });
+            // RhoCanonicity::assign
+            b.assign_region("NoteCommit input rho", [&](Region& r) {
+                r.copy_advice(rho, advice(COL_L), 0);
+                r.copy_advice(e_1.cell, advice(COL_M), 0);
+                r.copy_advice(g_0_cell, advice(COL_M), 1);
+                r.copy_advice(fp.cell, advice(COL_R), 0);
+                r.copy_advice(e1_f_prime, advice(COL_R), 1);
+                r.copy_advice(z13_f, advice(COL_Z), 0);
+                r.copy_advice(z14_e1_f_prime, advice(COL_Z), 1);
+                r.enable_selector(selector(Q_NOTECOMMIT_RHO), 0);
+                return 0;
+            });
+            // PsiCanonicity::assign
+            b.assign_region("NoteCommit input psi", [&](Region& r) {
+                r.copy_advice(psi, advice(COL_L), 0);
+                r.copy_advice(h_0.cell, advice(COL_L), 1);
+                r.copy_advice(g_1.cell, advice(COL_M), 0);
+                r.copy_advice(h_1_cell, advice(COL_M), 1);
+                r.copy_advice(z1_g, advice(COL_R), 0);
+                r.copy_advice(g1_g2_prime, advice(COL_R), 1);
+                r.copy_advice(z13_g, advice(COL_Z), 0);
+                r.copy_advice(z13_g1_g2_prime, advice(COL_Z), 1);
+                r.enable_selector(selector(Q_NOTECOMMIT_PSI), 0);
+                return 0;
+            });
+        } else {
+            // BN254 port: canonicity of g_d.x, pk_d.x, rho and psi below r (see OrchardGates).
+            using G = typename C::Gates;
+            {
+                const FF t_hi = bitrange_subset(b_0.cell.value, 2, 4);
+                auto [a_prime, z25_a_prime] =
+                    canonicity_check(c, a.cell.value + two_pow(250) - G::t_r(), G::CANONICITY_WORDS);
+                b.assign_region("NoteCommit input g_d", [&](Region& r) {
+                    r.copy_advice(g_d.x, advice(COL_L), 0);
+                    r.copy_advice(b_0.cell, advice(COL_M), 0);
+                    r.copy_advice(b_1_cell, advice(COL_M), 1);
+                    r.copy_advice(a.cell, advice(COL_R), 0);
+                    r.copy_advice(a_prime, advice(COL_R), 1);
+                    r.assign_advice(advice(COL_Z), 0, t_hi);
+                    r.copy_advice(z25_a_prime, advice(COL_Z), 1);
+                    r.enable_selector(selector(Q_NOTECOMMIT_G_D), 0);
+                    return 0;
+                });
+            }
+            low_mid_top_canonicity_bn254(c, Q_NOTECOMMIT_PK_D, pk_d.x, b_3.cell, cp.cell, zs[2][24], d_0_cell);
+            // ValueCanonicity::assign
+            b.assign_region("NoteCommit input value", [&](Region& r) {
+                r.copy_advice(value, advice(COL_L), 0);
+                r.copy_advice(d_2.cell, advice(COL_M), 0);
+                r.copy_advice(z1_d, advice(COL_R), 0);
+                r.copy_advice(e_0.cell, advice(COL_Z), 0);
+                r.enable_selector(selector(Q_NOTECOMMIT_VALUE), 0);
+                return 0;
+            });
+            low_mid_top_canonicity_bn254(c, Q_NOTECOMMIT_RHO, rho, e_1.cell, fp.cell, zs[5][24], g_0_cell);
+            {
+                const FF h_lsb = bitrange_subset(h_0.cell.value, 0, 1);
+                const FF t_lo = bitrange_subset(h_0.cell.value, 1, 3);
+                const FF t_hi = bitrange_subset(h_0.cell.value, 3, 5);
+                auto [l_prime, z25_l_prime] = canonicity_check(c,
+                                                               g_1.cell.value + g_2_cell.value * two_pow(9) +
+                                                                   h_lsb * two_pow(249) + two_pow(250) - G::t_r(),
+                                                               G::CANONICITY_WORDS);
+                b.assign_region("NoteCommit input psi", [&](Region& r) {
+                    r.copy_advice(psi, advice(COL_L), 0);
+                    r.copy_advice(g_1.cell, advice(COL_M), 0);
+                    r.copy_advice(z1_g, advice(COL_R), 0);
+                    r.assign_advice(advice(COL_Z), 0, t_hi);
+                    r.copy_advice(h_0.cell, advice(COL_L), 1);
+                    r.copy_advice(h_1_cell, advice(COL_M), 1);
+                    r.copy_advice(l_prime, advice(COL_R), 1);
+                    r.copy_advice(z25_l_prime, advice(COL_Z), 1);
+                    r.assign_advice(advice(COL_L), 2, h_lsb);
+                    r.assign_advice(advice(COL_M), 2, t_lo);
+                    r.enable_selector(selector(Q_NOTECOMMIT_PSI), 0);
+                    return 0;
+                });
+            }
+        }
         return cm;
     }
 };

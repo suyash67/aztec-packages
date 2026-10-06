@@ -17,26 +17,43 @@ namespace bb::zcash {
  * @details The circuit shape (number of Actions, layout) fixes every precomputed polynomial: fixed columns, selectors,
  * table, permutation and Lagrange polynomials. The witness-independent part of `AnchoredTrace` is all that is used.
  */
-struct OrchardProvingKey {
-    using Flavor = OrchardFlavor;
-    using FF = Flavor::FF;
+template <typename Cycle> struct OrchardProvingKey_ {
+    using Flavor = OrchardFlavor_<Cycle>;
+    using FF = typename Flavor::FF;
     size_t circuit_size = 0;
     size_t log_circuit_size = 0;
-    Flavor::ProverPolynomials precomputed; // only the precomputed polynomials are populated
-    std::shared_ptr<Flavor::VerificationKey> vk;
+    typename Flavor::ProverPolynomials precomputed; // only the precomputed polynomials are populated
+    std::shared_ptr<typename Flavor::VerificationKey> vk;
     std::vector<std::pair<size_t, size_t>> public_input_cells;
 
-    explicit OrchardProvingKey(const halo2::AnchoredTrace<PastaCycle>& trace);
+    explicit OrchardProvingKey_(const halo2::AnchoredTrace<Cycle>& trace);
 };
+using OrchardProvingKey = OrchardProvingKey_<PastaCycle>;
 
 /**
  * @brief Proves one execution of the circuit: the witness is read from the advice columns of `trace`, which must have
  * the shape the proving key was generated from.
  */
-OrchardFlavor::Proof orchard_prove(const OrchardProvingKey& pk, const halo2::AnchoredTrace<PastaCycle>& trace);
+template <typename Cycle>
+typename OrchardFlavor_<Cycle>::Proof orchard_prove(const OrchardProvingKey_<Cycle>& pk,
+                                                    const halo2::AnchoredTrace<Cycle>& trace);
 
-bool orchard_verify(const OrchardFlavor::VerificationKey& vk,
-                    const std::vector<OrchardFlavor::FF>& public_inputs,
-                    const OrchardFlavor::Proof& proof);
+template <typename Cycle>
+bool orchard_verify(const typename OrchardFlavor_<Cycle>::VerificationKey& vk,
+                    const std::vector<typename Cycle::FF>& public_inputs,
+                    const typename OrchardFlavor_<Cycle>::Proof& proof);
+
+inline bool orchard_verify(const OrchardFlavor::VerificationKey& vk,
+                           const std::vector<PastaCycle::FF>& public_inputs,
+                           const OrchardFlavor::Proof& proof)
+{
+    return orchard_verify<PastaCycle>(vk, public_inputs, proof);
+}
+inline bool orchard_verify(const OrchardBn254Flavor::VerificationKey& vk,
+                           const std::vector<Bn254Cycle::FF>& public_inputs,
+                           const OrchardBn254Flavor::Proof& proof)
+{
+    return orchard_verify<Bn254Cycle>(vk, public_inputs, proof);
+}
 
 } // namespace bb::zcash

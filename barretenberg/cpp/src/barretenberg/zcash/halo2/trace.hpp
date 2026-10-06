@@ -155,7 +155,8 @@ template <typename Cycle> struct AnchoredTrace {
             OrchardGates<Cycle>::template evaluate<FF>(view, [&](size_t idx, const FF& value) {
                 if (!value.is_zero()) {
                     fail("gate constraint " + std::to_string(idx) + " (selector " +
-                         std::to_string(CONSTRAINT_SELECTOR[idx]) + ") fails at row " + std::to_string(row));
+                         std::to_string(OrchardGates<Cycle>::CONSTRAINT_SELECTOR[idx]) + ") fails at row " +
+                         std::to_string(row));
                 }
             });
             if (!selectors[Q_LOOKUP][row].is_zero()) {

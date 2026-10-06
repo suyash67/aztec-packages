@@ -1,5 +1,6 @@
 #pragma once
 
+#include "barretenberg/zcash/halo2/gates.hpp"
 #include "barretenberg/zcash/halo2/layout.hpp"
 #include "barretenberg/zcash/halo2/plonkish_builder.hpp"
 #include "barretenberg/zcash/primitives/orchard.hpp"
@@ -84,6 +85,9 @@ template <typename Cycle> class Chips {
     static uint256_t t_p() { return uint256_t(FF::modulus) - (uint256_t(1) << 254); }
     static uint256_t t_q() { return uint256_t(Scalar::modulus) - (uint256_t(1) << 254); }
     static FF two_pow(size_t k) { return FF(uint256_t(1) << k); }
+
+    using Gates = OrchardGates<Cycle>;
+    static constexpr bool IS_PASTA = Gates::IS_PASTA;
 
     struct Point {
         Cell x;
@@ -531,27 +535,43 @@ template <typename Cycle> class Chips {
                                         [&](Region& r) { return add_region(r, mul_b, acc, 0); });
 
         const Cell& alpha = running_sum[0];
-        const Cell z_43_alpha = running_sum[43];
-        const Cell z_44_alpha = running_sum[44];
         const Cell z_84_alpha = running_sum[84];
         const FF alpha_0 = alpha.value - z_84_alpha.value * two_pow(252);
-        const FF alpha_0_prime = alpha_0 + two_pow(130) - FF(t_p());
-        const auto zs = witness_check(alpha_0_prime, 13, false);
-        const Cell alpha_0_prime_cell = zs[0];
-        const Cell z_13_alpha_0_prime = zs[13];
+        if constexpr (IS_PASTA) {
+            const Cell z_43_alpha = running_sum[43];
+            const Cell z_44_alpha = running_sum[44];
+            const FF alpha_0_prime = alpha_0 + two_pow(130) - FF(t_p());
+            const auto zs = witness_check(alpha_0_prime, 13, false);
+            const Cell alpha_0_prime_cell = zs[0];
+            const Cell z_13_alpha_0_prime = zs[13];
 
-        b_.assign_region("Canonicity checks", [&](Region& r) {
-            r.enable_selector(selector(Q_MUL_FIXED_BASE_FIELD), 1);
-            r.copy_advice(alpha, advice(6), 0);
-            r.copy_advice(z_84_alpha, advice(8), 0);
-            r.copy_advice(alpha_0_prime_cell, advice(6), 1);
-            r.assign_advice(advice(7), 1, bitrange_subset(alpha.value, 252, 254));
-            r.assign_advice(advice(8), 1, bitrange_subset(alpha.value, 254, 255));
-            r.copy_advice(z_13_alpha_0_prime, advice(6), 2);
-            r.copy_advice(z_44_alpha, advice(7), 2);
-            r.copy_advice(z_43_alpha, advice(8), 2);
-            return 0;
-        });
+            b_.assign_region("Canonicity checks", [&](Region& r) {
+                r.enable_selector(selector(Q_MUL_FIXED_BASE_FIELD), 1);
+                r.copy_advice(alpha, advice(6), 0);
+                r.copy_advice(z_84_alpha, advice(8), 0);
+                r.copy_advice(alpha_0_prime_cell, advice(6), 1);
+                r.assign_advice(advice(7), 1, bitrange_subset(alpha.value, 252, 254));
+                r.assign_advice(advice(8), 1, bitrange_subset(alpha.value, 254, 255));
+                r.copy_advice(z_13_alpha_0_prime, advice(6), 2);
+                r.copy_advice(z_44_alpha, advice(7), 2);
+                r.copy_advice(z_43_alpha, advice(8), 2);
+                return 0;
+            });
+        } else {
+            // alpha < r: bit 254 is 0, and alpha_1 = bits 252..253 = 3 implies alpha_0 < t_r.
+            const FF alpha_0_prime = alpha_0 + two_pow(250) - Gates::t_r();
+            const auto zs = witness_check(alpha_0_prime, Gates::CANONICITY_WORDS, false);
+            b_.assign_region("Canonicity checks", [&](Region& r) {
+                r.enable_selector(selector(Q_MUL_FIXED_BASE_FIELD), 1);
+                r.copy_advice(alpha, advice(6), 0);
+                r.copy_advice(z_84_alpha, advice(8), 0);
+                r.copy_advice(zs[0], advice(6), 1);
+                r.assign_advice(advice(7), 1, bitrange_subset(alpha.value, 252, 254));
+                r.assign_advice(advice(8), 1, bitrange_subset(alpha.value, 254, 255));
+                r.copy_advice(zs[Gates::CANONICITY_WORDS], advice(6), 2);
+                return 0;
+            });
+        }
         return result;
     }
 
@@ -624,7 +644,7 @@ template <typename Cycle> class Chips {
     // mul.rs decompose_for_scalar_mul: bits of k = alpha + t_q, most significant first
     static std::vector<bool> decompose_for_scalar_mul(const FF& alpha)
     {
-        const uint256_t k = uint256_t(alpha) + t_q();
+        const uint256_t k = uint256_t(alpha) + Gates::var_mul_offset();
         std::vector<bool> bits(SCALAR_NUM_BITS);
         for (size_t i = 0; i < SCALAR_NUM_BITS; ++i) {
             bits[SCALAR_NUM_BITS - 1 - i] = k.get_bit(i);
@@ -700,6 +720,10 @@ template <typename Cycle> class Chips {
     // mul/overflow.rs (advices a6, a7, a8)
     void overflow_check(const Cell& alpha, const std::vector<Cell>& zs)
     {
+        if constexpr (!IS_PASTA) {
+            overflow_check_offset(alpha, zs);
+            return;
+        }
         const Cell& k_254 = zs[254];
         const FF s_val = alpha.value + k_254.value * two_pow(130);
         Cell s = b_.assign_region("s = alpha + k_254 * 2^130",
@@ -715,6 +739,49 @@ template <typename Cycle> class Chips {
             r.copy_advice(alpha, advice(7), 1);
             r.copy_advice(s_minus_lo_130, advice(7), 2);
             r.copy_advice(s, advice(8), 1);
+            return 0;
+        });
+    }
+
+    /**
+     * @brief Overflow check of the BN254 port: t' <= k < t' + r over the integers, where k is the decomposed scalar
+     * and t' = var_mul_offset(). Both bounds are borrow-chain comparisons of (z_130, k mod 2^130) against the 130-bit
+     * halves of the bound, with every difference range-checked to 130 bits.
+     */
+    void overflow_check_offset(const Cell& alpha, const std::vector<Cell>& zs)
+    {
+        const uint256_t k = uint256_t(alpha.value) + Gates::var_mul_offset();
+        const uint256_t k_lo = k.slice(0, 130);
+        const uint256_t k_hi = k.slice(130, 256);
+        const uint256_t t = Gates::var_mul_offset();
+        const uint256_t u = Gates::var_mul_upper();
+        const uint256_t t_lo = t.slice(0, 130);
+        const uint256_t t_hi = t.slice(130, 256);
+        const uint256_t u_lo = u.slice(0, 130);
+        const uint256_t u_hi = u.slice(130, 256);
+        BB_ASSERT(uint256_t(zs[130].value) == k_hi);
+        const uint256_t two_130 = uint256_t(1) << 130;
+        const bool b_1 = k_lo < t_lo;
+        const bool b_2 = u_lo < k_lo;
+        const uint256_t d1_lo = k_lo + (b_1 ? two_130 : 0) - t_lo;
+        const uint256_t d1_hi = k_hi - t_hi - (b_1 ? 1 : 0);
+        const uint256_t d2_lo = u_lo + (b_2 ? two_130 : 0) - k_lo;
+        const uint256_t d2_hi = u_hi - k_hi - (b_2 ? 1 : 0);
+        const Cell c_d1_lo = witness_check(FF(d1_lo), 13, true)[0];
+        const Cell c_d1_hi = witness_check(FF(d1_hi), 13, true)[0];
+        const Cell c_d2_lo = witness_check(FF(d2_lo), 13, true)[0];
+        const Cell c_d2_hi = witness_check(FF(d2_hi), 13, true)[0];
+        b_.assign_region("overflow check", [&](Region& r) {
+            r.enable_selector(selector(Q_MUL_OVERFLOW), 1);
+            r.copy_advice(zs[0], advice(6), 0);
+            r.assign_advice(advice(7), 0, FF(b_1 ? 1 : 0));
+            r.assign_advice(advice(8), 0, FF(b_2 ? 1 : 0));
+            r.copy_advice(zs[130], advice(6), 1);
+            r.copy_advice(alpha, advice(7), 1);
+            r.copy_advice(c_d1_lo, advice(8), 1);
+            r.copy_advice(c_d1_hi, advice(6), 2);
+            r.copy_advice(c_d2_lo, advice(7), 2);
+            r.copy_advice(c_d2_hi, advice(8), 2);
             return 0;
         });
     }

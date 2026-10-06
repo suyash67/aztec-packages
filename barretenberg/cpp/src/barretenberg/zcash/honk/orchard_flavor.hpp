@@ -2,6 +2,7 @@
 
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
 #include "barretenberg/ecc/curves/pasta/pasta.hpp"
+#include "barretenberg/ecc/fields/field_conversion.hpp"
 #include "barretenberg/flavor/flavor.hpp"
 #include "barretenberg/flavor/flavor_macros.hpp"
 #include "barretenberg/flavor/partially_evaluated_multivariates.hpp"
@@ -9,6 +10,7 @@
 #include "barretenberg/polynomials/univariate.hpp"
 #include "barretenberg/relations/relation_parameters.hpp"
 #include "barretenberg/relations/relation_tuple_helpers.hpp"
+#include "barretenberg/transcript/transcript.hpp"
 #include "barretenberg/zcash/halo2/layout.hpp"
 #include "barretenberg/zcash/honk/orchard_relations.hpp"
 #include "barretenberg/zcash/honk/pasta_crs.hpp"
@@ -30,23 +32,25 @@ namespace bb::zcash {
  *
  * Zero knowledge: sumcheck is masked by Libra, the PCS by a Gemini masking polynomial, and every witness column holds
  * random values in rows 2..7. Rows 0..7 are disabled in sumcheck (TRACE_OFFSET = 8); rows 0 and 1 stay zero so that
- * the witness polynomials are divisible by X^2. The final opening is the halo2 IPA on Vesta.
+ * the witness polynomials are divisible by X^2. The final opening is the halo2 IPA on Vesta (Pasta) or KZG (BN254).
  */
-class OrchardFlavor {
+template <typename Cycle_> class OrchardFlavor_ {
   public:
-    using Cycle = PastaCycle;
-    using Curve = curve::Vesta;
-    using FF = Curve::ScalarField;
-    using BF = Curve::BaseField;
-    using G1 = Curve::Group;
-    using GroupElement = Curve::Element;
-    using Commitment = Curve::AffineElement;
+    using Cycle = Cycle_;
+    static constexpr bool IS_PASTA = std::is_same_v<Cycle, PastaCycle>;
+    using Curve = typename Cycle::CommitmentCurve;
+    using FF = typename Curve::ScalarField;
+    using BF = typename Curve::BaseField;
+    using G1 = typename Curve::Group;
+    using GroupElement = typename Curve::Element;
+    using Commitment = typename Curve::AffineElement;
     using Polynomial = bb::Polynomial<FF>;
     using CommitmentKey = bb::CommitmentKey<Curve>;
-    using Codec = PastaCodec;
-    using Transcript = PastaTranscript;
-    using Proof = std::vector<uint256_t>;
-    static_assert(std::is_same_v<FF, Cycle::FF>);
+    // Pasta: BLAKE2b transcript as in halo2; BN254: barretenberg's native Poseidon2 transcript.
+    using Codec = std::conditional_t<IS_PASTA, PastaCodec, FrCodec>;
+    using Transcript = std::conditional_t<IS_PASTA, PastaTranscript, NativeTranscript>;
+    using Proof = std::vector<typename Codec::DataType>;
+    static_assert(std::is_same_v<FF, typename Cycle::FF>);
 
     static constexpr bool HasZK = true;
     static constexpr bool HasGeminiMasking = true;
@@ -59,10 +63,10 @@ class OrchardFlavor {
     static constexpr size_t NUM_PERMUTATION_COLUMNS = halo2::NUM_PERMUTATION_COLUMNS;
 
     template <typename FF_>
-    using Relations_ = std::tuple<OrchardGateRelation<OrchardFlavor, FF_>,
-                                  OrchardPermutationRelation<OrchardFlavor, FF_>,
-                                  OrchardSinsemillaLookupRelation<OrchardFlavor, FF_>,
-                                  OrchardRangeLookupRelation<OrchardFlavor, FF_>>;
+    using Relations_ = std::tuple<OrchardGateRelation<OrchardFlavor_, FF_>,
+                                  OrchardPermutationRelation<OrchardFlavor_, FF_>,
+                                  OrchardSinsemillaLookupRelation<OrchardFlavor_, FF_>,
+                                  OrchardRangeLookupRelation<OrchardFlavor_, FF_>>;
     using Relations = Relations_<FF>;
 
     static constexpr size_t NUM_SUBRELATIONS = compute_number_of_subrelations<Relations>();
@@ -405,7 +409,7 @@ class OrchardFlavor {
             }
             for (const auto& c : this->get_all()) {
                 for (const auto& w : Codec::serialize_to_fields(c)) {
-                    words.push_back(w);
+                    words.push_back(uint256_t(w));
                 }
             }
             return FF(Blake2bTranscriptHash::hash(words));
@@ -435,6 +439,9 @@ class OrchardFlavor {
         }
     };
 };
+
+using OrchardFlavor = OrchardFlavor_<PastaCycle>;
+using OrchardBn254Flavor = OrchardFlavor_<Bn254Cycle>;
 
 static_assert(OrchardFlavor::PrecomputedEntities<int>{}.size() == OrchardFlavor::NUM_PRECOMPUTED_ENTITIES);
 static_assert(OrchardFlavor::WitnessEntities<int>{}.size() == OrchardFlavor::NUM_WITNESS_ENTITIES);

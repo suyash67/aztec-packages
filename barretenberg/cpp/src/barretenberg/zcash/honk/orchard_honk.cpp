@@ -1,8 +1,10 @@
 #include "orchard_honk.hpp"
 #include "barretenberg/commitment_schemes/claim_batcher.hpp"
+#include "barretenberg/commitment_schemes/kzg/kzg.hpp"
 #include "barretenberg/commitment_schemes/shplonk/shplemini.hpp"
 #include "barretenberg/commitment_schemes/small_subgroup_ipa/small_subgroup_ipa_impl.hpp"
 #include "barretenberg/common/bb_bench.hpp"
+#include "barretenberg/srs/global_crs.hpp"
 #include "barretenberg/sumcheck/sumcheck.hpp"
 #include "barretenberg/zcash/honk/halo2_ipa.hpp"
 
@@ -10,50 +12,56 @@
 
 namespace bb {
 template class SmallSubgroupIPAProver<zcash::OrchardFlavor>;
+template class SmallSubgroupIPAProver<zcash::OrchardBn254Flavor>;
 } // namespace bb
 
 namespace bb::zcash {
 
 namespace {
 
-using Flavor = OrchardFlavor;
-using FF = Flavor::FF;
-using Curve = Flavor::Curve;
-using Commitment = Flavor::Commitment;
-using Polynomial = Flavor::Polynomial;
-using Trace = halo2::AnchoredTrace<PastaCycle>;
-using Gates = halo2::OrchardGates<PastaCycle>;
-using IPA = Halo2IPA<Curve>;
-
 constexpr size_t CHUNK = 7;
 
-// First and last rows of the masked region of every witness polynomial.
-constexpr size_t MASK_BEGIN = Flavor::NUM_ZERO_ROWS;
-constexpr size_t MASK_END = Flavor::TRACE_OFFSET;
+#define ORCHARD_TYPES(Cycle)                                                                                           \
+    using Flavor [[maybe_unused]] = OrchardFlavor_<Cycle>;                                                             \
+    using FF [[maybe_unused]] = typename Flavor::FF;                                                                   \
+    using Curve [[maybe_unused]] = typename Flavor::Curve;                                                             \
+    using Commitment [[maybe_unused]] = typename Flavor::Commitment;                                                   \
+    using Polynomial [[maybe_unused]] = typename Flavor::Polynomial;                                                   \
+    using Trace [[maybe_unused]] = halo2::AnchoredTrace<Cycle>;                                                        \
+    using Gates [[maybe_unused]] = halo2::OrchardGates<Cycle>;                                                         \
+    using ProverPolynomials [[maybe_unused]] = typename Flavor::ProverPolynomials;                                     \
+    using CommitmentKey [[maybe_unused]] = typename Flavor::CommitmentKey;                                             \
+    using Transcript [[maybe_unused]] = typename Flavor::Transcript;                                                   \
+    [[maybe_unused]] constexpr size_t MASK_BEGIN = Flavor::NUM_ZERO_ROWS;                                              \
+    [[maybe_unused]] constexpr size_t MASK_END = Flavor::TRACE_OFFSET;                                                 \
+    static_assert(MASK_BEGIN < MASK_END)
 
-void mask(Polynomial& poly)
+// Random values in the masked rows NUM_ZERO_ROWS..TRACE_OFFSET-1 (shared by both flavors).
+template <typename FF> void mask(Polynomial<FF>& poly)
 {
-    for (size_t row = MASK_BEGIN; row < MASK_END; ++row) {
+    for (size_t row = OrchardFlavor::NUM_ZERO_ROWS; row < OrchardFlavor::TRACE_OFFSET; ++row) {
         poly.at(row) = FF::random_element();
     }
 }
 
-IPA::Generators ipa_generators(const Flavor::CommitmentKey& ck, size_t n)
+Halo2IPA<curve::Vesta>::Generators ipa_generators(const CommitmentKey<curve::Vesta>& ck, size_t n)
 {
+    using Commitment = curve::Vesta::AffineElement;
     static const Commitment w = halo2_vesta_w();
     static const Commitment u = halo2_vesta_u();
     return { std::span<const Commitment>(ck.get_monomial_points().data(), n), w, u };
 }
 
 // halo2 label of a permutation cell (column j, row r).
-FF permutation_label(size_t column, size_t row, size_t n)
+template <typename FF> FF permutation_label(size_t column, size_t row, size_t n)
 {
     return FF((column * n) + row);
 }
 
-void hash_preamble(Flavor::Transcript& transcript,
-                   const Flavor::VerificationKey& vk,
-                   const std::vector<FF>& public_inputs)
+template <typename Flavor>
+void hash_preamble(typename Flavor::Transcript& transcript,
+                   const typename Flavor::VerificationKey& vk,
+                   const std::vector<typename Flavor::FF>& public_inputs)
 {
     transcript.add_to_hash_buffer("vk_hash", vk.hash());
     for (size_t i = 0; i < public_inputs.size(); ++i) {
@@ -61,39 +69,51 @@ void hash_preamble(Flavor::Transcript& transcript,
     }
 }
 
-Commitment batch_mul(std::span<const Commitment> commitments, std::span<const FF> scalars)
+template <typename Curve>
+typename Curve::AffineElement batch_mul(std::span<const typename Curve::AffineElement> commitments,
+                                        std::span<const typename Curve::ScalarField> scalars)
 {
-    std::vector<FF> s;
-    std::vector<Commitment> p;
+    std::vector<typename Curve::ScalarField> s;
+    std::vector<typename Curve::AffineElement> p;
     for (size_t i = 0; i < commitments.size(); ++i) {
         if (!commitments[i].is_point_at_infinity()) {
             s.push_back(scalars[i]);
             p.push_back(commitments[i]);
         }
     }
-    return Commitment(IPA::msm(s, p));
+    return typename Curve::AffineElement(Halo2IPA<Curve>::msm(s, p));
+}
+
+template <typename Cycle> void init_crs()
+{
+    if constexpr (std::is_same_v<Cycle, Bn254Cycle>) {
+        srs::init_bn254_file_crs_factory(srs::bb_crs_path());
+    }
 }
 
 } // namespace
 
-OrchardProvingKey::OrchardProvingKey(const Trace& t)
+template <typename Cycle>
+OrchardProvingKey_<Cycle>::OrchardProvingKey_(const halo2::AnchoredTrace<Cycle>& t)
     : circuit_size(t.num_rows)
     , log_circuit_size(numeric::get_msb(t.num_rows))
     , precomputed(t.num_rows)
-    , vk(std::make_shared<Flavor::VerificationKey>())
+    , vk(std::make_shared<typename OrchardFlavor_<Cycle>::VerificationKey>())
     , public_input_cells(t.public_input_cells)
 {
     BB_BENCH_NAME("OrchardProvingKey");
+    ORCHARD_TYPES(Cycle);
+    init_crs<Cycle>();
     BB_ASSERT_EQ(t.row_offset, Flavor::TRACE_OFFSET);
     const size_t n = circuit_size;
     auto& p = precomputed;
-    auto fixed = static_cast<Flavor::FixedEntities<Polynomial>&>(p).get_all();
+    auto fixed = static_cast<typename Flavor::template FixedEntities<Polynomial>&>(p).get_all();
     for (size_t c = 0; c < halo2::NUM_FIXED; ++c) {
         for (size_t r = 0; r < n; ++r) {
             fixed[c].at(r) = t.fixed[c][r];
         }
     }
-    auto selectors = static_cast<Flavor::SelectorEntities<Polynomial>&>(p).get_all();
+    auto selectors = static_cast<typename Flavor::template SelectorEntities<Polynomial>&>(p).get_all();
     for (size_t s = 0; s < halo2::NUM_SELECTORS; ++s) {
         for (size_t r = 0; r < n; ++r) {
             selectors[s].at(r) = t.selectors[s][r];
@@ -147,12 +167,12 @@ OrchardProvingKey::OrchardProvingKey(const Trace& t)
             }
         }
     }
-    auto sigmas = static_cast<Flavor::SigmaEntities<Polynomial>&>(p).get_all();
-    auto ids = static_cast<Flavor::IdEntities<Polynomial>&>(p).get_all();
+    auto sigmas = static_cast<typename Flavor::template SigmaEntities<Polynomial>&>(p).get_all();
+    auto ids = static_cast<typename Flavor::template IdEntities<Polynomial>&>(p).get_all();
     for (size_t j = 0; j < Flavor::NUM_PERMUTATION_COLUMNS; ++j) {
         for (size_t r = 0; r < n; ++r) {
             const uint32_t cell = static_cast<uint32_t>((j * n) + r);
-            ids[j].at(r) = permutation_label(j, r, n);
+            ids[j].at(r) = permutation_label<FF>(j, r, n);
             sigmas[j].at(r) = FF(next[cell]);
         }
     }
@@ -164,27 +184,31 @@ OrchardProvingKey::OrchardProvingKey(const Trace& t)
         sigmas[col].at(row) = vk->special_label(i);
     }
 
-    Flavor::CommitmentKey ck(n);
+    CommitmentKey ck(n);
     for (auto [commitment, poly] : zip_view(vk->get_all(), p.get_precomputed())) {
         commitment = ck.commit(poly);
     }
 }
 
-Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
+template <typename Cycle>
+typename OrchardFlavor_<Cycle>::Proof orchard_prove(const OrchardProvingKey_<Cycle>& pk,
+                                                    const halo2::AnchoredTrace<Cycle>& trace)
 {
     BB_BENCH_NAME("orchard_prove");
+    ORCHARD_TYPES(Cycle);
+    init_crs<Cycle>();
     const size_t n = pk.circuit_size;
     const size_t log_n = pk.log_circuit_size;
     BB_ASSERT_EQ(trace.num_rows, n);
-    auto transcript = std::make_shared<Flavor::Transcript>();
-    Flavor::CommitmentKey ck(n);
-    Flavor::CommitmentLabels labels;
+    auto transcript = std::make_shared<Transcript>();
+    CommitmentKey ck(n);
+    typename Flavor::CommitmentLabels labels;
 
-    hash_preamble(*transcript, *pk.vk, trace.public_inputs);
+    hash_preamble<Flavor>(*transcript, *pk.vk, trace.public_inputs);
 
-    Flavor::ProverPolynomials polys;
+    ProverPolynomials polys;
     {
-        auto& pre = const_cast<Flavor::ProverPolynomials&>(pk.precomputed);
+        auto& pre = const_cast<ProverPolynomials&>(pk.precomputed);
         for (auto [dst, src] : zip_view(polys.get_precomputed(), pre.get_precomputed())) {
             dst = src.share();
         }
@@ -198,7 +222,7 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
     transcript->send_to_verifier("Gemini:masking_poly_comm", ck.commit(polys.gemini_masking_poly));
 
     // Advice columns and lookup read counts
-    auto advice = static_cast<Flavor::AdviceEntities<Polynomial>&>(polys).get_all();
+    auto advice = static_cast<typename Flavor::template AdviceEntities<Polynomial>&>(polys).get_all();
     parallel_for(halo2::NUM_ADVICE, [&](size_t c) {
         for (size_t r = MASK_END; r < n; ++r) {
             advice[c].at(r) = trace.advice[c][r];
@@ -213,14 +237,14 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
             for (size_t chip = 0; chip < 2; ++chip) {
                 const size_t q = (chip == 0) ? halo2::Q_SINSEMILLA1_1 : halo2::Q_SINSEMILLA1_2;
                 if (!trace.selectors[q][r].is_zero()) {
-                    const auto [m, x, y] = Gates::sinsemilla_lookup_value<FF>(view, chip);
+                    const auto [m, x, y] = Gates::template sinsemilla_lookup_value<FF>(view, chip);
                     const uint256_t idx(m);
                     BB_ASSERT_LT(idx, uint256_t(halo2::SINSEMILLA_TABLE_SIZE));
                     polys.lookup_read_counts_sinsemilla.at(trace.row_offset + idx.data[0]) += FF(1);
                 }
             }
             if (!trace.selectors[halo2::Q_LOOKUP][r].is_zero()) {
-                const uint256_t v(Gates::range_lookup_value<FF>(view));
+                const uint256_t v(Gates::template range_lookup_value<FF>(view));
                 BB_ASSERT_LT(v, uint256_t(halo2::SINSEMILLA_TABLE_SIZE));
                 polys.lookup_read_counts_range.at(trace.row_offset + v.data[0]) += FF(1);
             }
@@ -231,7 +255,7 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
     {
         auto batch = ck.start_batch();
         for (auto [poly, label] :
-             zip_view(advice, static_cast<Flavor::AdviceEntities<std::string>&>(labels).get_all())) {
+             zip_view(advice, static_cast<typename Flavor::template AdviceEntities<std::string>&>(labels).get_all())) {
             batch.add_to_batch(poly, label);
         }
         batch.add_to_batch(polys.lookup_read_counts_sinsemilla, labels.lookup_read_counts_sinsemilla);
@@ -270,7 +294,7 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
                     for (size_t chip = 0; chip < 2; ++chip) {
                         FF read = params.gamma;
                         if (in_bounds) {
-                            const auto [m, x, y] = Gates::sinsemilla_lookup_value<FF>(view, chip);
+                            const auto [m, x, y] = Gates::template sinsemilla_lookup_value<FF>(view, chip);
                             read += m + x * params.eta + y * params.eta_two;
                         } else {
                             BB_ASSERT(false, "lookup table row in the last two rows");
@@ -282,7 +306,7 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
                 if (ql || qt) {
                     FF read = params.gamma;
                     if (in_bounds) {
-                        read += Gates::range_lookup_value<FF>(view);
+                        read += Gates::template range_lookup_value<FF>(view);
                     }
                     range[i] = read * (trace.table[0][r] + params.gamma);
                 }
@@ -303,8 +327,8 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
         BB_BENCH_NAME("orchard_prove/grand_product");
         const size_t first = Flavor::TRACE_OFFSET;
         const size_t count = n - first;
-        auto sigmas = static_cast<Flavor::SigmaEntities<Polynomial>&>(polys).get_all();
-        auto ids = static_cast<Flavor::IdEntities<Polynomial>&>(polys).get_all();
+        auto sigmas = static_cast<typename Flavor::template SigmaEntities<Polynomial>&>(polys).get_all();
+        auto ids = static_cast<typename Flavor::template IdEntities<Polynomial>&>(polys).get_all();
         std::vector<FF> num_a(count);
         std::vector<FF> den_a(count);
         std::vector<FF> num_b(count);
@@ -381,36 +405,44 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
         BB_BENCH_NAME("orchard_prove/small_subgroup_ipa");
         small_subgroup_ipa.prove();
     }
-    using PolynomialBatcher = GeminiProver_<Curve>::PolynomialBatcher;
+    using PolynomialBatcher = typename GeminiProver_<Curve>::PolynomialBatcher;
     PolynomialBatcher batcher(n, n);
     batcher.set_unshifted(polys.get_unshifted());
     batcher.set_to_be_shifted_by_one(polys.get_to_be_shifted());
     batcher.set_to_be_shifted_by_two(polys.get_to_be_shifted_by_two());
     auto opening_claim = ShpleminiProver_<Curve>::prove(
         n, batcher, sumcheck_output.challenge, ck, transcript, small_subgroup_ipa.get_witness_polynomials());
-    {
+    if constexpr (Flavor::IS_PASTA) {
         BB_BENCH_NAME("orchard_prove/halo2_ipa");
-        IPA::prove(ipa_generators(ck, n), opening_claim, FF(0), transcript);
+        Halo2IPA<Curve>::prove(ipa_generators(ck, n), opening_claim, FF(0), transcript);
+    } else {
+        KZG<Curve>::compute_opening_proof(ck, opening_claim, transcript);
     }
     return transcript->export_proof();
 }
 
-bool orchard_verify(const Flavor::VerificationKey& vk, const std::vector<FF>& public_inputs, const Flavor::Proof& proof)
+template <typename Cycle>
+bool orchard_verify(const typename OrchardFlavor_<Cycle>::VerificationKey& vk,
+                    const std::vector<typename Cycle::FF>& public_inputs,
+                    const typename OrchardFlavor_<Cycle>::Proof& proof)
 {
     BB_BENCH_NAME("orchard_verify");
+    ORCHARD_TYPES(Cycle);
+    init_crs<Cycle>();
     if (public_inputs.size() != vk.num_public_inputs) {
         return false;
     }
     const size_t n = vk.circuit_size();
     const size_t log_n = vk.log_circuit_size;
-    auto transcript = std::make_shared<Flavor::Transcript>(proof);
-    Flavor::CommitmentLabels labels;
-    hash_preamble(*transcript, vk, public_inputs);
+    auto transcript = std::make_shared<Transcript>(proof);
+    typename Flavor::CommitmentLabels labels;
+    hash_preamble<Flavor>(*transcript, vk, public_inputs);
 
-    Flavor::VerifierCommitments comms(vk);
+    typename Flavor::VerifierCommitments comms(vk);
     comms.gemini_masking_poly = transcript->template receive_from_prover<Commitment>("Gemini:masking_poly_comm");
-    for (auto [comm, label] : zip_view(static_cast<Flavor::AdviceEntities<Commitment>&>(comms).get_all(),
-                                       static_cast<Flavor::AdviceEntities<std::string>&>(labels).get_all())) {
+    for (auto [comm, label] :
+         zip_view(static_cast<typename Flavor::template AdviceEntities<Commitment>&>(comms).get_all(),
+                  static_cast<typename Flavor::template AdviceEntities<std::string>&>(labels).get_all())) {
         comm = transcript->template receive_from_prover<Commitment>(label);
     }
     comms.lookup_read_counts_sinsemilla =
@@ -443,34 +475,54 @@ bool orchard_verify(const Flavor::VerificationKey& vk, const std::vector<FF>& pu
     libra_commitments[2] = transcript->template receive_from_prover<Commitment>("Libra:quotient_commitment");
 
     using ClaimBatcher = ClaimBatcher_<Curve>;
-    using Batch = ClaimBatcher::Batch;
+    using Batch = typename ClaimBatcher::Batch;
     auto& evals = sumcheck_output.claimed_evaluations;
     ClaimBatcher claim_batcher{
         .unshifted = Batch{ comms.get_unshifted(), evals.get_unshifted() },
         .shifted = Batch{ comms.get_to_be_shifted(), evals.get_shifted() },
         .shifted_by_two = Batch{ comms.get_to_be_shifted_by_two(), evals.get_shifted_by_two() },
     };
-    Flavor::CommitmentKey ck(n);
-    const auto gens = ipa_generators(ck, n);
+    CommitmentKey ck(n);
+    const Commitment g1_identity = ck.get_monomial_points()[0];
     auto shplemini_output =
         ShpleminiVerifier_<Curve, true, true>::compute_batch_opening_claim(claim_batcher,
                                                                            sumcheck_output.challenge,
-                                                                           gens.g[0],
+                                                                           g1_identity,
                                                                            transcript,
                                                                            {},
                                                                            libra_commitments,
                                                                            sumcheck_output.claimed_libra_evaluation);
-    const auto& batch_claim = shplemini_output.batch_opening_claim;
-    const OpeningClaim<Curve> opening_claim{ { batch_claim.evaluation_point, FF(0) },
-                                             batch_mul(batch_claim.commitments, batch_claim.scalars) };
-    const bool ipa_verified = IPA::verify(gens, opening_claim, transcript);
+    bool pcs_verified = false;
+    if constexpr (Flavor::IS_PASTA) {
+        const auto& batch_claim = shplemini_output.batch_opening_claim;
+        const OpeningClaim<Curve> opening_claim{ { batch_claim.evaluation_point, FF(0) },
+                                                 batch_mul<Curve>(batch_claim.commitments, batch_claim.scalars) };
+        pcs_verified = Halo2IPA<Curve>::verify(ipa_generators(ck, n), opening_claim, transcript);
+    } else {
+        auto pairing_points =
+            KZG<Curve>::reduce_verify_batch_opening_claim(std::move(shplemini_output.batch_opening_claim), transcript);
+        pcs_verified = pairing_points.check();
+    }
     vinfo("orchard verifier: sumcheck ",
           sumcheck_output.verified,
           ", libra consistency ",
           shplemini_output.consistency_checked,
-          ", ipa ",
-          ipa_verified);
-    return sumcheck_output.verified && shplemini_output.consistency_checked && ipa_verified;
+          ", pcs ",
+          pcs_verified);
+    return sumcheck_output.verified && shplemini_output.consistency_checked && pcs_verified;
 }
+
+template struct OrchardProvingKey_<PastaCycle>;
+template struct OrchardProvingKey_<Bn254Cycle>;
+template OrchardFlavor::Proof orchard_prove<PastaCycle>(const OrchardProvingKey_<PastaCycle>&,
+                                                        const halo2::AnchoredTrace<PastaCycle>&);
+template OrchardBn254Flavor::Proof orchard_prove<Bn254Cycle>(const OrchardProvingKey_<Bn254Cycle>&,
+                                                             const halo2::AnchoredTrace<Bn254Cycle>&);
+template bool orchard_verify<PastaCycle>(const OrchardFlavor::VerificationKey&,
+                                         const std::vector<PastaCycle::FF>&,
+                                         const OrchardFlavor::Proof&);
+template bool orchard_verify<Bn254Cycle>(const OrchardBn254Flavor::VerificationKey&,
+                                         const std::vector<Bn254Cycle::FF>&,
+                                         const OrchardBn254Flavor::Proof&);
 
 } // namespace bb::zcash

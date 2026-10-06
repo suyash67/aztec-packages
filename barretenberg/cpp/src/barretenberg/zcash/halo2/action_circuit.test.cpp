@@ -89,3 +89,55 @@ TEST(ZcashHalo2Action, MultipleRandomActions)
         EXPECT_TRUE(trace.check().empty());
     }
 }
+
+TEST(ZcashHalo2Action, Bn254PortSatisfiesAllConstraints)
+{
+    using O = Orchard<Bn254Cycle>;
+    auto& engine = numeric::get_debug_randomness();
+    for (size_t num_actions : { 1UL, 2UL }) {
+        std::vector<O::ActionWitness> ws;
+        std::vector<fr> pis;
+        for (size_t i = 0; i < num_actions; ++i) {
+            ws.push_back(O::random_witness(engine));
+            for (const auto& f : O::evaluate(ws.back())->to_field_elements()) {
+                pis.push_back(f);
+            }
+        }
+        auto table = ActionCircuit<Bn254Cycle>::build(ws, pis);
+        auto trace = AnchoredTrace<Bn254Cycle>::build(table, 8);
+        info("BN254 port, ", num_actions, " actions: ", table.num_rows, " rows, trace size ", trace.num_rows);
+        auto failures = trace.check();
+        for (const auto& f : failures) {
+            info(f);
+        }
+        EXPECT_TRUE(failures.empty());
+    }
+}
+
+TEST(ZcashHalo2Action, Bn254PortRejectsNonCanonicalDecomposition)
+{
+    // A corrupted canonicity witness (the t_hi cell of a CommitIvk / NoteCommit check) must break the gates.
+    using O = Orchard<Bn254Cycle>;
+    auto& engine = numeric::get_debug_randomness();
+    auto w = O::random_witness(engine);
+    std::vector<fr> pis;
+    for (const auto& f : O::evaluate(w)->to_field_elements()) {
+        pis.push_back(f);
+    }
+    auto table = ActionCircuit<Bn254Cycle>::build({ w }, pis);
+    auto trace = AnchoredTrace<Bn254Cycle>::build(table, 8);
+    ASSERT_TRUE(trace.check().empty());
+    for (size_t s : { Q_NOTECOMMIT_G_D, Q_Y_CANON, Q_MUL_OVERFLOW }) {
+        auto corrupted = trace;
+        bool done = false;
+        for (size_t row = 0; row < trace.num_rows && !done; ++row) {
+            if (!corrupted.selectors[s][row].is_zero()) {
+                // advice cells read by the gate at offsets 1..2 (anchor-relative)
+                corrupted.advice[Q_Y_CANON == s ? 7 : 9][row + 1] += fr(1);
+                corrupted.advice[8][row + 1] += fr(1);
+                done = true;
+            }
+        }
+        EXPECT_FALSE(corrupted.check().empty()) << "selector " << s;
+    }
+}

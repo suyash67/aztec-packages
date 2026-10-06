@@ -1,0 +1,78 @@
+[
+  {
+    "actions": 1,
+    "keygen_s": 3.440550009,
+    "proof_bytes": 4992,
+    "prove_all_s": [
+      0.931827198,
+      0.919145528,
+      0.927668985,
+      1.056682671,
+      0.917760949
+    ],
+    "prove_s": 0.927668985,
+    "system": "zcash-orchard-halo2",
+    "threads": "default",
+    "verify_s": 0.009817317
+  },
+  {
+    "actions": 2,
+    "keygen_s": 3.440550009,
+    "proof_bytes": 7264,
+    "prove_all_s": [
+      1.651226929,
+      1.625406278,
+      1.8031499640000002,
+      1.6288237190000001,
+      1.678273104
+    ],
+    "prove_s": 1.651226929,
+    "system": "zcash-orchard-halo2",
+    "threads": "default",
+    "verify_s": 0.012963062
+  },
+  {
+    "actions": 4,
+    "keygen_s": 3.440550009,
+    "proof_bytes": 11808,
+    "prove_all_s": [
+      2.838461871,
+      2.935172457,
+      2.8248246200000002,
+      2.934827065,
+      3.140045309
+    ],
+    "prove_s": 2.934827065,
+    "system": "zcash-orchard-halo2",
+    "threads": "default",
+    "verify_s": 0.016809043
+  },
+  {
+    "actions": 8,
+    "keygen_s": 3.440550009,
+    "proof_bytes": 20896,
+    "prove_all_s": [
+      5.766284157,
+      5.420558092,
+      5.549414509
+    ],
+    "prove_s": 5.549414509,
+    "system": "zcash-orchard-halo2",
+    "threads": "default",
+    "verify_s": 0.024083233
+  },
+  {
+    "actions": 16,
+    "keygen_s": 3.440550009,
+    "proof_bytes": 39072,
+    "prove_all_s": [
+      11.120115588,
+      10.424863469,
+      10.165000848
+    ],
+    "prove_s": 10.424863469,
+    "system": "zcash-orchard-halo2",
+    "threads": "default",
+    "verify_s": 0.043870704
+  }
+]

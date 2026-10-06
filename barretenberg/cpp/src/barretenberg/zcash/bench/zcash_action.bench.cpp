@@ -4,7 +4,7 @@
  * (configuration, number of Actions).
  *
  * Usage: zcash_action_bench <system> <comma-separated action counts> [repetitions]
- *   system: halo2-honk-pasta | ultra-zk-bn254
+ *   system: halo2-honk-pasta | halo2-honk-bn254 | ultra-zk-bn254
  *
  * Timings: `synthesize_s` is witness synthesis (halo2 table / circuit construction from the Action witnesses),
  * `prove_s` the proof construction from the synthesized witness, `prove_total_s` their sum (comparable to halo2's
@@ -122,27 +122,29 @@ struct Result {
     }
 };
 
-Result bench_halo2_honk_pasta(size_t num_actions, size_t reps)
+template <typename Cycle> Result bench_halo2_honk(size_t num_actions, size_t reps)
 {
-    using Circuit = halo2::ActionCircuit<PastaCycle>;
-    using Trace = halo2::AnchoredTrace<PastaCycle>;
-    Result result{ .system = "halo2-honk-pasta", .actions = num_actions };
-    const auto bundle = random_bundle<PastaCycle>(num_actions);
+    using Circuit = halo2::ActionCircuit<Cycle>;
+    using Trace = halo2::AnchoredTrace<Cycle>;
+    using Flavor = OrchardFlavor_<Cycle>;
+    constexpr bool IS_PASTA = Flavor::IS_PASTA;
+    Result result{ .system = IS_PASTA ? "halo2-honk-pasta" : "halo2-honk-bn254", .actions = num_actions };
+    const auto bundle = random_bundle<Cycle>(num_actions);
 
     auto synthesize = [&]() {
         auto table = Circuit::build(bundle.witnesses, bundle.public_inputs);
         result.rows = table.num_rows;
-        return Trace::build(table, OrchardFlavor::TRACE_OFFSET);
+        return Trace::build(table, Flavor::TRACE_OFFSET);
     };
     // Warm-up: generator tables and the CRS are derived once per process.
     auto trace = synthesize();
     auto start = std::chrono::steady_clock::now();
-    OrchardProvingKey pk(trace);
+    OrchardProvingKey_<Cycle> pk(trace);
     result.keygen_s = seconds_since(start);
     result.log_n = pk.log_circuit_size;
     (void)orchard_prove(pk, trace);
 
-    OrchardFlavor::Proof proof;
+    typename Flavor::Proof proof;
     for (size_t r = 0; r < reps; ++r) {
         start = std::chrono::steady_clock::now();
         trace = synthesize();
@@ -155,11 +157,12 @@ Result bench_halo2_honk_pasta(size_t num_actions, size_t reps)
         result.verify_s.push_back(seconds_since(start));
     }
     result.proof_bytes = proof.size() * 32;
-    // Curve points in the proof: 17 witness commitments, 3 Libra, log_n - 1 Gemini folds, Shplonk Q, IPA S and
-    // 2 log_n L/R. Each serializes to 64 bytes here and to 32 bytes compressed.
+    // Curve points in the proof: 17 witness commitments, 3 Libra, log_n - 1 Gemini folds, the Shplonk quotient, then
+    // the halo2 IPA's S and 2 log_n L/R (Pasta) or the KZG quotient (BN254). A Pasta point serializes to 64 bytes and
+    // a BN254 point to 128 bytes (4 field elements); both compress to 32 bytes.
     const size_t log_n = result.log_n;
-    const size_t num_points = 17 + 3 + (log_n - 1) + 1 + 1 + (2 * log_n);
-    result.proof_bytes_compressed = result.proof_bytes - (32 * num_points);
+    const size_t num_points = 17 + 3 + (log_n - 1) + 1 + (IS_PASTA ? 1 + (2 * log_n) : 1);
+    result.proof_bytes_compressed = result.proof_bytes - ((IS_PASTA ? 32 : 96) * num_points);
     return result;
 }
 
@@ -249,7 +252,9 @@ int main(int argc, char** argv)
     }
     for (const size_t n : counts) {
         if (system == "halo2-honk-pasta") {
-            bench_halo2_honk_pasta(n, reps).print();
+            bench_halo2_honk<PastaCycle>(n, reps).print();
+        } else if (system == "halo2-honk-bn254") {
+            bench_halo2_honk<Bn254Cycle>(n, reps).print();
         } else if (system == "ultra-zk-bn254") {
             bench_ultra_zk_bn254(n, reps).print();
         } else {

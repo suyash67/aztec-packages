@@ -4,6 +4,7 @@
 #include "cycle.hpp"
 #include "fixed_base.hpp"
 #include "orchard_fixed_base_z.hpp"
+#include "orchard_fixed_base_z_bn254.hpp"
 #include "poseidon.hpp"
 #include "sinsemilla.hpp"
 
@@ -93,27 +94,40 @@ template <typename Cycle> struct Orchard {
         static const FixedBases f = []() {
             const auto& k = constants();
             FixedBases f;
-            auto zs = [&](const AffineElement& g, size_t windows, std::span<const uint64_t> published) {
+            // Pasta: Orchard's published z-values; BN254: the generated table (fixed_base_z_gen.test.cpp); other cycles
+            // search for them.
+            auto zs = [&](const AffineElement& g,
+                          size_t windows,
+                          std::span<const uint64_t> pasta,
+                          std::span<const uint64_t> bn254) {
                 if constexpr (std::is_same_v<Cycle, PastaCycle>) {
-                    return std::vector<uint64_t>(published.begin(), published.end());
+                    return std::vector<uint64_t>(pasta.begin(), pasta.end());
+                } else if constexpr (std::is_same_v<Cycle, Bn254Cycle>) {
+                    return std::vector<uint64_t>(bn254.begin(), bn254.end());
                 } else {
-                    static_cast<void>(published);
                     return FixedBase<Cycle>::find_zs(g, windows);
                 }
             };
-            using namespace orchard_constants;
-            f.fb_spend_auth_g =
-                FixedBase<Cycle>::make(k.spend_auth_g, NUM_WINDOWS, zs(k.spend_auth_g, NUM_WINDOWS, SPEND_AUTH_G_Z));
-            f.fb_value_commit_r = FixedBase<Cycle>::make(
-                k.value_commit_r, NUM_WINDOWS, zs(k.value_commit_r, NUM_WINDOWS, VALUE_COMMIT_R_Z));
+            namespace pz = orchard_constants;
+            namespace bz = orchard_constants_bn254;
+            f.fb_spend_auth_g = FixedBase<Cycle>::make(
+                k.spend_auth_g, NUM_WINDOWS, zs(k.spend_auth_g, NUM_WINDOWS, pz::SPEND_AUTH_G_Z, bz::SPEND_AUTH_G_Z));
+            f.fb_value_commit_r =
+                FixedBase<Cycle>::make(k.value_commit_r,
+                                       NUM_WINDOWS,
+                                       zs(k.value_commit_r, NUM_WINDOWS, pz::VALUE_COMMIT_R_Z, bz::VALUE_COMMIT_R_Z));
             f.fb_note_commit_r =
-                FixedBase<Cycle>::make(k.note_commit_r, NUM_WINDOWS, zs(k.note_commit_r, NUM_WINDOWS, NOTE_COMMIT_R_Z));
-            f.fb_commit_ivk_r =
-                FixedBase<Cycle>::make(k.commit_ivk_r, NUM_WINDOWS, zs(k.commit_ivk_r, NUM_WINDOWS, COMMIT_IVK_R_Z));
-            f.fb_nullifier_k =
-                FixedBase<Cycle>::make(k.nullifier_k, NUM_WINDOWS, zs(k.nullifier_k, NUM_WINDOWS, NULLIFIER_K_Z));
+                FixedBase<Cycle>::make(k.note_commit_r,
+                                       NUM_WINDOWS,
+                                       zs(k.note_commit_r, NUM_WINDOWS, pz::NOTE_COMMIT_R_Z, bz::NOTE_COMMIT_R_Z));
+            f.fb_commit_ivk_r = FixedBase<Cycle>::make(
+                k.commit_ivk_r, NUM_WINDOWS, zs(k.commit_ivk_r, NUM_WINDOWS, pz::COMMIT_IVK_R_Z, bz::COMMIT_IVK_R_Z));
+            f.fb_nullifier_k = FixedBase<Cycle>::make(
+                k.nullifier_k, NUM_WINDOWS, zs(k.nullifier_k, NUM_WINDOWS, pz::NULLIFIER_K_Z, bz::NULLIFIER_K_Z));
             f.fb_value_commit_v = FixedBase<Cycle>::make(
-                k.value_commit_v, NUM_WINDOWS_SHORT, zs(k.value_commit_v, NUM_WINDOWS_SHORT, VALUE_COMMIT_V_Z));
+                k.value_commit_v,
+                NUM_WINDOWS_SHORT,
+                zs(k.value_commit_v, NUM_WINDOWS_SHORT, pz::VALUE_COMMIT_V_Z, bz::VALUE_COMMIT_V_Z));
             return f;
         }();
         return f;

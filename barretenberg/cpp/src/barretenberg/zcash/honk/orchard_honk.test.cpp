@@ -88,3 +88,23 @@ TEST(ZcashOrchardHonk, ProveAndVerifyMultipleActions)
     info("2 actions: n = ", trace.num_rows, ", proof size: ", proof.size() * 32, " bytes");
     EXPECT_TRUE(orchard_verify(*pk.vk, pis, proof));
 }
+
+TEST(ZcashOrchardHonk, Bn254PortProveAndVerifyKZG)
+{
+    using O = Orchard<Bn254Cycle>;
+    auto& engine = numeric::get_debug_randomness();
+    auto w = O::random_witness(engine);
+    std::vector<fr> pis;
+    for (const auto& f : O::evaluate(w)->to_field_elements()) {
+        pis.push_back(f);
+    }
+    auto table = ActionCircuit<Bn254Cycle>::build({ w }, pis);
+    auto trace = AnchoredTrace<Bn254Cycle>::build(table, OrchardBn254Flavor::TRACE_OFFSET);
+    OrchardProvingKey_<Bn254Cycle> pk(trace);
+    auto proof = orchard_prove(pk, trace);
+    info("BN254 halo2-arith proof: n = ", trace.num_rows, ", ", proof.size() * 32, " bytes");
+    EXPECT_TRUE(orchard_verify(*pk.vk, pis, proof));
+    auto wrong = pis;
+    wrong[CMX] += fr(1);
+    EXPECT_FALSE(orchard_verify(*pk.vk, wrong, proof));
+}

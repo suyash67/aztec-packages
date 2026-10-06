@@ -51,7 +51,7 @@ template <typename Flavor_, typename FF_> class OrchardGateRelationImpl {
   public:
     using FF = FF_;
     using Cycle = typename Flavor_::Cycle;
-    static constexpr size_t NUM = halo2::NUM_GATE_CONSTRAINTS;
+    static constexpr size_t NUM = halo2::OrchardGates<Cycle>::NUM_GATE_CONSTRAINTS;
     static constexpr size_t LENGTH = halo2::MAX_GATE_DEGREE + 1;
 
     static constexpr std::array<size_t, NUM> SUBRELATION_PARTIAL_LENGTHS = [] {
