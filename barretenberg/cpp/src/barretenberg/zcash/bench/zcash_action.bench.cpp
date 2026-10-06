@@ -4,7 +4,7 @@
  * (configuration, number of Actions).
  *
  * Usage: zcash_action_bench <system> <comma-separated action counts> [repetitions]
- *   system: halo2-honk-pasta | halo2-honk-bn254 | ultra-zk-bn254
+ *   system: halo2-honk-pasta | halo2-honk-bn254 | ultra-zk-bn254 | ultra-zk-pasta
  *
  * Timings: `synthesize_s` is witness synthesis (halo2 table / circuit construction from the Action witnesses),
  * `prove_s` the proof construction from the synthesized witness, `prove_total_s` their sum (comparable to halo2's
@@ -23,6 +23,8 @@
 #include "barretenberg/zcash/halo2/action_circuit.hpp"
 #include "barretenberg/zcash/honk/orchard_honk.hpp"
 #include "barretenberg/zcash/ultra/action_circuit_ultra.hpp"
+#include "barretenberg/zcash/ultra_pasta/action_circuit_ultra_pasta.hpp"
+#include "barretenberg/zcash/ultra_pasta/ultra_pasta_honk.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -86,7 +88,9 @@ struct Result {
     size_t rows = 0;  // used rows / gates
     size_t log_n = 0; // log2 of the proven polynomial size
     size_t proof_bytes = 0;
-    size_t proof_bytes_compressed = 0; // with 32-byte compressed curve points, as halo2 serializes them
+    // With 32-byte compressed curve points, as halo2 serializes them, and without the public inputs (which halo2 proofs
+    // do not contain).
+    size_t proof_bytes_compressed = 0;
     double keygen_s = 0;
     std::vector<double> synthesize_s;
     std::vector<double> prove_s;
@@ -220,9 +224,65 @@ Result bench_ultra_zk_bn254(size_t num_actions, size_t reps)
     result.proof_bytes = proof.size() * 32;
     // Curve points: 9 witness commitments (incl. the Gemini masking polynomial), 3 Libra, CONST_PROOF_SIZE_LOG_N - 1
     // Gemini folds (the proof is padded to a constant size), the Shplonk quotient and the KZG quotient. A BN254 point
-    // takes 4 field elements (128 bytes) here and 32 bytes compressed.
+    // takes 4 field elements (128 bytes) here and 32 bytes compressed. The proof leads with the public inputs: the
+    // Action's and the default IO (pairing points).
     const size_t num_points = 9 + 3 + (CONST_PROOF_SIZE_LOG_N - 1) + 2;
-    result.proof_bytes_compressed = result.proof_bytes - (num_points * 96);
+    const size_t num_public_inputs = bundle.public_inputs.size() + DefaultIO::PUBLIC_INPUTS_SIZE;
+    result.proof_bytes_compressed = result.proof_bytes - (num_points * 96) - (num_public_inputs * 32);
+    return result;
+}
+
+Result bench_ultra_zk_pasta(size_t num_actions, size_t reps)
+{
+    using Flavor = UltraPastaZKFlavor;
+    using Builder = ultra_pasta::Builder;
+    Result result{ .system = "ultra-zk-pasta", .actions = num_actions };
+    const auto bundle = random_bundle<PastaCycle>(num_actions);
+    auto synthesize = [&]() {
+        Builder builder;
+        ultra_pasta::ActionCircuitUltraPasta::build(builder, bundle.witnesses, bundle.public_inputs);
+        return builder;
+    };
+
+    // Key generation: circuit construction, trace population and the commitments to the precomputed polynomials.
+    auto start = std::chrono::steady_clock::now();
+    std::shared_ptr<Flavor::VerificationKey> vk;
+    {
+        auto builder = synthesize();
+        result.rows = builder.get_num_finalized_gates_inefficient();
+        auto instance = std::make_shared<UltraPastaProverInstance>(builder);
+        vk = std::make_shared<Flavor::VerificationKey>(instance->get_precomputed());
+    }
+    result.keygen_s = seconds_since(start);
+    result.log_n = vk->log_circuit_size;
+
+    Flavor::Proof proof;
+    for (size_t r = 0; r < reps + 1; ++r) {
+        start = std::chrono::steady_clock::now();
+        auto builder = synthesize();
+        auto instance = std::make_shared<UltraPastaProverInstance>(builder);
+        const double synthesize_s = seconds_since(start);
+        start = std::chrono::steady_clock::now();
+        proof = ultra_pasta_prove(instance, vk);
+        const double prove_s = seconds_since(start);
+        start = std::chrono::steady_clock::now();
+        std::vector<PastaCycle::FF> public_inputs;
+        const bool ok = ultra_pasta_verify(vk, proof, &public_inputs) && public_inputs == bundle.public_inputs;
+        const double verify_s = seconds_since(start);
+        if (r == 0) {
+            continue; // warm-up
+        }
+        result.synthesize_s.push_back(synthesize_s);
+        result.prove_s.push_back(prove_s);
+        result.verify_s.push_back(verify_s);
+        result.verified = ok;
+    }
+    result.proof_bytes = proof.size() * 32;
+    // Curve points: 9 witness commitments (incl. the Gemini masking polynomial), 3 Libra, log_n - 1 Gemini folds, the
+    // Shplonk quotient, then the halo2 IPA's S and 2 log_n L/R. A Vesta point serializes to 64 bytes and compresses to
+    // 32. The proof leads with the public inputs.
+    const size_t num_points = 9 + 3 + (result.log_n - 1) + 1 + 1 + (2 * result.log_n);
+    result.proof_bytes_compressed = result.proof_bytes - (num_points * 32) - (bundle.public_inputs.size() * 32);
     return result;
 }
 
@@ -257,6 +317,8 @@ int main(int argc, char** argv)
             bench_halo2_honk<Bn254Cycle>(n, reps).print();
         } else if (system == "ultra-zk-bn254") {
             bench_ultra_zk_bn254(n, reps).print();
+        } else if (system == "ultra-zk-pasta") {
+            bench_ultra_zk_pasta(n, reps).print();
         } else {
             fprintf(stderr, "unknown system %s\n", system.c_str());
             return 1;

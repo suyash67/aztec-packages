@@ -44,14 +44,6 @@ template <typename FF> void mask(Polynomial<FF>& poly)
     }
 }
 
-Halo2IPA<curve::Vesta>::Generators ipa_generators(const CommitmentKey<curve::Vesta>& ck, size_t n)
-{
-    using Commitment = curve::Vesta::AffineElement;
-    static const Commitment w = halo2_vesta_w();
-    static const Commitment u = halo2_vesta_u();
-    return { std::span<const Commitment>(ck.get_monomial_points().data(), n), w, u };
-}
-
 // halo2 label of a permutation cell (column j, row r).
 template <typename FF> FF permutation_label(size_t column, size_t row, size_t n)
 {
@@ -414,7 +406,7 @@ typename OrchardFlavor_<Cycle>::Proof orchard_prove(const OrchardProvingKey_<Cyc
         n, batcher, sumcheck_output.challenge, ck, transcript, small_subgroup_ipa.get_witness_polynomials());
     if constexpr (Flavor::IS_PASTA) {
         BB_BENCH_NAME("orchard_prove/halo2_ipa");
-        Halo2IPA<Curve>::prove(ipa_generators(ck, n), opening_claim, FF(0), transcript);
+        Halo2IPA<Curve>::prove(halo2_vesta_ipa_generators(ck, n), opening_claim, FF(0), transcript);
     } else {
         KZG<Curve>::compute_opening_proof(ck, opening_claim, transcript);
     }
@@ -497,7 +489,7 @@ bool orchard_verify(const typename OrchardFlavor_<Cycle>::VerificationKey& vk,
         const auto& batch_claim = shplemini_output.batch_opening_claim;
         const OpeningClaim<Curve> opening_claim{ { batch_claim.evaluation_point, FF(0) },
                                                  batch_mul<Curve>(batch_claim.commitments, batch_claim.scalars) };
-        pcs_verified = Halo2IPA<Curve>::verify(ipa_generators(ck, n), opening_claim, transcript);
+        pcs_verified = Halo2IPA<Curve>::verify(halo2_vesta_ipa_generators(ck, n), opening_claim, transcript);
     } else {
         auto pairing_points =
             KZG<Curve>::reduce_verify_batch_opening_claim(std::move(shplemini_output.batch_opening_claim), transcript);

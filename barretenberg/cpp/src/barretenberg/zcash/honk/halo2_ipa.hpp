@@ -2,11 +2,13 @@
 
 #include "barretenberg/commitment_schemes/claim.hpp"
 #include "barretenberg/commitment_schemes/commitment_key.hpp"
+#include "barretenberg/common/bb_bench.hpp"
 #include "barretenberg/common/thread.hpp"
 #include "barretenberg/ecc/scalar_multiplication/scalar_multiplication.hpp"
 #include "barretenberg/numeric/bitop/get_msb.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
 #include "barretenberg/polynomials/polynomial.hpp"
+#include "barretenberg/zcash/honk/pasta_crs.hpp"
 
 #include <span>
 #include <vector>
@@ -103,6 +105,73 @@ template <typename Curve> class Halo2IPA {
         return v;
     }
 
+    // Signed 4-bit windows of a scalar: k = sum_i d_i 16^i with d_i in [-8, 8).
+    static constexpr size_t NUM_SIGNED_WINDOWS = 65;
+    using SignedDigits = std::array<int8_t, NUM_SIGNED_WINDOWS>;
+    static SignedDigits signed_digits(const Fr& scalar)
+    {
+        const uint256_t k(scalar);
+        SignedDigits d{};
+        int carry = 0;
+        for (size_t i = 0; i < NUM_SIGNED_WINDOWS; ++i) {
+            int digit = (i < 64 ? static_cast<int>(k.slice(4 * i, (4 * i) + 4).data[0]) : 0) + carry;
+            carry = 0;
+            if (digit >= 8) {
+                digit -= 16;
+                carry = 1;
+            }
+            d[i] = static_cast<int8_t>(digit);
+        }
+        return d;
+    }
+
+    /**
+     * @brief sum_t scalars_t * points_t (scalars given by their signed digits) by Straus' method: the terms share the
+     * doublings, each adds from its table of [1..8] P_t.
+     */
+    static GroupElement straus(std::span<const Commitment> points, std::span<const SignedDigits> digits)
+    {
+        const size_t num = points.size();
+        std::vector<std::array<GroupElement, 8>> tables(num);
+        for (size_t t = 0; t < num; ++t) {
+            auto& table = tables[t];
+            table[0] = GroupElement(points[t]);
+            table[1] = table[0].dbl();
+            for (size_t j = 2; j < 8; ++j) {
+                table[j] = table[j - 1] + points[t];
+            }
+        }
+        GroupElement acc = GroupElement::infinity();
+        for (size_t w = NUM_SIGNED_WINDOWS; w-- > 0;) {
+            if (w + 1 < NUM_SIGNED_WINDOWS) {
+                for (size_t i = 0; i < 4; ++i) {
+                    acc.self_dbl();
+                }
+            }
+            for (size_t t = 0; t < num; ++t) {
+                const int d = digits[t][w];
+                if (d > 0) {
+                    acc += tables[t][static_cast<size_t>(d - 1)];
+                } else if (d < 0) {
+                    acc -= tables[t][static_cast<size_t>(-d - 1)];
+                }
+            }
+        }
+        return acc;
+    }
+
+    static std::vector<Commitment> normalize(std::vector<GroupElement>& elements)
+    {
+        GroupElement::batch_normalize(elements.data(), elements.size());
+        std::vector<Commitment> out(elements.size());
+        parallel_for_range(elements.size(), [&](size_t start, size_t end) {
+            for (size_t i = start; i < end; ++i) {
+                out[i] = Commitment(elements[i].x, elements[i].y);
+            }
+        });
+        return out;
+    }
+
     /**
      * @brief Prove p(x) = v for the claim's polynomial, where P = <p, G> + [p_blind] W.
      */
@@ -137,6 +206,7 @@ template <typename Curve> class Halo2IPA {
         }
         s[0] -= s_at_x;
         const Fr s_blind = Fr::random_element(&rng);
+        BB_BENCH_NAME("halo2_ipa/prove");
         const Commitment s_commitment = GroupElement(msm(s, gens.g)) + GroupElement(gens.w) * s_blind;
         transcript->send_to_verifier("IPA:S", s_commitment);
         const Fr xi = transcript->template get_challenge<Fr>("IPA:xi");
@@ -154,10 +224,15 @@ template <typename Curve> class Halo2IPA {
         for (size_t i = 1; i < n; ++i) {
             b[i] = b[i - 1] * x;
         }
-        // The folded generators are never materialized: after j rounds, G'[i] = sum_t w_t G[t * m + i] with m = n / 2^j
-        // and w the tensor of the challenges (w_t = prod_r u_r^{bit_r(t)}, most significant bit first), so L_j and R_j
-        // are MSMs over the original generators.
+        // For the first rounds the folded generators are not materialized: after j rounds, G'[i] = sum_t w_t G[t * m +
+        // i] with m = n / 2^j and w the tensor of the challenges (w_t = prod_r u_r^{bit_r(t)}, most significant bit
+        // first), so L_j and R_j are MSMs over the original generators. After TENSOR_ROUNDS rounds the folded
+        // generators are computed (one Straus MSM of 2^TENSOR_ROUNDS terms per generator) and folded explicitly, as
+        // halo2 does, from then on.
+        constexpr size_t TENSOR_ROUNDS = 4;
+        const size_t tensor_rounds = std::min(k, TENSOR_ROUNDS);
         std::vector<Fr> tensor{ Fr(1) };
+        std::vector<Commitment> g_folded;
         for (size_t j = 0; j < k; ++j) {
             const size_t m = n >> j;
             const size_t half = m >> 1;
@@ -167,14 +242,42 @@ template <typename Curve> class Halo2IPA {
             const Fr value_r = inner_product(p_lo, std::span<const Fr>(b.data() + half, half));
             const Fr l_rand = Fr::random_element(&rng);
             const Fr r_rand = Fr::random_element(&rng);
-            std::vector<std::vector<Fr>> scalars(2, std::vector<Fr>(n, Fr(0)));
-            parallel_for(tensor.size(), [&](size_t t) {
-                for (size_t i = 0; i < half; ++i) {
-                    scalars[0][(t * m) + i] = p_hi[i] * tensor[t];
-                    scalars[1][(t * m) + half + i] = p_lo[i] * tensor[t];
+            std::vector<Commitment> lr;
+            if (j < tensor_rounds) {
+                BB_BENCH_NAME("halo2_ipa/tensor_round");
+                std::vector<std::vector<Fr>> scalars(2, std::vector<Fr>(n, Fr(0)));
+                parallel_for(tensor.size(), [&](size_t t) {
+                    for (size_t i = 0; i < half; ++i) {
+                        scalars[0][(t * m) + i] = p_hi[i] * tensor[t];
+                        scalars[1][(t * m) + half + i] = p_lo[i] * tensor[t];
+                    }
+                });
+                lr = batch_msm(gens.g.subspan(0, n), scalars, /*handle_edge_cases=*/false);
+            } else {
+                if (j == tensor_rounds) {
+                    BB_BENCH_NAME("halo2_ipa/materialize");
+                    std::vector<SignedDigits> digits(tensor.size());
+                    for (size_t t = 0; t < tensor.size(); ++t) {
+                        digits[t] = signed_digits(tensor[t]);
+                    }
+                    std::vector<GroupElement> folded(m);
+                    parallel_for_range(m, [&](size_t start, size_t end) {
+                        std::vector<Commitment> terms(tensor.size());
+                        for (size_t i = start; i < end; ++i) {
+                            for (size_t t = 0; t < tensor.size(); ++t) {
+                                terms[t] = gens.g[(t * m) + i];
+                            }
+                            folded[i] = straus(terms, digits);
+                        }
+                    });
+                    g_folded = normalize(folded);
                 }
-            });
-            const auto lr = batch_msm(gens.g.subspan(0, n), scalars, /*handle_edge_cases=*/false);
+                std::vector<std::vector<Fr>> lo{ std::vector<Fr>(p_hi.begin(), p_hi.end()) };
+                std::vector<std::vector<Fr>> hi{ std::vector<Fr>(p_lo.begin(), p_lo.end()) };
+                const std::span<const Commitment> g(g_folded);
+                lr.push_back(batch_msm(g.subspan(0, half), lo, /*handle_edge_cases=*/false)[0]);
+                lr.push_back(batch_msm(g.subspan(half, half), hi, /*handle_edge_cases=*/false)[0]);
+            }
             const Commitment l_j =
                 GroupElement(lr[0]) + GroupElement(gens.u) * (value_l * z) + GroupElement(gens.w) * l_rand;
             const Commitment r_j =
@@ -191,13 +294,26 @@ template <typename Curve> class Halo2IPA {
             }
             p.resize(half);
             b.resize(half);
-            // G'_lo + u_j G'_hi: the tensor doubles, with u_j on the entries whose new bit is 1.
-            std::vector<Fr> next(2 * tensor.size());
-            for (size_t t = 0; t < tensor.size(); ++t) {
-                next[2 * t] = tensor[t];
-                next[(2 * t) + 1] = tensor[t] * u_j;
+            if (j < tensor_rounds) {
+                // G'_lo + u_j G'_hi: the tensor doubles, with u_j on the entries whose new bit is 1.
+                std::vector<Fr> next(2 * tensor.size());
+                for (size_t t = 0; t < tensor.size(); ++t) {
+                    next[2 * t] = tensor[t];
+                    next[(2 * t) + 1] = tensor[t] * u_j;
+                }
+                tensor = std::move(next);
+            } else if (half > 1) {
+                BB_BENCH_NAME("halo2_ipa/fold");
+                const std::array<SignedDigits, 2> digits{ signed_digits(Fr(1)), signed_digits(u_j) };
+                std::vector<GroupElement> folded(half);
+                parallel_for_range(half, [&](size_t start, size_t end) {
+                    for (size_t i = start; i < end; ++i) {
+                        const std::array<Commitment, 2> terms{ g_folded[i], g_folded[i + half] };
+                        folded[i] = straus(terms, digits);
+                    }
+                });
+                g_folded = normalize(folded);
             }
-            tensor = std::move(next);
 
             f += l_rand * u_j_inv + r_rand * u_j;
         }
@@ -263,5 +379,17 @@ template <typename Curve> class Halo2IPA {
         return GroupElement(msm(msm_scalars, msm_points)).is_point_at_infinity();
     }
 };
+
+/**
+ * @brief The halo2 IPA generators of size n on Vesta: G from the commitment key (halo2's parameters), and halo2's W
+ * and U.
+ */
+inline Halo2IPA<curve::Vesta>::Generators halo2_vesta_ipa_generators(const CommitmentKey<curve::Vesta>& ck, size_t n)
+{
+    using Commitment = curve::Vesta::AffineElement;
+    static const Commitment w = halo2_vesta_w();
+    static const Commitment u = halo2_vesta_u();
+    return { std::span<const Commitment>(ck.get_monomial_points().data(), n), w, u };
+}
 
 } // namespace bb::zcash
