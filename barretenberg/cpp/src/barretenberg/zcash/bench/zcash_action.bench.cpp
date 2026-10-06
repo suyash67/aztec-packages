@@ -4,7 +4,7 @@
  * (configuration, number of Actions).
  *
  * Usage: zcash_action_bench <system> <comma-separated action counts> [repetitions]
- *   system: halo2-honk-pasta
+ *   system: halo2-honk-pasta | ultra-zk-bn254
  *
  * Timings: `synthesize_s` is witness synthesis (halo2 table / circuit construction from the Action witnesses),
  * `prove_s` the proof construction from the synthesized witness, `prove_total_s` their sum (comparable to halo2's
@@ -12,15 +12,23 @@
  * proving + verification key generation. Medians over the repetitions are reported. The thread count is the
  * HARDWARE_CONCURRENCY environment variable (default: all cores).
  */
+#include "barretenberg/common/bb_bench.hpp"
 #include "barretenberg/common/thread.hpp"
+#include "barretenberg/flavor/ultra_zk_flavor.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
+#include "barretenberg/srs/global_crs.hpp"
+#include "barretenberg/ultra_honk/prover_instance.hpp"
+#include "barretenberg/ultra_honk/ultra_prover.hpp"
+#include "barretenberg/ultra_honk/ultra_verifier.hpp"
 #include "barretenberg/zcash/halo2/action_circuit.hpp"
 #include "barretenberg/zcash/honk/orchard_honk.hpp"
+#include "barretenberg/zcash/ultra/action_circuit_ultra.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <functional>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -155,6 +163,66 @@ Result bench_halo2_honk_pasta(size_t num_actions, size_t reps)
     return result;
 }
 
+Result bench_ultra_zk_bn254(size_t num_actions, size_t reps)
+{
+    using Flavor = UltraZKFlavor;
+    using Builder = ultra::Builder;
+    Result result{ .system = "ultra-zk-bn254", .actions = num_actions };
+    const auto bundle = random_bundle<Bn254Cycle>(num_actions);
+    auto synthesize = [&]() {
+        Builder builder;
+        ultra::ActionCircuitUltra::build(builder, bundle.witnesses, bundle.public_inputs);
+        DefaultIO::add_default(builder);
+        return builder;
+    };
+
+    // Key generation: circuit construction, trace population and the commitments to the precomputed polynomials.
+    auto start = std::chrono::steady_clock::now();
+    std::shared_ptr<Flavor::VerificationKey> vk;
+    {
+        auto builder = synthesize();
+        result.rows = builder.get_num_finalized_gates_inefficient();
+        auto instance = std::make_shared<ProverInstance_<Flavor>>(builder);
+        vk = std::make_shared<Flavor::VerificationKey>(instance->get_precomputed());
+    }
+    result.keygen_s = seconds_since(start);
+    result.log_n = vk->log_circuit_size;
+    auto vk_and_hash = std::make_shared<Flavor::VKAndHash>(vk);
+
+    HonkProof proof;
+    for (size_t r = 0; r < reps + 1; ++r) {
+        start = std::chrono::steady_clock::now();
+        auto builder = synthesize();
+        auto instance = std::make_shared<ProverInstance_<Flavor>>(builder);
+        const double synthesize_s = seconds_since(start);
+        start = std::chrono::steady_clock::now();
+        UltraProver_<Flavor> prover(instance, vk);
+        proof = prover.construct_proof();
+        const double prove_s = seconds_since(start);
+        start = std::chrono::steady_clock::now();
+        UltraVerifier_<Flavor, DefaultIO> verifier(vk_and_hash);
+        bool ok = verifier.verify_proof(proof).result;
+        for (size_t i = 0; i < bundle.public_inputs.size(); ++i) {
+            ok = ok && proof[i] == bundle.public_inputs[i];
+        }
+        const double verify_s = seconds_since(start);
+        if (r == 0) {
+            continue; // warm-up
+        }
+        result.synthesize_s.push_back(synthesize_s);
+        result.prove_s.push_back(prove_s);
+        result.verify_s.push_back(verify_s);
+        result.verified = ok;
+    }
+    result.proof_bytes = proof.size() * 32;
+    // Curve points: 9 witness commitments (incl. the Gemini masking polynomial), 3 Libra, CONST_PROOF_SIZE_LOG_N - 1
+    // Gemini folds (the proof is padded to a constant size), the Shplonk quotient and the KZG quotient. A BN254 point
+    // takes 4 field elements (128 bytes) here and 32 bytes compressed.
+    const size_t num_points = 9 + 3 + (CONST_PROOF_SIZE_LOG_N - 1) + 2;
+    result.proof_bytes_compressed = result.proof_bytes - (num_points * 96);
+    return result;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -173,13 +241,24 @@ int main(int argc, char** argv)
         }
     }
     const size_t reps = argc > 3 ? std::stoul(argv[3]) : 3;
+    // ZCASH_BENCH_PROFILE=1 prints barretenberg's hierarchical timers to stderr.
+    const bool profile = std::getenv("ZCASH_BENCH_PROFILE") != nullptr;
+    bb::detail::use_bb_bench = profile;
+    if (system == "ultra-zk-bn254") {
+        srs::init_bn254_file_crs_factory(srs::bb_crs_path());
+    }
     for (const size_t n : counts) {
         if (system == "halo2-honk-pasta") {
             bench_halo2_honk_pasta(n, reps).print();
+        } else if (system == "ultra-zk-bn254") {
+            bench_ultra_zk_bn254(n, reps).print();
         } else {
             fprintf(stderr, "unknown system %s\n", system.c_str());
             return 1;
         }
+    }
+    if (profile) {
+        bb::detail::GLOBAL_BENCH_STATS.print_aggregate_counts_hierarchical(std::cerr);
     }
     return 0;
 }

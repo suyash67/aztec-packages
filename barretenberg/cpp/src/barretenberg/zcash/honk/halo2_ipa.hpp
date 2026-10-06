@@ -42,15 +42,29 @@ template <typename Curve> class Halo2IPA {
         Commitment u;                  // inner-product generator
     };
 
+    /**
+     * @brief Multi-scalar multiplications sharing one point vector: result i is sum_k scalars[i][k] * points[k].
+     * @param handle_edge_cases false only if the points are known to be independent generators
+     */
+    static std::vector<Commitment> batch_msm(std::span<const Commitment> points,
+                                             std::vector<std::vector<Fr>>& scalars,
+                                             bool handle_edge_cases)
+    {
+        std::vector<PolynomialSpan<Fr>> spans;
+        for (auto& s : scalars) {
+            BB_ASSERT_LTE(s.size(), points.size());
+            spans.emplace_back(0, std::span<Fr>(s));
+        }
+        return scalar_multiplication::MSM<Curve>::batch_multi_scalar_mul(points, spans, handle_edge_cases);
+    }
+
     static GroupElement msm(std::span<const Fr> scalars, std::span<const Commitment> points)
     {
-        BB_ASSERT_LTE(scalars.size(), points.size());
         if (scalars.empty()) {
             return GroupElement::infinity();
         }
-        std::vector<Fr> copy(scalars.begin(), scalars.end());
-        std::vector<Commitment> pts(points.begin(), points.begin() + static_cast<std::ptrdiff_t>(scalars.size()));
-        return scalar_multiplication::pippenger<Curve>(PolynomialSpan<const Fr>(0, copy), pts);
+        std::vector<std::vector<Fr>> s{ std::vector<Fr>(scalars.begin(), scalars.end()) };
+        return GroupElement(batch_msm(points.subspan(0, scalars.size()), s, /*handle_edge_cases=*/true)[0]);
     }
 
     static Fr inner_product(std::span<const Fr> a, std::span<const Fr> b)
@@ -140,22 +154,31 @@ template <typename Curve> class Halo2IPA {
         for (size_t i = 1; i < n; ++i) {
             b[i] = b[i - 1] * x;
         }
-        std::vector<Commitment> g(gens.g.begin(), gens.g.begin() + static_cast<std::ptrdiff_t>(n));
-
+        // The folded generators are never materialized: after j rounds, G'[i] = sum_t w_t G[t * m + i] with m = n / 2^j
+        // and w the tensor of the challenges (w_t = prod_r u_r^{bit_r(t)}, most significant bit first), so L_j and R_j
+        // are MSMs over the original generators.
+        std::vector<Fr> tensor{ Fr(1) };
         for (size_t j = 0; j < k; ++j) {
-            const size_t half = size_t{ 1 } << (k - j - 1);
+            const size_t m = n >> j;
+            const size_t half = m >> 1;
             std::span<const Fr> p_lo(p.data(), half);
             std::span<const Fr> p_hi(p.data() + half, half);
-            std::span<const Commitment> g_lo(g.data(), half);
-            std::span<const Commitment> g_hi(g.data() + half, half);
             const Fr value_l = inner_product(p_hi, std::span<const Fr>(b.data(), half));
             const Fr value_r = inner_product(p_lo, std::span<const Fr>(b.data() + half, half));
             const Fr l_rand = Fr::random_element(&rng);
             const Fr r_rand = Fr::random_element(&rng);
+            std::vector<std::vector<Fr>> scalars(2, std::vector<Fr>(n, Fr(0)));
+            parallel_for(tensor.size(), [&](size_t t) {
+                for (size_t i = 0; i < half; ++i) {
+                    scalars[0][(t * m) + i] = p_hi[i] * tensor[t];
+                    scalars[1][(t * m) + half + i] = p_lo[i] * tensor[t];
+                }
+            });
+            const auto lr = batch_msm(gens.g.subspan(0, n), scalars, /*handle_edge_cases=*/false);
             const Commitment l_j =
-                GroupElement(msm(p_hi, g_lo)) + GroupElement(gens.u) * (value_l * z) + GroupElement(gens.w) * l_rand;
+                GroupElement(lr[0]) + GroupElement(gens.u) * (value_l * z) + GroupElement(gens.w) * l_rand;
             const Commitment r_j =
-                GroupElement(msm(p_lo, g_hi)) + GroupElement(gens.u) * (value_r * z) + GroupElement(gens.w) * r_rand;
+                GroupElement(lr[1]) + GroupElement(gens.u) * (value_r * z) + GroupElement(gens.w) * r_rand;
             const std::string index = std::to_string(j);
             transcript->send_to_verifier("IPA:L_" + index, l_j);
             transcript->send_to_verifier("IPA:R_" + index, r_j);
@@ -168,14 +191,13 @@ template <typename Curve> class Halo2IPA {
             }
             p.resize(half);
             b.resize(half);
-            // G_lo + u_j G_hi, normalized in batches.
-            std::vector<GroupElement> folded(half);
-            parallel_for(half, [&](size_t i) { folded[i] = GroupElement(g[i]) + GroupElement(g[i + half]) * u_j; });
-            GroupElement::batch_normalize(folded.data(), half);
-            for (size_t i = 0; i < half; ++i) {
-                g[i] = Commitment(folded[i].x, folded[i].y);
+            // G'_lo + u_j G'_hi: the tensor doubles, with u_j on the entries whose new bit is 1.
+            std::vector<Fr> next(2 * tensor.size());
+            for (size_t t = 0; t < tensor.size(); ++t) {
+                next[2 * t] = tensor[t];
+                next[(2 * t) + 1] = tensor[t] * u_j;
             }
-            g.resize(half);
+            tensor = std::move(next);
 
             f += l_rand * u_j_inv + r_rand * u_j;
         }

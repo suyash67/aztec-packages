@@ -97,14 +97,35 @@ std::vector<field_ct> ActionCircuitUltra::message_words(const std::vector<Segmen
 
 cycle_group_ct ActionCircuitUltra::hash_to_point(const AffineElement& q, const std::vector<field_ct>& words)
 {
-    cycle_group_ct acc(q);
+    using Element = Cycle::Element;
+    // The accumulator A and the S points are witnesses chained through Ultra elliptic addition gates; as in halo2's
+    // Sinsemilla chip the incomplete-addition exceptional cases are not checked (they occur with negligible
+    // probability, see the Sinsemilla security analysis).
+    uint32_t acc_x = builder_.put_constant_variable(q.x);
+    uint32_t acc_y = builder_.put_constant_variable(q.y);
+    AffineElement acc = q;
+    auto add =
+        [&](uint32_t x1, uint32_t y1, const AffineElement& p1, uint32_t x2, uint32_t y2, const AffineElement& p2) {
+            const AffineElement p3(Element(p1) + Element(p2));
+            const uint32_t x3 = builder_.add_variable(p3.x);
+            const uint32_t y3 = builder_.add_variable(p3.y);
+            builder_.create_ecc_add_gate(
+                { .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2, .x3 = x3, .y3 = y3, .is_addition = true });
+            return std::make_tuple(x3, y3, p3);
+        };
     for (const auto& word : words) {
-        const auto [x, y] = s_table_[word];
-        const cycle_group_ct s(x, y, /*assert_on_curve=*/false);
-        const auto tmp = acc.unconditional_add(s);
-        acc = tmp.unconditional_add(acc);
+        const auto [sx, sy] = s_table_[word];
+        const AffineElement s(sx.get_value(), sy.get_value());
+        // A constant word (e.g. a Merkle layer index) reads a constant point.
+        auto index = [&](const field_ct& v) {
+            return v.is_constant() ? builder_.put_constant_variable(v.get_value()) : v.normalize().get_witness_index();
+        };
+        const auto [tx, ty, t] = add(acc_x, acc_y, acc, index(sx), index(sy), s);
+        std::tie(acc_x, acc_y, acc) = add(tx, ty, t, acc_x, acc_y, acc);
     }
-    return acc;
+    return cycle_group_ct(field_ct::from_witness_index(&builder_, acc_x),
+                          field_ct::from_witness_index(&builder_, acc_y),
+                          /*assert_on_curve=*/false);
 }
 
 field_ct ActionCircuitUltra::poseidon_hash(const field_ct& a, const field_ct& b)

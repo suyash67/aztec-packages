@@ -249,6 +249,7 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
 
     // Lookup inverses
     {
+        BB_BENCH_NAME("orchard_prove/lookup_inverses");
         const size_t count = n - MASK_END;
         std::vector<FF> sinsemilla(count, FF(0));
         std::vector<FF> range(count, FF(0));
@@ -299,6 +300,7 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
 
     // Permutation grand product (two chunks of 7 columns)
     {
+        BB_BENCH_NAME("orchard_prove/grand_product");
         const size_t first = Flavor::TRACE_OFFSET;
         const size_t count = n - first;
         auto sigmas = static_cast<Flavor::SigmaEntities<Polynomial>&>(polys).get_all();
@@ -363,13 +365,22 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
     std::vector<FF> gate_challenges =
         transcript->template get_dyadic_powers_of_challenge<FF>("Sumcheck:gate_challenge", log_n);
     SumcheckProver<Flavor> sumcheck(n, polys, transcript, alpha, gate_challenges, params, log_n);
-    ZKSumcheckData<Flavor> zk_sumcheck_data(log_n, transcript, ck);
-    auto sumcheck_output = sumcheck.prove(zk_sumcheck_data);
+    auto zk_sumcheck_data = [&]() {
+        BB_BENCH_NAME("orchard_prove/zk_sumcheck_data");
+        return ZKSumcheckData<Flavor>(log_n, transcript, ck);
+    }();
+    auto sumcheck_output = [&]() {
+        BB_BENCH_NAME("orchard_prove/sumcheck");
+        return sumcheck.prove(zk_sumcheck_data);
+    }();
 
     // Shplemini + halo2 IPA
     SmallSubgroupIPAProver<Flavor> small_subgroup_ipa(
         zk_sumcheck_data, sumcheck_output.challenge, sumcheck_output.claimed_libra_evaluation, transcript, ck);
-    small_subgroup_ipa.prove();
+    {
+        BB_BENCH_NAME("orchard_prove/small_subgroup_ipa");
+        small_subgroup_ipa.prove();
+    }
     using PolynomialBatcher = GeminiProver_<Curve>::PolynomialBatcher;
     PolynomialBatcher batcher(n, n);
     batcher.set_unshifted(polys.get_unshifted());
@@ -377,7 +388,10 @@ Flavor::Proof orchard_prove(const OrchardProvingKey& pk, const Trace& trace)
     batcher.set_to_be_shifted_by_two(polys.get_to_be_shifted_by_two());
     auto opening_claim = ShpleminiProver_<Curve>::prove(
         n, batcher, sumcheck_output.challenge, ck, transcript, small_subgroup_ipa.get_witness_polynomials());
-    IPA::prove(ipa_generators(ck, n), opening_claim, FF(0), transcript);
+    {
+        BB_BENCH_NAME("orchard_prove/halo2_ipa");
+        IPA::prove(ipa_generators(ck, n), opening_claim, FF(0), transcript);
+    }
     return transcript->export_proof();
 }
 
