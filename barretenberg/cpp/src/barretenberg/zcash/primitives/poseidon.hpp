@@ -2,6 +2,7 @@
 
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/numeric/uint256/uint256.hpp"
+#include "barretenberg/numeric/uintx/uintx.hpp"
 
 #include <algorithm>
 #include <array>

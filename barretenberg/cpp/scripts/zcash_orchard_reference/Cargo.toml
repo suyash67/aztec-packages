@@ -10,6 +10,7 @@ serde_json = "1"
 pasta_curves = "0.6"
 group = "0.14"
 ff = "0.14"
+halo2_proofs = "0.4"
 
 [profile.release]
 debug = false

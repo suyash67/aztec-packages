@@ -4,27 +4,87 @@
 #include <utility>
 #include <vector>
 namespace bb::zcash::test_vectors {
-struct PointHex { const char* x; const char* y; };
-struct GroupHashVector { const char* domain; std::vector<uint8_t> message; PointHex point; };
-struct ActionVector { std::vector<std::pair<std::string, std::string>> witness; std::vector<std::string> public_inputs; };
-inline const std::vector<GroupHashVector> GROUP_HASH_VECTORS = {
-    { "z.cash:test", { 84, 114, 97, 110, 115, 32, 114, 105, 103, 104, 116, 115, 32, 110, 111, 119, 33 }, { "0x1818cda31ffdc8c3ff23df3d88c26f952340257d0f187a0236695c9b640b6bd3", "0x01e20888510123752166a0306332e126289f6f9a2774160395f2f1efc9b1280c" } },
-    { "z.cash:Orchard", { 71 }, { "0x375523b328f1d6063b8d187c3e5f445f0c7f0ce37b70a10c8d1a7284b875c963", "0x1ad0357fdf1a66db7b10bcfcfed624fbdfc914fec005bdd84ce33e817b0c3bc9" } },
-    { "z.cash:Orchard", { 75 }, { "0x25e7aa169ca8198d2e375571faf4c9cf5e7eb192ccb5db9bd36f6aa7e447ca75", "0x155c1f851b1a3384880473442008ff755fe0a49ec1c1b4332db8dce21ae001cc" } },
-    { "z.cash:Orchard-cv", { 118 }, { "0x2f70597a8e3d0f42f7a86a704f9bb232fe04a37f2b5a7c8c2aa7bd6e3af94367", "0x2d0e5169311919af1e917f63136d6c421d9ea766a7ffe3dba413c47eaf5af28e" } },
-    { "z.cash:Orchard-cv", { 114 }, { "0x07f444550fa409bb4f66235bea8d2048406ed745ee90802f0ec3c668883c5a91", "0x24136777af26628c21562cc9e46fb7c2279229f1f39281460e2f46c8a772d9ca" } },
-    { "z.cash:Orchard-NoteCommit-r", {  }, { "0x26b206c328a94533cd239fab936f3df2239ec55cfc14a47c2c022c480ffc6e13", "0x3cde564b686dc04ca9541a2f2366e1c679c7c07823e0dcf6c34153c622cf37e3" } },
-    { "z.cash:Orchard-CommitIvk-r", {  }, { "0x25a22ccd5070134e1634290a4080894802957fe2d31aedc79823486e5ff8a118", "0x29cfd29966a2faebc2c890c4284b57946b4442fb1b58a6c73fe793b3e37fdda9" } },
-    { "z.cash:SinsemillaQ", { 122, 46, 99, 97, 115, 104, 58, 79, 114, 99, 104, 97, 114, 100, 45, 77, 101, 114, 107, 108, 101, 67, 82, 72 }, { "0x1616d29663a818b9a00f365aef890e99c9beb955c08d1070f8b9c7f97f29c6a0", "0x358642a3e3af20992dc4f23e4fa35979e21c96ea0574159686e9aece25f2ea62" } },
-    { "z.cash:SinsemillaQ", { 122, 46, 99, 97, 115, 104, 58, 79, 114, 99, 104, 97, 114, 100, 45, 78, 111, 116, 101, 67, 111, 109, 109, 105, 116, 45, 77 }, { "0x178007a056fbcd0df79ff2b479b0ed5dc5960f5afd46dd2a320eba0940a8745d", "0x32a058938ac670834ebec2d96ef4c92c8822128881db5e9e87270a5a7349ac63" } },
-    { "z.cash:SinsemillaQ", { 122, 46, 99, 97, 115, 104, 58, 79, 114, 99, 104, 97, 114, 100, 45, 67, 111, 109, 109, 105, 116, 73, 118, 107, 45, 77 }, { "0x05bc0cf14aa9c8117dcc81b85aa241fa421bcc245128a2326bcb2f92790f82f2", "0x1b014cf6d41abee6ef59074620de054b46c4351dc96da5f1be5ae5cecfaddebe" } },
-    { "z.cash:SinsemillaS", { 0, 0, 0, 0 }, { "0x0db5218be6881f0f1431d4ea7d4afc7b29a05bafbede62b55a91eb912044ea5f", "0x2f0f40c2f152a01c9caf66298493d5d0944a041c2e65ba0117c24f76bf8e6483" } },
-    { "z.cash:SinsemillaS", { 1, 0, 0, 0 }, { "0x211112b4b3e19518c8fd33eb39175404e67700ca24649b8fce4ae33ea108af91", "0x06c5993993adb03ba38a3e79cd5a35feb43c744a670e19bc1d83c293f810c5ee" } },
-    { "z.cash:SinsemillaS", { 2, 0, 0, 0 }, { "0x25b32ccd49f925a34661a4e2355b9b33f40cb3334b5411c022e0c475a18f6d24", "0x140ff2ba70d0692c7d53d0f323b447114be1ebb9f945ccd2a67d6b8db8fd9757" } },
-    { "z.cash:SinsemillaS", { 255, 1, 0, 0 }, { "0x23044159f7675fe23f41d9a471d9e31e0b637d43b4996483007a3171e694ad4f", "0x00ffaa5252f31075cdf707fba7869698384304a496eff3eac689d9d998f022c3" } },
-    { "z.cash:SinsemillaS", { 255, 3, 0, 0 }, { "0x026abf29d79296474ec871664d23deae7929235c2bdf68802bc3ed47d3b19dae", "0x397cdfb14d5465ce0d499ba7a480134c15ba29c7c672fad28951204b52626b96" } },
+struct PointHex {
+    const char* x;
+    const char* y;
 };
-inline const PointHex VESTA_HASH_TO_CURVE_HELLO = { "0x2e983e009cf3b86bc95f91b3411bd6cbd0a87f8c3c3dae80f3f2637084849204", "0x310fb8f3316d069a1fb9374bdbc0fb1391c864a5208b2a812341db7f50b2e106" };
+struct GroupHashVector {
+    const char* domain;
+    std::vector<uint8_t> message;
+    PointHex point;
+};
+struct ActionVector {
+    std::vector<std::pair<std::string, std::string>> witness;
+    std::vector<std::string> public_inputs;
+};
+inline const std::vector<GroupHashVector> GROUP_HASH_VECTORS = {
+    { "z.cash:test",
+      { 84, 114, 97, 110, 115, 32, 114, 105, 103, 104, 116, 115, 32, 110, 111, 119, 33 },
+      { "0x1818cda31ffdc8c3ff23df3d88c26f952340257d0f187a0236695c9b640b6bd3",
+        "0x01e20888510123752166a0306332e126289f6f9a2774160395f2f1efc9b1280c" } },
+    { "z.cash:Orchard",
+      { 71 },
+      { "0x375523b328f1d6063b8d187c3e5f445f0c7f0ce37b70a10c8d1a7284b875c963",
+        "0x1ad0357fdf1a66db7b10bcfcfed624fbdfc914fec005bdd84ce33e817b0c3bc9" } },
+    { "z.cash:Orchard",
+      { 75 },
+      { "0x25e7aa169ca8198d2e375571faf4c9cf5e7eb192ccb5db9bd36f6aa7e447ca75",
+        "0x155c1f851b1a3384880473442008ff755fe0a49ec1c1b4332db8dce21ae001cc" } },
+    { "z.cash:Orchard-cv",
+      { 118 },
+      { "0x2f70597a8e3d0f42f7a86a704f9bb232fe04a37f2b5a7c8c2aa7bd6e3af94367",
+        "0x2d0e5169311919af1e917f63136d6c421d9ea766a7ffe3dba413c47eaf5af28e" } },
+    { "z.cash:Orchard-cv",
+      { 114 },
+      { "0x07f444550fa409bb4f66235bea8d2048406ed745ee90802f0ec3c668883c5a91",
+        "0x24136777af26628c21562cc9e46fb7c2279229f1f39281460e2f46c8a772d9ca" } },
+    { "z.cash:Orchard-NoteCommit-r",
+      {},
+      { "0x26b206c328a94533cd239fab936f3df2239ec55cfc14a47c2c022c480ffc6e13",
+        "0x3cde564b686dc04ca9541a2f2366e1c679c7c07823e0dcf6c34153c622cf37e3" } },
+    { "z.cash:Orchard-CommitIvk-r",
+      {},
+      { "0x25a22ccd5070134e1634290a4080894802957fe2d31aedc79823486e5ff8a118",
+        "0x29cfd29966a2faebc2c890c4284b57946b4442fb1b58a6c73fe793b3e37fdda9" } },
+    { "z.cash:SinsemillaQ",
+      { 122, 46, 99, 97, 115, 104, 58, 79, 114, 99, 104, 97, 114, 100, 45, 77, 101, 114, 107, 108, 101, 67, 82, 72 },
+      { "0x1616d29663a818b9a00f365aef890e99c9beb955c08d1070f8b9c7f97f29c6a0",
+        "0x358642a3e3af20992dc4f23e4fa35979e21c96ea0574159686e9aece25f2ea62" } },
+    { "z.cash:SinsemillaQ",
+      { 122, 46, 99,  97,  115, 104, 58,  79,  114, 99,  104, 97, 114, 100,
+        45,  78, 111, 116, 101, 67,  111, 109, 109, 105, 116, 45, 77 },
+      { "0x178007a056fbcd0df79ff2b479b0ed5dc5960f5afd46dd2a320eba0940a8745d",
+        "0x32a058938ac670834ebec2d96ef4c92c8822128881db5e9e87270a5a7349ac63" } },
+    { "z.cash:SinsemillaQ",
+      { 122, 46, 99, 97,  115, 104, 58,  79,  114, 99,  104, 97, 114,
+        100, 45, 67, 111, 109, 109, 105, 116, 73,  118, 107, 45, 77 },
+      { "0x05bc0cf14aa9c8117dcc81b85aa241fa421bcc245128a2326bcb2f92790f82f2",
+        "0x1b014cf6d41abee6ef59074620de054b46c4351dc96da5f1be5ae5cecfaddebe" } },
+    { "z.cash:SinsemillaS",
+      { 0, 0, 0, 0 },
+      { "0x0db5218be6881f0f1431d4ea7d4afc7b29a05bafbede62b55a91eb912044ea5f",
+        "0x2f0f40c2f152a01c9caf66298493d5d0944a041c2e65ba0117c24f76bf8e6483" } },
+    { "z.cash:SinsemillaS",
+      { 1, 0, 0, 0 },
+      { "0x211112b4b3e19518c8fd33eb39175404e67700ca24649b8fce4ae33ea108af91",
+        "0x06c5993993adb03ba38a3e79cd5a35feb43c744a670e19bc1d83c293f810c5ee" } },
+    { "z.cash:SinsemillaS",
+      { 2, 0, 0, 0 },
+      { "0x25b32ccd49f925a34661a4e2355b9b33f40cb3334b5411c022e0c475a18f6d24",
+        "0x140ff2ba70d0692c7d53d0f323b447114be1ebb9f945ccd2a67d6b8db8fd9757" } },
+    { "z.cash:SinsemillaS",
+      { 255, 1, 0, 0 },
+      { "0x23044159f7675fe23f41d9a471d9e31e0b637d43b4996483007a3171e694ad4f",
+        "0x00ffaa5252f31075cdf707fba7869698384304a496eff3eac689d9d998f022c3" } },
+    { "z.cash:SinsemillaS",
+      { 255, 3, 0, 0 },
+      { "0x026abf29d79296474ec871664d23deae7929235c2bdf68802bc3ed47d3b19dae",
+        "0x397cdfb14d5465ce0d499ba7a480134c15ba29c7c672fad28951204b52626b96" } },
+};
+inline const PointHex VESTA_HASH_TO_CURVE_HELLO = {
+    "0x2e983e009cf3b86bc95f91b3411bd6cbd0a87f8c3c3dae80f3f2637084849204",
+    "0x310fb8f3316d069a1fb9374bdbc0fb1391c864a5208b2a812341db7f50b2e106"
+};
 inline const ActionVector ACTION_REAL_SPEND = {
     .witness = {
         { "path_0", "0x2777dd5e8651cb02245d19f157af8ccdc2a4fa919ba85491cce6cd7c4d0ec5cd" },
