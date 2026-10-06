@@ -9,12 +9,13 @@ RESULTS = Path(sys.argv[1])
 OUT = Path(sys.argv[2])
 
 SYSTEMS = [
-    # key, label, short description, css class, dashed
-    ("zcash", "Zcash halo2 (production)", "orchard 0.16 · halo2_proofs 0.4 · PLONKish · Vesta IPA", "s-zcash", False),
-    ("halo2-honk-pasta", "halo2 gates · Honk · Pasta", "custom Honk flavor with Orchard's halo2 gates · Vesta · halo2 IPA", "s-h2p", False),
-    ("halo2-honk-bn254", "halo2 gates · Honk · BN254", "same gates ported to BN254/Grumpkin · KZG", "s-h2b", True),
-    ("ultra-zk-pasta", "UltraHonk · Pasta", "hand-written Ultra gates over F_p · Vesta · halo2 IPA", "s-ulp", False),
-    ("ultra-zk-bn254", "UltraHonk · BN254", "barretenberg stdlib over BN254/Grumpkin · KZG", "s-ulb", True),
+    # key, label, short description, css class, dashed, shown in charts
+    ("zcash", "Zcash halo2 (production)", "orchard 0.16 · halo2_proofs 0.4 · PLONKish · Vesta IPA", "s-zcash", False, True),
+    ("halo2-honk-pasta", "halo2 gates · Honk · Pasta", "custom Honk flavor with Orchard's halo2 gates · Vesta · halo2 IPA", "s-h2p", False, True),
+    ("halo2-honk-bn254", "halo2 gates · Honk · BN254", "same gates ported to BN254/Grumpkin · KZG", "s-h2b", True, True),
+    ("ultra-zk-pasta", "UltraHonk · Pasta", "hand-written Ultra gates over F_p · Vesta · halo2 IPA", "s-ulp", False, True),
+    ("ultra-zk-bn254-unpadded", "UltraHonk · BN254", "barretenberg stdlib over BN254/Grumpkin · KZG", "s-ulb", True, True),
+    ("ultra-zk-bn254", "UltraHonk · BN254, padded to 2^25", "as above, with Aztec's constant-size proofs", "s-ulb-pad", True, False),
 ]
 
 
@@ -71,7 +72,7 @@ SHORT_LABELS = {
     "halo2-honk-pasta": "halo2 gates · Pasta",
     "halo2-honk-bn254": "halo2 gates · BN254",
     "ultra-zk-pasta": "UltraHonk · Pasta",
-    "ultra-zk-bn254": "UltraHonk · BN254",
+    "ultra-zk-bn254-unpadded": "UltraHonk · BN254",
 }
 
 
@@ -156,7 +157,9 @@ def chart(series, title, log_y, counts, ylabel, tick_fmt, value_fmt):
 
 def legend():
     items = []
-    for key, label, desc, cls, dashed in SYSTEMS:
+    for key, label, desc, cls, dashed, charted in SYSTEMS:
+        if not charted:
+            continue
         items.append(
             f'<li><svg viewBox="0 0 28 10" aria-hidden="true"><line class="line {cls}{" dashed" if dashed else ""}" x1="1" x2="27" y1="5" y2="5"/></svg>'
             f"<span><b>{label}</b><small>{desc}</small></span></li>"
@@ -167,7 +170,7 @@ def legend():
 def table(data, metric, fmt, counts, highlight_min=True, extra=None):
     head = "".join(f"<th>{a}</th>" for a in counts)
     rows = []
-    for key, label, desc, cls, dashed in SYSTEMS:
+    for key, label, desc, cls, dashed, charted in SYSTEMS:
         d = data.get(key, {})
         cells = []
         best = {a: min((data[k][a][metric] for k in data if a in data[k]), default=None) for a in counts}
@@ -191,7 +194,7 @@ def table(data, metric, fmt, counts, highlight_min=True, extra=None):
 def size_table(data, counts):
     head = "".join(f"<th>{a}</th>" for a in counts)
     rows = []
-    for key, label, desc, cls, dashed in SYSTEMS[1:]:
+    for key, label, desc, cls, dashed, charted in SYSTEMS[1:]:
         d = data.get(key, {})
         cells = []
         for a in counts:
@@ -216,7 +219,7 @@ def main():
     counts_st = sorted({a for d in st.values() for a in d})
 
     def series(d, metric):
-        return [(k, lab, cls, dashed, {a: v[metric] for a, v in d.get(k, {}).items()}) for k, lab, _, cls, dashed in SYSTEMS]
+        return [(k, lab, cls, dashed, {a: v[metric] for a, v in d.get(k, {}).items()}) for k, lab, _, cls, dashed, charted in SYSTEMS if charted]
 
     tmpl = (Path(__file__).parent / "report_template.html").read_text()
     html = tmpl

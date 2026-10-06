@@ -4,7 +4,7 @@
  * (configuration, number of Actions).
  *
  * Usage: zcash_action_bench <system> <comma-separated action counts> [repetitions]
- *   system: halo2-honk-pasta | halo2-honk-bn254 | ultra-zk-bn254 | ultra-zk-pasta
+ *   system: halo2-honk-pasta | halo2-honk-bn254 | ultra-zk-bn254 | ultra-zk-bn254-unpadded | ultra-zk-pasta
  *
  * Timings: `synthesize_s` is witness synthesis (halo2 table / circuit construction from the Action witnesses),
  * `prove_s` the proof construction from the synthesized witness, `prove_total_s` their sum (comparable to halo2's
@@ -14,6 +14,7 @@
  */
 #include "barretenberg/common/bb_bench.hpp"
 #include "barretenberg/common/thread.hpp"
+#include "barretenberg/flavor/ultra_keccak_zk_flavor.hpp"
 #include "barretenberg/flavor/ultra_zk_flavor.hpp"
 #include "barretenberg/numeric/random/engine.hpp"
 #include "barretenberg/srs/global_crs.hpp"
@@ -170,11 +171,15 @@ template <typename Cycle> Result bench_halo2_honk(size_t num_actions, size_t rep
     return result;
 }
 
-Result bench_ultra_zk_bn254(size_t num_actions, size_t reps)
+/**
+ * @brief UltraHonk-ZK over BN254 with the stdlib circuit. UltraZKFlavor (Poseidon2 transcript) pads Sumcheck and Gemini
+ * to CONST_PROOF_SIZE_LOG_N rounds for recursion; UltraKeccakZKFlavor (Keccak transcript) runs over the actual log n.
+ */
+template <typename Flavor> Result bench_ultra_zk_bn254(const std::string& system, size_t num_actions, size_t reps)
 {
-    using Flavor = UltraZKFlavor;
     using Builder = ultra::Builder;
-    Result result{ .system = "ultra-zk-bn254", .actions = num_actions };
+    using Commitment = typename Flavor::Commitment;
+    Result result{ .system = system, .actions = num_actions };
     const auto bundle = random_bundle<Bn254Cycle>(num_actions);
     auto synthesize = [&]() {
         Builder builder;
@@ -185,18 +190,18 @@ Result bench_ultra_zk_bn254(size_t num_actions, size_t reps)
 
     // Key generation: circuit construction, trace population and the commitments to the precomputed polynomials.
     auto start = std::chrono::steady_clock::now();
-    std::shared_ptr<Flavor::VerificationKey> vk;
+    std::shared_ptr<typename Flavor::VerificationKey> vk;
     {
         auto builder = synthesize();
         result.rows = builder.get_num_finalized_gates_inefficient();
         auto instance = std::make_shared<ProverInstance_<Flavor>>(builder);
-        vk = std::make_shared<Flavor::VerificationKey>(instance->get_precomputed());
+        vk = std::make_shared<typename Flavor::VerificationKey>(instance->get_precomputed());
     }
     result.keygen_s = seconds_since(start);
     result.log_n = vk->log_circuit_size;
-    auto vk_and_hash = std::make_shared<Flavor::VKAndHash>(vk);
+    auto vk_and_hash = std::make_shared<typename Flavor::VKAndHash>(vk);
 
-    HonkProof proof;
+    typename UltraProver_<Flavor>::Proof proof;
     for (size_t r = 0; r < reps + 1; ++r) {
         start = std::chrono::steady_clock::now();
         auto builder = synthesize();
@@ -210,7 +215,7 @@ Result bench_ultra_zk_bn254(size_t num_actions, size_t reps)
         UltraVerifier_<Flavor, DefaultIO> verifier(vk_and_hash);
         bool ok = verifier.verify_proof(proof).result;
         for (size_t i = 0; i < bundle.public_inputs.size(); ++i) {
-            ok = ok && proof[i] == bundle.public_inputs[i];
+            ok = ok && uint256_t(proof[i]) == uint256_t(bundle.public_inputs[i]);
         }
         const double verify_s = seconds_since(start);
         if (r == 0) {
@@ -222,13 +227,14 @@ Result bench_ultra_zk_bn254(size_t num_actions, size_t reps)
         result.verified = ok;
     }
     result.proof_bytes = proof.size() * 32;
-    // Curve points: 9 witness commitments (incl. the Gemini masking polynomial), 3 Libra, CONST_PROOF_SIZE_LOG_N - 1
-    // Gemini folds (the proof is padded to a constant size), the Shplonk quotient and the KZG quotient. A BN254 point
-    // takes 4 field elements (128 bytes) here and 32 bytes compressed. The proof leads with the public inputs: the
-    // Action's and the default IO (pairing points).
-    const size_t num_points = 9 + 3 + (CONST_PROOF_SIZE_LOG_N - 1) + 2;
+    // Curve points: 9 witness commitments (incl. the Gemini masking polynomial), 3 Libra, log_n - 1 Gemini folds (log_n
+    // = CONST_PROOF_SIZE_LOG_N when padded), the Shplonk quotient and the KZG quotient; each compresses to 32 bytes.
+    // The proof leads with the public inputs: the Action's and the default IO (pairing points).
+    const size_t proof_log_n = Flavor::USE_PADDING ? CONST_PROOF_SIZE_LOG_N : result.log_n;
+    const size_t num_points = 9 + 3 + (proof_log_n - 1) + 2;
+    const size_t point_bytes = 32 * Flavor::Codec::template calc_num_fields<Commitment>();
     const size_t num_public_inputs = bundle.public_inputs.size() + DefaultIO::PUBLIC_INPUTS_SIZE;
-    result.proof_bytes_compressed = result.proof_bytes - (num_points * 96) - (num_public_inputs * 32);
+    result.proof_bytes_compressed = result.proof_bytes - (num_points * (point_bytes - 32)) - (num_public_inputs * 32);
     return result;
 }
 
@@ -307,7 +313,7 @@ int main(int argc, char** argv)
     // ZCASH_BENCH_PROFILE=1 prints barretenberg's hierarchical timers to stderr.
     const bool profile = std::getenv("ZCASH_BENCH_PROFILE") != nullptr;
     bb::detail::use_bb_bench = profile;
-    if (system == "ultra-zk-bn254") {
+    if (system == "ultra-zk-bn254" || system == "ultra-zk-bn254-unpadded") {
         srs::init_bn254_file_crs_factory(srs::bb_crs_path());
     }
     for (const size_t n : counts) {
@@ -316,7 +322,9 @@ int main(int argc, char** argv)
         } else if (system == "halo2-honk-bn254") {
             bench_halo2_honk<Bn254Cycle>(n, reps).print();
         } else if (system == "ultra-zk-bn254") {
-            bench_ultra_zk_bn254(n, reps).print();
+            bench_ultra_zk_bn254<UltraZKFlavor>(system, n, reps).print();
+        } else if (system == "ultra-zk-bn254-unpadded") {
+            bench_ultra_zk_bn254<UltraKeccakZKFlavor>(system, n, reps).print();
         } else if (system == "ultra-zk-pasta") {
             bench_ultra_zk_pasta(n, reps).print();
         } else {

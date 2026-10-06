@@ -93,6 +93,7 @@ td small { display: block; color: var(--muted); font-size: 11px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: 0; }
 .sw.s-zcash { background: var(--s-zcash); } .sw.s-h2p { background: var(--s-h2p); } .sw.s-ulp { background: var(--s-ulp); }
 .sw.s-h2b { background: transparent; border: 2px solid var(--s-h2b); } .sw.s-ulb { background: transparent; border: 2px solid var(--s-ulb); }
+.sw.s-ulb-pad { background: transparent; border: 2px dotted var(--s-ulb); }
 .config { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
 .config article { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
 .config dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 14px; }
@@ -118,9 +119,9 @@ a { color: var(--accent); }
   <div class="prose">
     <ul class="conclusions">
       <li><b>Honk proves Zcash's own circuit about 3× faster.</b> With the same curves (Pallas/Vesta), the same halo2 gates and the same IPA commitment scheme as Zcash, swapping halo2's quotient argument for Honk's Sumcheck cuts one Action from 952 ms to 321 ms (3.0×), and 16 Actions from 10.32 s to 2.86 s (3.6×). Single-threaded the gap is similar: 2.94 s against 860 ms.</li>
-      <li><b>Barretenberg proofs grow slowly with more Actions.</b> Zcash's proof is the smallest for one Action (4.9 KiB against 7.7 KiB to 10.5 KiB), but it grows linearly with the number of Actions. Barretenberg puts all Actions in one circuit, so its proofs grow logarithmically and are smaller from 4 Actions on. At 16 Actions they are 9.3 KiB to 12.4 KiB, against 38.2 KiB.</li>
-      <li><b>Custom wide gates beat a generic arithmetization.</b> Orchard's 10-column halo2 layout fits an Action in 1,780 rows. Ultra's 4-wire gates need 5.8× as many rows when written by hand (10,303 gates), and 13.3× as many through barretenberg's stdlib. On the same curve and commitment scheme, the Ultra prover is 2.3× slower on Pasta and 1.8× slower on BN254 at 16 Actions.</li>
-      <li><b>BN254 is faster but needs a trusted setup.</b> Running the same halo2 gates on BN254 with KZG commitments proves another 1.7× faster (194 ms for one Action) and verifies in a constant ~7 ms. The cost is a trusted setup and about 100–110 bits of security, against about 126 bits for the transparent Pasta setup.</li>
+      <li><b>Barretenberg proofs grow slowly with more Actions.</b> Zcash's proof is the smallest for one Action (4.9 KiB against 7.1 KiB to 10.4 KiB), but it grows linearly with the number of Actions. Barretenberg puts all Actions in one circuit, so its proofs grow logarithmically and are smaller from 4 Actions on. At 16 Actions they are 8.4 KiB to 12.4 KiB, against 38.2 KiB.</li>
+      <li><b>Custom wide gates beat a generic arithmetization.</b> Orchard's 10-column halo2 layout fits an Action in 1,780 rows. Ultra's 4-wire gates need 5.8× as many rows when written by hand (10,303 gates), and 13.3× as many through barretenberg's stdlib. On the same curve and commitment scheme, the Ultra prover is 2.3× slower on Pasta and 2.0× slower on BN254 at 16 Actions.</li>
+      <li><b>BN254 is faster but needs a trusted setup.</b> Running the same halo2 gates on BN254 with KZG commitments proves another 1.7× faster (194 ms for one Action) and verification stays at 3–8 ms at every size. The cost is a trusted setup and about 100–110 bits of security, against about 126 bits for the transparent Pasta setup.</li>
       <li><b>IPA verification grows with circuit size.</b> As in halo2, the IPA verifier ends with one multi-scalar multiplication over all generators. It goes from 11 ms to 78 ms for the halo2-gate circuit (Zcash: 12 ms to 47 ms), and reaches 584 ms for the much larger Ultra circuit.</li>
       <li><b>Best fit for Zcash: halo2 gates on Honk over Pasta.</b> It keeps Zcash's curves, its transparent setup and its exact Orchard gates, and proves about 3× faster with smaller multi-Action proofs. Two optimizations remain open for all Pasta configurations: the GLV endomorphism and batched affine additions in multi-scalar multiplication.</li>
     </ul>
@@ -163,9 +164,10 @@ a { color: var(--accent); }
     <article>
       <h3><i class="sw s-ulb"></i>UltraHonk · BN254</h3>
       <dl><dt>Circuit</dt><dd>barretenberg's stdlib (<span class="mono">cycle_group</span>, ROM tables, <span class="mono">field_t</span>) over BN254/Grumpkin</dd>
-      <dt>Proof system</dt><dd>UltraZK, padded to a constant proof size (log n = 25)</dd>
+      <dt>Proof system</dt><dd>UltraZK over the actual trace size (<span class="mono">UltraKeccakZKFlavor</span>)</dd>
       <dt>Commitment</dt><dd>BN254, KZG</dd>
-      <dt>Transcript</dt><dd>Poseidon2</dd></dl>
+      <dt>Transcript</dt><dd>Keccak</dd>
+      <dt>Also measured</dt><dd>Aztec's default <span class="mono">UltraZKFlavor</span> (Poseidon2 transcript), which pads Sumcheck and Gemini to log n = 25 so recursive verifiers have a fixed shape. It is listed in the tables as “padded to 2^25”.</dd></dl>
     </article>
   </div>
   <ul class="legend"><li><svg viewBox="0 0 28 10" aria-hidden="true"><line class="line s-zcash" x1="1" x2="27" y1="5" y2="5"/></svg><span><b>Zcash halo2 (production)</b><small>orchard 0.16 · halo2_proofs 0.4 · PLONKish · Vesta IPA</small></span></li><li><svg viewBox="0 0 28 10" aria-hidden="true"><line class="line s-h2p" x1="1" x2="27" y1="5" y2="5"/></svg><span><b>halo2 gates · Honk · Pasta</b><small>custom Honk flavor with Orchard's halo2 gates · Vesta · halo2 IPA</small></span></li><li><svg viewBox="0 0 28 10" aria-hidden="true"><line class="line s-h2b dashed" x1="1" x2="27" y1="5" y2="5"/></svg><span><b>halo2 gates · Honk · BN254</b><small>same gates ported to BN254/Grumpkin · KZG</small></span></li><li><svg viewBox="0 0 28 10" aria-hidden="true"><line class="line s-ulp" x1="1" x2="27" y1="5" y2="5"/></svg><span><b>UltraHonk · Pasta</b><small>hand-written Ultra gates over F_p · Vesta · halo2 IPA</small></span></li><li><svg viewBox="0 0 28 10" aria-hidden="true"><line class="line s-ulb dashed" x1="1" x2="27" y1="5" y2="5"/></svg><span><b>UltraHonk · BN254</b><small>barretenberg stdlib over BN254/Grumpkin · KZG</small></span></li></ul>
@@ -225,22 +227,22 @@ a { color: var(--accent); }
 <circle class="dot s-ulp" cx="440.0" cy="153.8" r="4.5"><title>UltraHonk · Pasta: 2.52 s at 4 Actions</title></circle>
 <circle class="dot s-ulp" cx="596.0" cy="103.3" r="4.5"><title>UltraHonk · Pasta: 4.67 s at 8 Actions</title></circle>
 <circle class="dot s-ulp" cx="752.0" cy="49.4" r="4.5"><title>UltraHonk · Pasta: 9.01 s at 16 Actions</title></circle>
-<path class="line s-ulb dashed" d="M128.0,303.0 L284.0,261.2 L440.0,216.5 L596.0,179.7 L752.0,131.4"><title>UltraHonk · BN254</title></path>
-<circle class="dot s-ulb" cx="128.0" cy="303.0" r="4.5"><title>UltraHonk · BN254: 407 ms at 1 Actions</title></circle>
-<circle class="dot s-ulb" cx="284.0" cy="261.2" r="4.5"><title>UltraHonk · BN254: 678 ms at 2 Actions</title></circle>
-<circle class="dot s-ulb" cx="440.0" cy="216.5" r="4.5"><title>UltraHonk · BN254: 1.17 s at 4 Actions</title></circle>
-<circle class="dot s-ulb" cx="596.0" cy="179.7" r="4.5"><title>UltraHonk · BN254: 1.83 s at 8 Actions</title></circle>
-<circle class="dot s-ulb" cx="752.0" cy="131.4" r="4.5"><title>UltraHonk · BN254: 3.31 s at 16 Actions</title></circle>
+<path class="line s-ulb dashed" d="M128.0,311.1 L284.0,270.2 L440.0,228.1 L596.0,180.3 L752.0,124.8"><title>UltraHonk · BN254</title></path>
+<circle class="dot s-ulb" cx="128.0" cy="311.1" r="4.5"><title>UltraHonk · BN254: 368 ms at 1 Actions</title></circle>
+<circle class="dot s-ulb" cx="284.0" cy="270.2" r="4.5"><title>UltraHonk · BN254: 607 ms at 2 Actions</title></circle>
+<circle class="dot s-ulb" cx="440.0" cy="228.1" r="4.5"><title>UltraHonk · BN254: 1.02 s at 4 Actions</title></circle>
+<circle class="dot s-ulb" cx="596.0" cy="180.3" r="4.5"><title>UltraHonk · BN254: 1.82 s at 8 Actions</title></circle>
+<circle class="dot s-ulb" cx="752.0" cy="124.8" r="4.5"><title>UltraHonk · BN254: 3.59 s at 16 Actions</title></circle>
 <text class="endlabel s-zcash" x="788" y="36.3">Zcash halo2</text>
 <text class="endvalue" x="788" y="52.3">10.32 s</text>
 <text class="endlabel s-ulp" x="788" y="70.3">UltraHonk · Pasta</text>
 <text class="endvalue" x="788" y="86.3">9.01 s</text>
-<text class="endlabel s-ulb" x="788" y="129.4">UltraHonk · BN254</text>
-<text class="endvalue" x="788" y="145.4">3.31 s</text>
-<text class="endlabel s-h2p" x="788" y="163.4">halo2 gates · Pasta</text>
-<text class="endvalue" x="788" y="179.4">2.86 s</text>
-<text class="endlabel s-h2b" x="788" y="197.4">halo2 gates · BN254</text>
-<text class="endvalue" x="788" y="213.4">1.84 s</text>
+<text class="endlabel s-ulb" x="788" y="122.8">UltraHonk · BN254</text>
+<text class="endvalue" x="788" y="138.8">3.59 s</text>
+<text class="endlabel s-h2p" x="788" y="156.8">halo2 gates · Pasta</text>
+<text class="endvalue" x="788" y="172.8">2.86 s</text>
+<text class="endlabel s-h2b" x="788" y="190.8">halo2 gates · BN254</text>
+<text class="endvalue" x="788" y="206.8">1.84 s</text>
 </svg></div><figcaption>Four threads<small>Median wall-clock time to prove, witness synthesis included (halo2's create_proof synthesizes internally). Log scale.</small></figcaption></figure>
     <figure><div class="chart"><svg viewBox="0 0 960 440" role="img" aria-label="Prover time, one thread">
 <line class="grid" x1="110" x2="778" y1="330.1" y2="330.1"/>
@@ -278,44 +280,46 @@ a { color: var(--accent); }
 <circle class="dot s-ulp" cx="128.0" cy="177.7" r="4.5"><title>UltraHonk · Pasta: 2.29 s at 1 Actions</title></circle>
 <circle class="dot s-ulp" cx="440.0" cy="114.9" r="4.5"><title>UltraHonk · Pasta: 4.29 s at 2 Actions</title></circle>
 <circle class="dot s-ulp" cx="752.0" cy="50.8" r="4.5"><title>UltraHonk · Pasta: 8.14 s at 4 Actions</title></circle>
-<path class="line s-ulb dashed" d="M128.0,271.0 L440.0,216.9 L752.0,151.5"><title>UltraHonk · BN254</title></path>
-<circle class="dot s-ulb" cx="128.0" cy="271.0" r="4.5"><title>UltraHonk · BN254: 903 ms at 1 Actions</title></circle>
-<circle class="dot s-ulb" cx="440.0" cy="216.9" r="4.5"><title>UltraHonk · BN254: 1.55 s at 2 Actions</title></circle>
-<circle class="dot s-ulb" cx="752.0" cy="151.5" r="4.5"><title>UltraHonk · BN254: 2.98 s at 4 Actions</title></circle>
+<path class="line s-ulb dashed" d="M128.0,247.1 L440.0,215.9 L752.0,151.6"><title>UltraHonk · BN254</title></path>
+<circle class="dot s-ulb" cx="128.0" cy="247.1" r="4.5"><title>UltraHonk · BN254: 1.14 s at 1 Actions</title></circle>
+<circle class="dot s-ulb" cx="440.0" cy="215.9" r="4.5"><title>UltraHonk · BN254: 1.56 s at 2 Actions</title></circle>
+<circle class="dot s-ulb" cx="752.0" cy="151.6" r="4.5"><title>UltraHonk · BN254: 2.97 s at 4 Actions</title></circle>
 <text class="endlabel s-zcash" x="788" y="40.3">Zcash halo2</text>
 <text class="endvalue" x="788" y="56.3">8.86 s</text>
 <text class="endlabel s-ulp" x="788" y="74.3">UltraHonk · Pasta</text>
 <text class="endvalue" x="788" y="90.3">8.14 s</text>
-<text class="endlabel s-ulb" x="788" y="149.5">UltraHonk · BN254</text>
-<text class="endvalue" x="788" y="165.5">2.98 s</text>
-<text class="endlabel s-h2p" x="788" y="183.5">halo2 gates · Pasta</text>
-<text class="endvalue" x="788" y="199.5">2.53 s</text>
+<text class="endlabel s-ulb" x="788" y="149.6">UltraHonk · BN254</text>
+<text class="endvalue" x="788" y="165.6">2.97 s</text>
+<text class="endlabel s-h2p" x="788" y="183.6">halo2 gates · Pasta</text>
+<text class="endvalue" x="788" y="199.6">2.53 s</text>
 <text class="endlabel s-h2b" x="788" y="238.9">halo2 gates · BN254</text>
 <text class="endvalue" x="788" y="254.9">1.22 s</text>
 </svg></div><figcaption>One thread<small>Same measurement with a single thread.</small></figcaption></figure>
   </div>
-  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>952 ms</td><td>1.57 s</td><td>2.98 s</td><td>5.46 s</td><td>10.32 s</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>321 ms</td><td>527 ms</td><td>861 ms</td><td>1.67 s</td><td>2.86 s</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td class="best">194 ms</td><td class="best">274 ms</td><td class="best">521 ms</td><td class="best">979 ms</td><td class="best">1.84 s</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>735 ms</td><td>1.34 s</td><td>2.52 s</td><td>4.67 s</td><td>9.01 s</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>407 ms</td><td>678 ms</td><td>1.17 s</td><td>1.83 s</td><td>3.31 s</td></tr></tbody></table></div>
-  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>2.94 s</td><td>4.81 s</td><td>8.86 s</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>860 ms</td><td>1.45 s</td><td>2.53 s</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td class="best">372 ms</td><td class="best">622 ms</td><td class="best">1.22 s</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>2.29 s</td><td>4.29 s</td><td>8.14 s</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>903 ms</td><td>1.55 s</td><td>2.98 s</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>952 ms</td><td>1.57 s</td><td>2.98 s</td><td>5.46 s</td><td>10.32 s</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>321 ms</td><td>527 ms</td><td>861 ms</td><td>1.67 s</td><td>2.86 s</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td class="best">194 ms</td><td class="best">274 ms</td><td class="best">521 ms</td><td class="best">979 ms</td><td class="best">1.84 s</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>735 ms</td><td>1.34 s</td><td>2.52 s</td><td>4.67 s</td><td>9.01 s</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>368 ms</td><td>607 ms</td><td>1.02 s</td><td>1.82 s</td><td>3.59 s</td></tr><tr><th scope="row"><i class="sw s-ulb-pad"></i>UltraHonk · BN254, padded to 2^25</th><td>407 ms</td><td>678 ms</td><td>1.17 s</td><td>1.83 s</td><td>3.31 s</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>2.94 s</td><td>4.81 s</td><td>8.86 s</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>860 ms</td><td>1.45 s</td><td>2.53 s</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td class="best">372 ms</td><td class="best">622 ms</td><td class="best">1.22 s</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>2.29 s</td><td>4.29 s</td><td>8.14 s</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>1.14 s</td><td>1.56 s</td><td>2.97 s</td></tr><tr><th scope="row"><i class="sw s-ulb-pad"></i>UltraHonk · BN254, padded to 2^25</th><td>903 ms</td><td>1.55 s</td><td>2.98 s</td></tr></tbody></table></div>
 </section>
 
 <section aria-labelledby="verifier">
   <h2 id="verifier">Verifier time and proof size</h2>
   <div class="figs">
     <figure><div class="chart"><svg viewBox="0 0 960 440" role="img" aria-label="Verifier time">
-<line class="grid" x1="110" x2="778" y1="377.9" y2="377.9"/>
-<text class="tick" x="100" y="382.4" text-anchor="end">5 ms</text>
-<line class="grid" x1="110" x2="778" y1="328.1" y2="328.1"/>
-<text class="tick" x="100" y="332.6" text-anchor="end">10 ms</text>
-<line class="grid" x1="110" x2="778" y1="278.3" y2="278.3"/>
-<text class="tick" x="100" y="282.8" text-anchor="end">20 ms</text>
-<line class="grid" x1="110" x2="778" y1="212.5" y2="212.5"/>
-<text class="tick" x="100" y="217.0" text-anchor="end">50 ms</text>
-<line class="grid" x1="110" x2="778" y1="162.7" y2="162.7"/>
-<text class="tick" x="100" y="167.2" text-anchor="end">100 ms</text>
-<line class="grid" x1="110" x2="778" y1="113.0" y2="113.0"/>
-<text class="tick" x="100" y="117.5" text-anchor="end">200 ms</text>
-<line class="grid" x1="110" x2="778" y1="47.2" y2="47.2"/>
-<text class="tick" x="100" y="51.7" text-anchor="end">500 ms</text>
+<line class="grid" x1="110" x2="778" y1="382.0" y2="382.0"/>
+<text class="tick" x="100" y="386.5" text-anchor="end">2 ms</text>
+<line class="grid" x1="110" x2="778" y1="325.8" y2="325.8"/>
+<text class="tick" x="100" y="330.3" text-anchor="end">5 ms</text>
+<line class="grid" x1="110" x2="778" y1="283.2" y2="283.2"/>
+<text class="tick" x="100" y="287.7" text-anchor="end">10 ms</text>
+<line class="grid" x1="110" x2="778" y1="240.7" y2="240.7"/>
+<text class="tick" x="100" y="245.2" text-anchor="end">20 ms</text>
+<line class="grid" x1="110" x2="778" y1="184.5" y2="184.5"/>
+<text class="tick" x="100" y="189.0" text-anchor="end">50 ms</text>
+<line class="grid" x1="110" x2="778" y1="142.0" y2="142.0"/>
+<text class="tick" x="100" y="146.5" text-anchor="end">100 ms</text>
+<line class="grid" x1="110" x2="778" y1="99.4" y2="99.4"/>
+<text class="tick" x="100" y="103.9" text-anchor="end">200 ms</text>
+<line class="grid" x1="110" x2="778" y1="43.2" y2="43.2"/>
+<text class="tick" x="100" y="47.7" text-anchor="end">500 ms</text>
 <line class="baseline" x1="110" x2="778" y1="382" y2="382"/>
 <line class="baseline" x1="128.0" x2="128.0" y1="382" y2="388"/>
 <text class="tick" x="128.0" y="406" text-anchor="middle">1</text>
@@ -329,46 +333,46 @@ a { color: var(--accent); }
 <text class="tick" x="752.0" y="406" text-anchor="middle">16</text>
 <text class="axis" x="440.0" y="432" text-anchor="middle">Actions per proof</text>
 <text class="axis" transform="translate(20 201.0) rotate(-90)" text-anchor="middle">Verifier time (log scale)</text>
-<path class="line s-zcash" d="M128.0,317.9 L284.0,310.6 L440.0,286.1 L596.0,267.7 L752.0,217.4"><title>Zcash halo2 (production)</title></path>
-<circle class="dot s-zcash" cx="128.0" cy="317.9" r="4.5"><title>Zcash halo2 (production): 12 ms at 1 Actions</title></circle>
-<circle class="dot s-zcash" cx="284.0" cy="310.6" r="4.5"><title>Zcash halo2 (production): 13 ms at 2 Actions</title></circle>
-<circle class="dot s-zcash" cx="440.0" cy="286.1" r="4.5"><title>Zcash halo2 (production): 18 ms at 4 Actions</title></circle>
-<circle class="dot s-zcash" cx="596.0" cy="267.7" r="4.5"><title>Zcash halo2 (production): 23 ms at 8 Actions</title></circle>
-<circle class="dot s-zcash" cx="752.0" cy="217.4" r="4.5"><title>Zcash halo2 (production): 47 ms at 16 Actions</title></circle>
-<path class="line s-h2p" d="M128.0,319.4 L284.0,284.4 L440.0,258.1 L596.0,221.2 L752.0,180.5"><title>halo2 gates · Honk · Pasta</title></path>
-<circle class="dot s-h2p" cx="128.0" cy="319.4" r="4.5"><title>halo2 gates · Honk · Pasta: 11 ms at 1 Actions</title></circle>
-<circle class="dot s-h2p" cx="284.0" cy="284.4" r="4.5"><title>halo2 gates · Honk · Pasta: 18 ms at 2 Actions</title></circle>
-<circle class="dot s-h2p" cx="440.0" cy="258.1" r="4.5"><title>halo2 gates · Honk · Pasta: 27 ms at 4 Actions</title></circle>
-<circle class="dot s-h2p" cx="596.0" cy="221.2" r="4.5"><title>halo2 gates · Honk · Pasta: 44 ms at 8 Actions</title></circle>
-<circle class="dot s-h2p" cx="752.0" cy="180.5" r="4.5"><title>halo2 gates · Honk · Pasta: 78 ms at 16 Actions</title></circle>
-<path class="line s-h2b dashed" d="M128.0,347.6 L284.0,361.1 L440.0,355.1 L596.0,349.8 L752.0,342.8"><title>halo2 gates · Honk · BN254</title></path>
-<circle class="dot s-h2b" cx="128.0" cy="347.6" r="4.5"><title>halo2 gates · Honk · BN254: 7.6 ms at 1 Actions</title></circle>
-<circle class="dot s-h2b" cx="284.0" cy="361.1" r="4.5"><title>halo2 gates · Honk · BN254: 6.3 ms at 2 Actions</title></circle>
-<circle class="dot s-h2b" cx="440.0" cy="355.1" r="4.5"><title>halo2 gates · Honk · BN254: 6.9 ms at 4 Actions</title></circle>
-<circle class="dot s-h2b" cx="596.0" cy="349.8" r="4.5"><title>halo2 gates · Honk · BN254: 7.4 ms at 8 Actions</title></circle>
-<circle class="dot s-h2b" cx="752.0" cy="342.8" r="4.5"><title>halo2 gates · Honk · BN254: 8.1 ms at 16 Actions</title></circle>
-<path class="line s-ulp" d="M128.0,219.7 L284.0,175.3 L440.0,126.4 L596.0,83.3 L752.0,36.0"><title>UltraHonk · Pasta</title></path>
-<circle class="dot s-ulp" cx="128.0" cy="219.7" r="4.5"><title>UltraHonk · Pasta: 45 ms at 1 Actions</title></circle>
-<circle class="dot s-ulp" cx="284.0" cy="175.3" r="4.5"><title>UltraHonk · Pasta: 84 ms at 2 Actions</title></circle>
-<circle class="dot s-ulp" cx="440.0" cy="126.4" r="4.5"><title>UltraHonk · Pasta: 166 ms at 4 Actions</title></circle>
-<circle class="dot s-ulp" cx="596.0" cy="83.3" r="4.5"><title>UltraHonk · Pasta: 302 ms at 8 Actions</title></circle>
-<circle class="dot s-ulp" cx="752.0" cy="36.0" r="4.5"><title>UltraHonk · Pasta: 584 ms at 16 Actions</title></circle>
-<path class="line s-ulb dashed" d="M128.0,364.8 L284.0,361.1 L440.0,366.0 L596.0,359.6 L752.0,356.9"><title>UltraHonk · BN254</title></path>
-<circle class="dot s-ulb" cx="128.0" cy="364.8" r="4.5"><title>UltraHonk · BN254: 6.0 ms at 1 Actions</title></circle>
-<circle class="dot s-ulb" cx="284.0" cy="361.1" r="4.5"><title>UltraHonk · BN254: 6.3 ms at 2 Actions</title></circle>
-<circle class="dot s-ulb" cx="440.0" cy="366.0" r="4.5"><title>UltraHonk · BN254: 5.9 ms at 4 Actions</title></circle>
-<circle class="dot s-ulb" cx="596.0" cy="359.6" r="4.5"><title>UltraHonk · BN254: 6.4 ms at 8 Actions</title></circle>
-<circle class="dot s-ulb" cx="752.0" cy="356.9" r="4.5"><title>UltraHonk · BN254: 6.7 ms at 16 Actions</title></circle>
-<text class="endlabel s-ulp" x="788" y="34.0">UltraHonk · Pasta</text>
-<text class="endvalue" x="788" y="50.0">584 ms</text>
-<text class="endlabel s-h2p" x="788" y="178.5">halo2 gates · Pasta</text>
-<text class="endvalue" x="788" y="194.5">78 ms</text>
-<text class="endlabel s-zcash" x="788" y="215.4">Zcash halo2</text>
-<text class="endvalue" x="788" y="231.4">47 ms</text>
-<text class="endlabel s-h2b" x="788" y="340.8">halo2 gates · BN254</text>
-<text class="endvalue" x="788" y="356.8">8.1 ms</text>
-<text class="endlabel s-ulb" x="788" y="374.8">UltraHonk · BN254</text>
-<text class="endvalue" x="788" y="390.8">6.7 ms</text>
+<path class="line s-zcash" d="M128.0,274.5 L284.0,268.3 L440.0,247.4 L596.0,231.6 L752.0,188.6"><title>Zcash halo2 (production)</title></path>
+<circle class="dot s-zcash" cx="128.0" cy="274.5" r="4.5"><title>Zcash halo2 (production): 12 ms at 1 Actions</title></circle>
+<circle class="dot s-zcash" cx="284.0" cy="268.3" r="4.5"><title>Zcash halo2 (production): 13 ms at 2 Actions</title></circle>
+<circle class="dot s-zcash" cx="440.0" cy="247.4" r="4.5"><title>Zcash halo2 (production): 18 ms at 4 Actions</title></circle>
+<circle class="dot s-zcash" cx="596.0" cy="231.6" r="4.5"><title>Zcash halo2 (production): 23 ms at 8 Actions</title></circle>
+<circle class="dot s-zcash" cx="752.0" cy="188.6" r="4.5"><title>Zcash halo2 (production): 47 ms at 16 Actions</title></circle>
+<path class="line s-h2p" d="M128.0,275.8 L284.0,245.9 L440.0,223.4 L596.0,191.9 L752.0,157.2"><title>halo2 gates · Honk · Pasta</title></path>
+<circle class="dot s-h2p" cx="128.0" cy="275.8" r="4.5"><title>halo2 gates · Honk · Pasta: 11 ms at 1 Actions</title></circle>
+<circle class="dot s-h2p" cx="284.0" cy="245.9" r="4.5"><title>halo2 gates · Honk · Pasta: 18 ms at 2 Actions</title></circle>
+<circle class="dot s-h2p" cx="440.0" cy="223.4" r="4.5"><title>halo2 gates · Honk · Pasta: 27 ms at 4 Actions</title></circle>
+<circle class="dot s-h2p" cx="596.0" cy="191.9" r="4.5"><title>halo2 gates · Honk · Pasta: 44 ms at 8 Actions</title></circle>
+<circle class="dot s-h2p" cx="752.0" cy="157.2" r="4.5"><title>halo2 gates · Honk · Pasta: 78 ms at 16 Actions</title></circle>
+<path class="line s-h2b dashed" d="M128.0,299.9 L284.0,311.5 L440.0,306.3 L596.0,301.8 L752.0,295.8"><title>halo2 gates · Honk · BN254</title></path>
+<circle class="dot s-h2b" cx="128.0" cy="299.9" r="4.5"><title>halo2 gates · Honk · BN254: 7.6 ms at 1 Actions</title></circle>
+<circle class="dot s-h2b" cx="284.0" cy="311.5" r="4.5"><title>halo2 gates · Honk · BN254: 6.3 ms at 2 Actions</title></circle>
+<circle class="dot s-h2b" cx="440.0" cy="306.3" r="4.5"><title>halo2 gates · Honk · BN254: 6.9 ms at 4 Actions</title></circle>
+<circle class="dot s-h2b" cx="596.0" cy="301.8" r="4.5"><title>halo2 gates · Honk · BN254: 7.4 ms at 8 Actions</title></circle>
+<circle class="dot s-h2b" cx="752.0" cy="295.8" r="4.5"><title>halo2 gates · Honk · BN254: 8.1 ms at 16 Actions</title></circle>
+<path class="line s-ulp" d="M128.0,190.7 L284.0,152.7 L440.0,110.9 L596.0,74.1 L752.0,33.7"><title>UltraHonk · Pasta</title></path>
+<circle class="dot s-ulp" cx="128.0" cy="190.7" r="4.5"><title>UltraHonk · Pasta: 45 ms at 1 Actions</title></circle>
+<circle class="dot s-ulp" cx="284.0" cy="152.7" r="4.5"><title>UltraHonk · Pasta: 84 ms at 2 Actions</title></circle>
+<circle class="dot s-ulp" cx="440.0" cy="110.9" r="4.5"><title>UltraHonk · Pasta: 166 ms at 4 Actions</title></circle>
+<circle class="dot s-ulp" cx="596.0" cy="74.1" r="4.5"><title>UltraHonk · Pasta: 302 ms at 8 Actions</title></circle>
+<circle class="dot s-ulp" cx="752.0" cy="33.7" r="4.5"><title>UltraHonk · Pasta: 584 ms at 16 Actions</title></circle>
+<path class="line s-ulb dashed" d="M128.0,357.4 L284.0,352.8 L440.0,358.3 L596.0,354.4 L752.0,349.7"><title>UltraHonk · BN254</title></path>
+<circle class="dot s-ulb" cx="128.0" cy="357.4" r="4.5"><title>UltraHonk · BN254: 3.0 ms at 1 Actions</title></circle>
+<circle class="dot s-ulb" cx="284.0" cy="352.8" r="4.5"><title>UltraHonk · BN254: 3.2 ms at 2 Actions</title></circle>
+<circle class="dot s-ulb" cx="440.0" cy="358.3" r="4.5"><title>UltraHonk · BN254: 2.9 ms at 4 Actions</title></circle>
+<circle class="dot s-ulb" cx="596.0" cy="354.4" r="4.5"><title>UltraHonk · BN254: 3.1 ms at 8 Actions</title></circle>
+<circle class="dot s-ulb" cx="752.0" cy="349.7" r="4.5"><title>UltraHonk · BN254: 3.4 ms at 16 Actions</title></circle>
+<text class="endlabel s-ulp" x="788" y="31.7">UltraHonk · Pasta</text>
+<text class="endvalue" x="788" y="47.7">584 ms</text>
+<text class="endlabel s-h2p" x="788" y="155.2">halo2 gates · Pasta</text>
+<text class="endvalue" x="788" y="171.2">78 ms</text>
+<text class="endlabel s-zcash" x="788" y="189.2">Zcash halo2</text>
+<text class="endvalue" x="788" y="205.2">47 ms</text>
+<text class="endlabel s-h2b" x="788" y="293.8">halo2 gates · BN254</text>
+<text class="endvalue" x="788" y="309.8">8.1 ms</text>
+<text class="endlabel s-ulb" x="788" y="347.7">UltraHonk · BN254</text>
+<text class="endvalue" x="788" y="363.7">3.4 ms</text>
 </svg></div><figcaption>Verifier time<small>One proof, four threads. The IPA verifier is linear in the circuit size (an MSM over the generators); KZG ends in a pairing check. Log scale.</small></figcaption></figure>
     <figure><div class="chart"><svg viewBox="0 0 960 440" role="img" aria-label="Proof size">
 <line class="grid" x1="110" x2="778" y1="382.0" y2="382.0"/>
@@ -420,26 +424,26 @@ a { color: var(--accent); }
 <circle class="dot s-ulp" cx="440.0" cy="320.7" r="4.5"><title>UltraHonk · Pasta: 8.5 KiB at 4 Actions</title></circle>
 <circle class="dot s-ulp" cx="596.0" cy="317.7" r="4.5"><title>UltraHonk · Pasta: 8.9 KiB at 8 Actions</title></circle>
 <circle class="dot s-ulp" cx="752.0" cy="314.8" r="4.5"><title>UltraHonk · Pasta: 9.3 KiB at 16 Actions</title></circle>
-<path class="line s-ulb dashed" d="M128.0,306.0 L284.0,306.0 L440.0,306.0 L596.0,306.0 L752.0,306.0"><title>UltraHonk · BN254</title></path>
-<circle class="dot s-ulb" cx="128.0" cy="306.0" r="4.5"><title>UltraHonk · BN254: 10.5 KiB at 1 Actions</title></circle>
-<circle class="dot s-ulb" cx="284.0" cy="306.0" r="4.5"><title>UltraHonk · BN254: 10.5 KiB at 2 Actions</title></circle>
-<circle class="dot s-ulb" cx="440.0" cy="306.0" r="4.5"><title>UltraHonk · BN254: 10.5 KiB at 4 Actions</title></circle>
-<circle class="dot s-ulb" cx="596.0" cy="306.0" r="4.5"><title>UltraHonk · BN254: 10.5 KiB at 8 Actions</title></circle>
-<circle class="dot s-ulb" cx="752.0" cy="306.0" r="4.5"><title>UltraHonk · BN254: 10.5 KiB at 16 Actions</title></circle>
+<path class="line s-ulb dashed" d="M128.0,330.9 L284.0,328.4 L440.0,325.9 L596.0,323.4 L752.0,320.9"><title>UltraHonk · BN254</title></path>
+<circle class="dot s-ulb" cx="128.0" cy="330.9" r="4.5"><title>UltraHonk · BN254: 7.1 KiB at 1 Actions</title></circle>
+<circle class="dot s-ulb" cx="284.0" cy="328.4" r="4.5"><title>UltraHonk · BN254: 7.4 KiB at 2 Actions</title></circle>
+<circle class="dot s-ulb" cx="440.0" cy="325.9" r="4.5"><title>UltraHonk · BN254: 7.8 KiB at 4 Actions</title></circle>
+<circle class="dot s-ulb" cx="596.0" cy="323.4" r="4.5"><title>UltraHonk · BN254: 8.1 KiB at 8 Actions</title></circle>
+<circle class="dot s-ulb" cx="752.0" cy="320.9" r="4.5"><title>UltraHonk · BN254: 8.4 KiB at 16 Actions</title></circle>
 <text class="endlabel s-zcash" x="788" y="91.6">Zcash halo2</text>
 <text class="endvalue" x="788" y="107.6">38.2 KiB</text>
 <text class="endlabel s-h2p" x="788" y="278.0">halo2 gates · Pasta</text>
 <text class="endvalue" x="788" y="294.0">12.4 KiB</text>
 <text class="endlabel s-h2b" x="788" y="312.0">halo2 gates · BN254</text>
 <text class="endvalue" x="788" y="328.0">11.4 KiB</text>
-<text class="endlabel s-ulb" x="788" y="346.0">UltraHonk · BN254</text>
-<text class="endvalue" x="788" y="362.0">10.5 KiB</text>
-<text class="endlabel s-ulp" x="788" y="380.0">UltraHonk · Pasta</text>
-<text class="endvalue" x="788" y="396.0">9.3 KiB</text>
+<text class="endlabel s-ulp" x="788" y="346.0">UltraHonk · Pasta</text>
+<text class="endvalue" x="788" y="362.0">9.3 KiB</text>
+<text class="endlabel s-ulb" x="788" y="380.0">UltraHonk · BN254</text>
+<text class="endvalue" x="788" y="396.0">8.4 KiB</text>
 </svg></div><figcaption>Proof size<small>Curve points compressed to 32 bytes as halo2 serializes them; public inputs excluded.</small></figcaption></figure>
   </div>
-  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>12 ms</td><td>13 ms</td><td>18 ms</td><td>23 ms</td><td>47 ms</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>11 ms</td><td>18 ms</td><td>27 ms</td><td>44 ms</td><td>78 ms</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td>7.6 ms</td><td>6.3 ms</td><td>6.9 ms</td><td>7.4 ms</td><td>8.1 ms</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>45 ms</td><td>84 ms</td><td>166 ms</td><td>302 ms</td><td>584 ms</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td class="best">6.0 ms</td><td class="best">6.3 ms</td><td class="best">5.9 ms</td><td class="best">6.4 ms</td><td class="best">6.7 ms</td></tr></tbody></table></div>
-  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td class="best">4.9 KiB</td><td class="best">7.1 KiB</td><td>11.5 KiB</td><td>20.4 KiB</td><td>38.2 KiB</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>10.4 KiB</td><td>10.9 KiB</td><td>11.4 KiB</td><td>11.9 KiB</td><td>12.4 KiB</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td>9.7 KiB</td><td>10.1 KiB</td><td>10.5 KiB</td><td>11.0 KiB</td><td>11.4 KiB</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>7.7 KiB</td><td>8.1 KiB</td><td class="best">8.5 KiB</td><td class="best">8.9 KiB</td><td class="best">9.3 KiB</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>10.5 KiB</td><td>10.5 KiB</td><td>10.5 KiB</td><td>10.5 KiB</td><td>10.5 KiB</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>12 ms</td><td>13 ms</td><td>18 ms</td><td>23 ms</td><td>47 ms</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>11 ms</td><td>18 ms</td><td>27 ms</td><td>44 ms</td><td>78 ms</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td>7.6 ms</td><td>6.3 ms</td><td>6.9 ms</td><td>7.4 ms</td><td>8.1 ms</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>45 ms</td><td>84 ms</td><td>166 ms</td><td>302 ms</td><td>584 ms</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td class="best">3.0 ms</td><td class="best">3.2 ms</td><td class="best">2.9 ms</td><td class="best">3.1 ms</td><td class="best">3.4 ms</td></tr><tr><th scope="row"><i class="sw s-ulb-pad"></i>UltraHonk · BN254, padded to 2^25</th><td>6.0 ms</td><td>6.3 ms</td><td>5.9 ms</td><td>6.4 ms</td><td>6.7 ms</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td class="best">4.9 KiB</td><td class="best">7.1 KiB</td><td>11.5 KiB</td><td>20.4 KiB</td><td>38.2 KiB</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>10.4 KiB</td><td>10.9 KiB</td><td>11.4 KiB</td><td>11.9 KiB</td><td>12.4 KiB</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td>9.7 KiB</td><td>10.1 KiB</td><td>10.5 KiB</td><td>11.0 KiB</td><td>11.4 KiB</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>7.7 KiB</td><td>8.1 KiB</td><td>8.5 KiB</td><td>8.9 KiB</td><td>9.3 KiB</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>7.1 KiB</td><td>7.4 KiB</td><td class="best">7.8 KiB</td><td class="best">8.1 KiB</td><td class="best">8.4 KiB</td></tr><tr><th scope="row"><i class="sw s-ulb-pad"></i>UltraHonk · BN254, padded to 2^25</th><td>10.5 KiB</td><td>10.5 KiB</td><td>10.5 KiB</td><td>10.5 KiB</td><td>10.5 KiB</td></tr></tbody></table></div>
 </section>
 
 <section aria-labelledby="circuits">
@@ -447,11 +451,11 @@ a { color: var(--accent); }
   <div class="prose">
     <p>Rows (halo2 layouts) or gates (Ultra) used, with the power-of-two trace size the prover runs over. halo2's layout packs one Action into 2<sup>11</sup> rows of a wide table (10 advice columns, 45 selectors); the Ultra circuits use 4 wires and need 6 (Pasta, hand-written gates) to 13 (BN254, stdlib) times as many rows.</p>
   </div>
-  <div class="tablewrap"><table class="sizes"><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>1,780<small>2<sup>11</sup></small></td><td>3,560<small>2<sup>12</sup></small></td><td>7,120<small>2<sup>13</sup></small></td><td>14,240<small>2<sup>14</sup></small></td><td>28,480<small>2<sup>15</sup></small></td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td>2,012<small>2<sup>11</sup></small></td><td>4,022<small>2<sup>12</sup></small></td><td>8,044<small>2<sup>13</sup></small></td><td>16,088<small>2<sup>14</sup></small></td><td>32,176<small>2<sup>15</sup></small></td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>10,303<small>2<sup>14</sup></small></td><td>20,210<small>2<sup>15</sup></small></td><td>40,025<small>2<sup>16</sup></small></td><td>79,659<small>2<sup>17</sup></small></td><td>158,927<small>2<sup>18</sup></small></td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>26,699<small>2<sup>15</sup></small></td><td>44,484<small>2<sup>16</sup></small></td><td>80,050<small>2<sup>17</sup></small></td><td>151,186<small>2<sup>18</sup></small></td><td>293,458<small>2<sup>19</sup></small></td></tr></tbody></table></div>
+  <div class="tablewrap"><table class="sizes"><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>1,780<small>2<sup>11</sup></small></td><td>3,560<small>2<sup>12</sup></small></td><td>7,120<small>2<sup>13</sup></small></td><td>14,240<small>2<sup>14</sup></small></td><td>28,480<small>2<sup>15</sup></small></td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td>2,012<small>2<sup>11</sup></small></td><td>4,022<small>2<sup>12</sup></small></td><td>8,044<small>2<sup>13</sup></small></td><td>16,088<small>2<sup>14</sup></small></td><td>32,176<small>2<sup>15</sup></small></td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>10,303<small>2<sup>14</sup></small></td><td>20,210<small>2<sup>15</sup></small></td><td>40,025<small>2<sup>16</sup></small></td><td>79,659<small>2<sup>17</sup></small></td><td>158,927<small>2<sup>18</sup></small></td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>26,699<small>2<sup>15</sup></small></td><td>44,484<small>2<sup>16</sup></small></td><td>80,050<small>2<sup>17</sup></small></td><td>151,186<small>2<sup>18</sup></small></td><td>293,458<small>2<sup>19</sup></small></td></tr><tr><th scope="row"><i class="sw s-ulb-pad"></i>UltraHonk · BN254, padded to 2^25</th><td>26,699<small>2<sup>15</sup></small></td><td>44,484<small>2<sup>16</sup></small></td><td>80,050<small>2<sup>17</sup></small></td><td>151,186<small>2<sup>18</sup></small></td><td>293,458<small>2<sup>19</sup></small></td></tr></tbody></table></div>
   <div class="prose">
     <p>Key generation (all precomputed polynomials and their commitments) for reference:</p>
   </div>
-  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>3.35 s</td><td>3.35 s</td><td>3.35 s</td><td>3.35 s</td><td>3.35 s</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>173 ms</td><td>267 ms</td><td>504 ms</td><td>1.11 s</td><td>1.85 s</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td class="best">77 ms</td><td class="best">95 ms</td><td class="best">153 ms</td><td class="best">234 ms</td><td class="best">445 ms</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>542 ms</td><td>1.09 s</td><td>2.23 s</td><td>4.14 s</td><td>8.24 s</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>148 ms</td><td>226 ms</td><td>413 ms</td><td>758 ms</td><td>1.36 s</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th scope="col">Actions</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead><tbody><tr><th scope="row"><i class="sw s-zcash"></i>Zcash halo2 (production)</th><td>3.35 s</td><td>3.35 s</td><td>3.35 s</td><td>3.35 s</td><td>3.35 s</td></tr><tr><th scope="row"><i class="sw s-h2p"></i>halo2 gates · Honk · Pasta</th><td>173 ms</td><td>267 ms</td><td>504 ms</td><td>1.11 s</td><td>1.85 s</td></tr><tr><th scope="row"><i class="sw s-h2b"></i>halo2 gates · Honk · BN254</th><td class="best">77 ms</td><td class="best">95 ms</td><td class="best">153 ms</td><td class="best">234 ms</td><td class="best">445 ms</td></tr><tr><th scope="row"><i class="sw s-ulp"></i>UltraHonk · Pasta</th><td>542 ms</td><td>1.09 s</td><td>2.23 s</td><td>4.14 s</td><td>8.24 s</td></tr><tr><th scope="row"><i class="sw s-ulb"></i>UltraHonk · BN254</th><td>178 ms</td><td>213 ms</td><td>369 ms</td><td>662 ms</td><td>1.33 s</td></tr><tr><th scope="row"><i class="sw s-ulb-pad"></i>UltraHonk · BN254, padded to 2^25</th><td>148 ms</td><td>226 ms</td><td>413 ms</td><td>758 ms</td><td>1.36 s</td></tr></tbody></table></div>
 </section>
 
 <section aria-labelledby="notes">
@@ -461,7 +465,7 @@ a { color: var(--accent); }
       <li>Machine: 4 vCPU Intel Xeon at 2.1 GHz. barretenberg is built with the <span class="mono">default</span> CMake preset (release, clang); Zcash with <span class="mono">cargo --release</span>. Medians of 3 to 5 runs after a warm-up.</li>
       <li>Zcash's prover builds one circuit per Action and proves all of them in one <span class="mono">create_proof</span>; its proof grows linearly with the number of Actions. barretenberg proves one circuit holding all Actions.</li>
       <li>BN254 configurations rely on a trusted setup and give roughly 100 to 110 bits of security; the Pasta configurations are transparent with roughly 126 bits, as Zcash.</li>
-      <li>The UltraHonk BN254 prover pads Sumcheck and Gemini to log n = 25 so that recursive verifiers have a fixed shape; this adds rounds to the proof and to verification but little prover work.</li>
+      <li>Padding UltraHonk BN254 to log n = 25 (Aztec's default, for recursion) leaves prover time unchanged but fixes the proof at 10.5 KiB and adds rounds to verification; the charts use the unpadded variant.</li>
       <li>Pasta multi-scalar multiplications use a full-width bucket method without the GLV endomorphism, matching the technique of <span class="mono">pasta_curves</span>' multiexp. Both curves admit GLV; using it, and batched affine bucket additions, are open optimizations for every Pasta configuration.</li>
       <li>The halo2 IPA prover computes the first four rounds as MSMs over the original generators and folds the generators explicitly afterwards; its verifier, like halo2's, does one MSM over all generators.</li>
     </ul>

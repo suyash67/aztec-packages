@@ -93,6 +93,7 @@ td small { display: block; color: var(--muted); font-size: 11px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: 0; }
 .sw.s-zcash { background: var(--s-zcash); } .sw.s-h2p { background: var(--s-h2p); } .sw.s-ulp { background: var(--s-ulp); }
 .sw.s-h2b { background: transparent; border: 2px solid var(--s-h2b); } .sw.s-ulb { background: transparent; border: 2px solid var(--s-ulb); }
+.sw.s-ulb-pad { background: transparent; border: 2px dotted var(--s-ulb); }
 .config { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
 .config article { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
 .config dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 14px; }
@@ -118,9 +119,9 @@ a { color: var(--accent); }
   <div class="prose">
     <ul class="conclusions">
       <li><b>Honk proves Zcash's own circuit about 3× faster.</b> With the same curves (Pallas/Vesta), the same halo2 gates and the same IPA commitment scheme as Zcash, swapping halo2's quotient argument for Honk's Sumcheck cuts one Action from {{zcash:1:prove}} to {{halo2-honk-pasta:1:prove}} ({{ratio:zcash:halo2-honk-pasta:1:prove}}), and 16 Actions from {{zcash:16:prove}} to {{halo2-honk-pasta:16:prove}} ({{ratio:zcash:halo2-honk-pasta:16:prove}}). Single-threaded the gap is similar: {{zcash:1:prove_st}} against {{halo2-honk-pasta:1:prove_st}}.</li>
-      <li><b>Barretenberg proofs grow slowly with more Actions.</b> Zcash's proof is the smallest for one Action ({{zcash:1:size}} against {{ultra-zk-pasta:1:size}} to {{ultra-zk-bn254:1:size}}), but it grows linearly with the number of Actions. Barretenberg puts all Actions in one circuit, so its proofs grow logarithmically and are smaller from 4 Actions on. At 16 Actions they are {{ultra-zk-pasta:16:size}} to {{halo2-honk-pasta:16:size}}, against {{zcash:16:size}}.</li>
-      <li><b>Custom wide gates beat a generic arithmetization.</b> Orchard's 10-column halo2 layout fits an Action in {{halo2-honk-pasta:1:rows_n}} rows. Ultra's 4-wire gates need {{ratio:ultra-zk-pasta:halo2-honk-pasta:1:rows}} as many rows when written by hand ({{ultra-zk-pasta:1:rows_n}} gates), and {{ratio:ultra-zk-bn254:halo2-honk-bn254:1:rows}} as many through barretenberg's stdlib. On the same curve and commitment scheme, the Ultra prover is {{ratio:ultra-zk-pasta:halo2-honk-pasta:1:prove}} slower on Pasta and {{ratio:ultra-zk-bn254:halo2-honk-bn254:16:prove}} slower on BN254 at 16 Actions.</li>
-      <li><b>BN254 is faster but needs a trusted setup.</b> Running the same halo2 gates on BN254 with KZG commitments proves another {{ratio:halo2-honk-pasta:halo2-honk-bn254:1:prove}} faster ({{halo2-honk-bn254:1:prove}} for one Action) and verifies in a constant ~7 ms. The cost is a trusted setup and about 100–110 bits of security, against about 126 bits for the transparent Pasta setup.</li>
+      <li><b>Barretenberg proofs grow slowly with more Actions.</b> Zcash's proof is the smallest for one Action ({{zcash:1:size}} against {{ultra-zk-bn254-unpadded:1:size}} to {{halo2-honk-pasta:1:size}}), but it grows linearly with the number of Actions. Barretenberg puts all Actions in one circuit, so its proofs grow logarithmically and are smaller from 4 Actions on. At 16 Actions they are {{ultra-zk-bn254-unpadded:16:size}} to {{halo2-honk-pasta:16:size}}, against {{zcash:16:size}}.</li>
+      <li><b>Custom wide gates beat a generic arithmetization.</b> Orchard's 10-column halo2 layout fits an Action in {{halo2-honk-pasta:1:rows_n}} rows. Ultra's 4-wire gates need {{ratio:ultra-zk-pasta:halo2-honk-pasta:1:rows}} as many rows when written by hand ({{ultra-zk-pasta:1:rows_n}} gates), and {{ratio:ultra-zk-bn254-unpadded:halo2-honk-bn254:1:rows}} as many through barretenberg's stdlib. On the same curve and commitment scheme, the Ultra prover is {{ratio:ultra-zk-pasta:halo2-honk-pasta:1:prove}} slower on Pasta and {{ratio:ultra-zk-bn254-unpadded:halo2-honk-bn254:16:prove}} slower on BN254 at 16 Actions.</li>
+      <li><b>BN254 is faster but needs a trusted setup.</b> Running the same halo2 gates on BN254 with KZG commitments proves another {{ratio:halo2-honk-pasta:halo2-honk-bn254:1:prove}} faster ({{halo2-honk-bn254:1:prove}} for one Action) and verification stays at 3–8 ms at every size. The cost is a trusted setup and about 100–110 bits of security, against about 126 bits for the transparent Pasta setup.</li>
       <li><b>IPA verification grows with circuit size.</b> As in halo2, the IPA verifier ends with one multi-scalar multiplication over all generators. It goes from {{halo2-honk-pasta:1:verify}} to {{halo2-honk-pasta:16:verify}} for the halo2-gate circuit (Zcash: {{zcash:1:verify}} to {{zcash:16:verify}}), and reaches {{ultra-zk-pasta:16:verify}} for the much larger Ultra circuit.</li>
       <li><b>Best fit for Zcash: halo2 gates on Honk over Pasta.</b> It keeps Zcash's curves, its transparent setup and its exact Orchard gates, and proves about 3× faster with smaller multi-Action proofs. Two optimizations remain open for all Pasta configurations: the GLV endomorphism and batched affine additions in multi-scalar multiplication.</li>
     </ul>
@@ -163,9 +164,10 @@ a { color: var(--accent); }
     <article>
       <h3><i class="sw s-ulb"></i>UltraHonk · BN254</h3>
       <dl><dt>Circuit</dt><dd>barretenberg's stdlib (<span class="mono">cycle_group</span>, ROM tables, <span class="mono">field_t</span>) over BN254/Grumpkin</dd>
-      <dt>Proof system</dt><dd>UltraZK, padded to a constant proof size (log n = 25)</dd>
+      <dt>Proof system</dt><dd>UltraZK over the actual trace size (<span class="mono">UltraKeccakZKFlavor</span>)</dd>
       <dt>Commitment</dt><dd>BN254, KZG</dd>
-      <dt>Transcript</dt><dd>Poseidon2</dd></dl>
+      <dt>Transcript</dt><dd>Keccak</dd>
+      <dt>Also measured</dt><dd>Aztec's default <span class="mono">UltraZKFlavor</span> (Poseidon2 transcript), which pads Sumcheck and Gemini to log n = 25 so recursive verifiers have a fixed shape. It is listed in the tables as “padded to 2^25”.</dd></dl>
     </article>
   </div>
   {{LEGEND}}
@@ -211,7 +213,7 @@ a { color: var(--accent); }
       <li>Machine: 4 vCPU Intel Xeon at 2.1 GHz. barretenberg is built with the <span class="mono">default</span> CMake preset (release, clang); Zcash with <span class="mono">cargo --release</span>. Medians of 3 to 5 runs after a warm-up.</li>
       <li>Zcash's prover builds one circuit per Action and proves all of them in one <span class="mono">create_proof</span>; its proof grows linearly with the number of Actions. barretenberg proves one circuit holding all Actions.</li>
       <li>BN254 configurations rely on a trusted setup and give roughly 100 to 110 bits of security; the Pasta configurations are transparent with roughly 126 bits, as Zcash.</li>
-      <li>The UltraHonk BN254 prover pads Sumcheck and Gemini to log n = 25 so that recursive verifiers have a fixed shape; this adds rounds to the proof and to verification but little prover work.</li>
+      <li>Padding UltraHonk BN254 to log n = 25 (Aztec's default, for recursion) leaves prover time unchanged but fixes the proof at {{ultra-zk-bn254:1:size}} and adds rounds to verification; the charts use the unpadded variant.</li>
       <li>Pasta multi-scalar multiplications use a full-width bucket method without the GLV endomorphism, matching the technique of <span class="mono">pasta_curves</span>' multiexp. Both curves admit GLV; using it, and batched affine bucket additions, are open optimizations for every Pasta configuration.</li>
       <li>The halo2 IPA prover computes the first four rounds as MSMs over the original generators and folds the generators explicitly afterwards; its verifier, like halo2's, does one MSM over all generators.</li>
     </ul>

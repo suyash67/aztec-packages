@@ -34,7 +34,7 @@ git -C orchard apply ../orchard-export.patch
 
 ```bash
 cd barretenberg/cpp && cmake --preset default && cmake --build build --target zcash_action_bench
-for system in halo2-honk-pasta halo2-honk-bn254 ultra-zk-pasta ultra-zk-bn254; do
+for system in halo2-honk-pasta halo2-honk-bn254 ultra-zk-pasta ultra-zk-bn254 ultra-zk-bn254-unpadded; do
   HARDWARE_CONCURRENCY=4 ./build/bin/zcash_action_bench $system 1,2,4,8,16 5 > scripts/zcash_orchard_reference/results/bb_${system}_mt.jsonl
   HARDWARE_CONCURRENCY=1 ./build/bin/zcash_action_bench $system 1,2,4 3 > scripts/zcash_orchard_reference/results/bb_${system}_st.jsonl
 done
