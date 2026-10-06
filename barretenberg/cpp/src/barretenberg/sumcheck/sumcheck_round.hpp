@@ -1208,8 +1208,8 @@ template <typename Flavor, bool CommittedSumcheck = UsesCommittedSumcheck<Flavor
         FF main_factor{ 1 };
         FF offset_factor{ 0 };
         if constexpr (UseRowDisablingPolynomial<Flavor> && Flavor::HasZK) {
-            main_factor = RowDisablingPolynomial<FF>::evaluate_at_challenge(multivariate_challenge,
-                                                                            multivariate_challenge.size());
+            main_factor = RowDisablingPolynomial<FF>::evaluate_at_challenge(
+                multivariate_challenge, multivariate_challenge.size(), log_num_disabled_rows<Flavor>());
             offset_factor = FF{ 1 } - main_factor;
         }
         return Utils::scale_and_batch_elements(relation_evaluations, alphas, main_factor, offset_factor);
@@ -1320,8 +1320,8 @@ template <typename Flavor> class SumcheckVerifierRound<Flavor, true> {
         FF main_factor{ 1 };
         FF offset_factor{ 0 };
         if constexpr (UseRowDisablingPolynomial<Flavor> && Flavor::HasZK) {
-            main_factor = RowDisablingPolynomial<FF>::evaluate_at_challenge(multivariate_challenge,
-                                                                            multivariate_challenge.size());
+            main_factor = RowDisablingPolynomial<FF>::evaluate_at_challenge(
+                multivariate_challenge, multivariate_challenge.size(), log_num_disabled_rows<Flavor>());
             offset_factor = FF{ 1 } - main_factor;
         }
         return Utils::scale_and_batch_elements(relation_evaluations, alphas, main_factor, offset_factor);

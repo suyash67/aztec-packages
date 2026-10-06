@@ -117,8 +117,9 @@ template <typename Curve> struct ClaimBatcher_ {
         Fr scalar = 0;
     };
 
-    std::optional<Batch> unshifted; // commitments and evaluations of unshifted polynomials
-    std::optional<Batch> shifted;   // commitments of to-be-shifted-by-1 polys, evals of their shifts
+    std::optional<Batch> unshifted;      // commitments and evaluations of unshifted polynomials
+    std::optional<Batch> shifted;        // commitments of to-be-shifted-by-1 polys, evals of their shifts
+    std::optional<Batch> shifted_by_two; // commitments of to-be-shifted-by-2 polys, evals of their shifts by 2
 
     Batch get_unshifted() { return (unshifted) ? *unshifted : Batch{}; }
     Batch get_shifted() { return (shifted) ? *shifted : Batch{}; }
@@ -173,6 +174,11 @@ template <typename Curve> struct ClaimBatcher_ {
             shifted->scalar =
                 r_challenge.invert() * (inverse_vanishing_eval_pos - nu_challenge * inverse_vanishing_eval_neg);
         }
+        if (shifted_by_two) {
+            // r⁻² ⋅ (1/(z−r) + ν/(z+r)): H/X² contributes H(r)/r² to A₀(r) and H(-r)/r² to A₀(-r).
+            shifted_by_two->scalar =
+                r_challenge.sqr().invert() * (inverse_vanishing_eval_pos + nu_challenge * inverse_vanishing_eval_neg);
+        }
     }
     /**
      * @brief Append the commitments and scalars from each batch of claims to the Shplemini vectors which subsequently
@@ -192,6 +198,7 @@ template <typename Curve> struct ClaimBatcher_ {
         size_t num_powers = 0;
         num_powers += unshifted.has_value() ? unshifted->commitments.size() : 0;
         num_powers += shifted.has_value() ? shifted->commitments.size() : 0;
+        num_powers += shifted_by_two.has_value() ? shifted_by_two->commitments.size() : 0;
 
         Fr rho_power = Fr(1);
         size_t power_idx = 0;
@@ -219,6 +226,9 @@ template <typename Curve> struct ClaimBatcher_ {
         if (shifted) {
             // i-th shifted commitments will be multiplied by ρ^{num_unshifted + i} and r⁻¹ ⋅ (1/(z−r) − ν/(z+r))
             aggregate_claim_data_and_update_batched_evaluation(*shifted);
+        }
+        if (shifted_by_two) {
+            aggregate_claim_data_and_update_batched_evaluation(*shifted_by_two);
         }
 
         BB_ASSERT_EQ(power_idx, num_powers);

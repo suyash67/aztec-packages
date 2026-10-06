@@ -124,8 +124,18 @@ template <typename FF> struct RowDisablingPolynomial {
     // initialized as a constant linear polynomial = 1
     FF eval_at_0{ 1 };
     FF eval_at_1{ 1 };
+    // log2 of the number of disabled rows at the top of the trace. The description above is for the default of 2 (4
+    // rows); with 2^m disabled rows the first m rounds see L^{(i)} = 1, and 1 - L(u) = 1 - prod_{k=m}^{d-1}(1 - u_k).
+    size_t log_num_disabled_rows = DEFAULT_LOG_NUM_DISABLED_ROWS;
+
+    static constexpr size_t DEFAULT_LOG_NUM_DISABLED_ROWS = 2;
 
     RowDisablingPolynomial() = default;
+    explicit RowDisablingPolynomial(size_t log_num_disabled_rows)
+        : log_num_disabled_rows(log_num_disabled_rows)
+    {
+        BB_ASSERT_GTE(log_num_disabled_rows, size_t{ 1 });
+    }
     /**
      * @brief Compute the evaluations of L^{(i)} at 0 and 1.
      *
@@ -138,10 +148,10 @@ template <typename FF> struct RowDisablingPolynomial {
      */
     void update_evaluations(FF round_challenge, size_t round_idx)
     {
-        if (round_idx == 1) {
+        if (round_idx + 1 == log_num_disabled_rows) {
             eval_at_1 = FF{ 0 };
         }
-        if (round_idx >= 2) {
+        if (round_idx >= log_num_disabled_rows) {
             eval_at_0 *= (FF{ 1 } - round_challenge);
         }
     }
@@ -152,13 +162,15 @@ template <typename FF> struct RowDisablingPolynomial {
      * @param log_circuit_size
      * @return FF
      */
-    static FF evaluate_at_challenge(std::span<const FF> multivariate_challenge, const size_t log_circuit_size)
+    static FF evaluate_at_challenge(std::span<const FF> multivariate_challenge,
+                                    const size_t log_circuit_size,
+                                    const size_t log_num_disabled_rows = DEFAULT_LOG_NUM_DISABLED_ROWS)
     {
         BB_ASSERT(multivariate_challenge.size() >= log_circuit_size,
                   "RowDisablingPolynomial: challenge shorter than log_circuit_size");
         FF evaluation_at_multivariate_challenge{ 1 };
 
-        for (size_t idx = 2; idx < log_circuit_size; idx++) {
+        for (size_t idx = log_num_disabled_rows; idx < log_circuit_size; idx++) {
             evaluation_at_multivariate_challenge *= (FF{ 1 } - multivariate_challenge[idx]);
         }
 

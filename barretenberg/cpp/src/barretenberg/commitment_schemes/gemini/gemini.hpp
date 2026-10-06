@@ -133,10 +133,12 @@ template <typename Curve> class GeminiProver_ {
 
         Polynomial batched_unshifted;            // linear combination of unshifted polynomials
         Polynomial batched_to_be_shifted_by_one; // linear combination of to-be-shifted polynomials
+        Polynomial batched_to_be_shifted_by_two; // linear combination of to-be-shifted-by-2 polynomials
 
       public:
         RefVector<Polynomial> unshifted;            // set of unshifted polynomials
         RefVector<Polynomial> to_be_shifted_by_one; // set of polynomials to be left shifted by 1
+        RefVector<Polynomial> to_be_shifted_by_two; // set of polynomials to be left shifted by 2
 
         PolynomialBatcher(const size_t full_batched_size, const size_t actual_data_size = 0)
             : full_batched_size(full_batched_size)
@@ -147,10 +149,22 @@ template <typename Curve> class GeminiProver_ {
 
         bool has_unshifted() const { return unshifted.size() > 0; }
         bool has_to_be_shifted_by_one() const { return to_be_shifted_by_one.size() > 0; }
+        bool has_to_be_shifted_by_two() const { return to_be_shifted_by_two.size() > 0; }
 
         // Set references to the polynomials to be batched
         void set_unshifted(RefVector<Polynomial> polynomials) { unshifted = polynomials; }
         void set_to_be_shifted_by_one(RefVector<Polynomial> polynomials) { to_be_shifted_by_one = polynomials; }
+        /**
+         * @brief Polynomials opened at their shift by 2; each must have zero coefficients 0 and 1 (start_index >= 2).
+         * @details They are batched after the unshifted and the shifted-by-1 polynomials, as H in A₀ = F + G/X + H/X².
+         */
+        void set_to_be_shifted_by_two(RefVector<Polynomial> polynomials)
+        {
+            to_be_shifted_by_two = polynomials;
+            constexpr size_t NUM_ZERO_COEFFICIENTS = 2;
+            batched_to_be_shifted_by_two =
+                Polynomial(actual_data_size_ - NUM_ZERO_COEFFICIENTS, full_batched_size, NUM_ZERO_COEFFICIENTS);
+        }
 
         /**
          * @brief Compute batched polynomial A₀ = F + G/X as the linear combination of all polynomials to be opened,
@@ -194,6 +208,11 @@ template <typename Curve> class GeminiProver_ {
                 full_batched += batched_to_be_shifted_by_one.shifted();
             }
 
+            if (has_to_be_shifted_by_two()) {
+                batch(batched_to_be_shifted_by_two, to_be_shifted_by_two);
+                full_batched += batched_to_be_shifted_by_two.shifted().shifted();
+            }
+
             return full_batched;
         }
 
@@ -217,6 +236,12 @@ template <typename Curve> class GeminiProver_ {
             if (has_to_be_shifted_by_one()) {
                 A_0_pos.add_scaled(batched_to_be_shifted_by_one, r_inv);
                 A_0_neg.add_scaled(batched_to_be_shifted_by_one, -r_inv);
+            }
+
+            if (has_to_be_shifted_by_two()) {
+                const Fr r_inv_sqr = r_inv.sqr();
+                A_0_pos.add_scaled(batched_to_be_shifted_by_two, r_inv_sqr);
+                A_0_neg.add_scaled(batched_to_be_shifted_by_two, r_inv_sqr);
             }
 
             return { A_0_pos, A_0_neg };

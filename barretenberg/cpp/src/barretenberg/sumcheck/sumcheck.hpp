@@ -351,7 +351,7 @@ template <typename Flavor> class SumcheckProver {
 
     FF libra_evaluation = FF{ 0 };
 
-    RowDisablingPolynomial<FF> row_disabling_polynomial;
+    RowDisablingPolynomial<FF> row_disabling_polynomial{ log_num_disabled_rows<Flavor>() };
 
     // SumcheckProver constructor for the Flavors that generate a single challenge `alpha` and use its powers as
     // subrelation seperator challenges.
@@ -538,7 +538,8 @@ template <typename Flavor> class SumcheckProver {
         gate_separators.partially_evaluate(round_challenge);
         round.advance_round();
         if constexpr (UseRowDisablingPolynomial<Flavor>) {
-            round.excluded_head_size = 2; // After round 0, disabled zone collapses to 1 edge pair
+            // Each round halves the disabled zone, down to a single edge pair.
+            round.excluded_head_size = std::max<size_t>(2, round.excluded_head_size / 2);
         }
         for (size_t round_idx = 1; round_idx < multivariate_d; round_idx++) {
             BB_BENCH_NAME("sumcheck loop");
@@ -585,6 +586,9 @@ template <typename Flavor> class SumcheckProver {
 
             gate_separators.partially_evaluate(round_challenge);
             round.advance_round();
+            if constexpr (UseRowDisablingPolynomial<Flavor>) {
+                round.excluded_head_size = std::max<size_t>(2, round.excluded_head_size / 2);
+            }
         }
 
         handler.finalize_last_round(multivariate_d, round_univariate, multivariate_challenge[multivariate_d - 1]);

@@ -38,6 +38,20 @@ template <typename T>
 concept IsTranslatorFlavor = IsAnyOf<T, TranslatorFlavor, TranslatorShortMonomialFlavor, TranslatorRecursiveFlavor>;
 template <typename T> concept UseRowDisablingPolynomial = !IsTranslatorFlavor<T>;
 
+/**
+ * @brief log2 of the number of rows disabled at the top of the trace by the RowDisablingPolynomial. Flavors that need
+ * more than the default 4 rows (e.g. to mask polynomials that are shifted by more than one) declare
+ * LOG_NUM_DISABLED_ROWS.
+ */
+template <typename Flavor> constexpr size_t log_num_disabled_rows()
+{
+    if constexpr (requires { Flavor::LOG_NUM_DISABLED_ROWS; }) {
+        return Flavor::LOG_NUM_DISABLED_ROWS;
+    } else {
+        return 2;
+    }
+}
+
 
 
 template <typename T>

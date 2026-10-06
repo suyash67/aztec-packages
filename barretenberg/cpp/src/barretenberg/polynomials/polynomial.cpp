@@ -8,6 +8,7 @@
 #include "barretenberg/common/assert.hpp"
 #include "barretenberg/common/bb_bench.hpp"
 #include "barretenberg/common/thread.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include "barretenberg/numeric/bitop/get_msb.hpp"
 #include "barretenberg/numeric/bitop/pow.hpp"
 #include "barretenberg/polynomials/backing_memory.hpp"
@@ -294,4 +295,12 @@ template void add_scaled_batch<bb::fr>(Polynomial<bb::fr>& dst,
 template void add_scaled_batch<grumpkin::fr>(Polynomial<grumpkin::fr>& dst,
                                              std::span<const PolynomialSpan<const grumpkin::fr>> sources,
                                              std::span<const grumpkin::fr> scalars);
+template class Polynomial<pasta::fp>;
+template class Polynomial<pasta::fq>;
+template void add_scaled_batch<pasta::fp>(Polynomial<pasta::fp>& dst,
+                                          std::span<const PolynomialSpan<const pasta::fp>> sources,
+                                          std::span<const pasta::fp> scalars);
+template void add_scaled_batch<pasta::fq>(Polynomial<pasta::fq>& dst,
+                                          std::span<const PolynomialSpan<const pasta::fq>> sources,
+                                          std::span<const pasta::fq> scalars);
 } // namespace bb

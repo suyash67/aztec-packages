@@ -12,9 +12,22 @@ struct miller_lines;
 
 namespace bb::srs::factories {
 
+/**
+ * @brief CRS of a curve used with a discrete-log (IPA) commitment scheme: a list of independent generators.
+ * @details BN254 (KZG) specializes this below with its G2 data.
+ */
 template <typename Curve> class Crs {
   public:
+    Crs() = default;
+    Crs(const Crs&) = delete;
+    Crs(Crs&&) noexcept = default;
+    Crs& operator=(const Crs&) = delete;
+    Crs& operator=(Crs&&) = delete;
     virtual ~Crs() = default;
+
+    virtual std::span<typename Curve::AffineElement> get_monomial_points() = 0;
+    virtual size_t get_monomial_size() const = 0;
+    virtual typename Curve::AffineElement get_g1_identity() const = 0;
 };
 
 // Crs specialization for bn254

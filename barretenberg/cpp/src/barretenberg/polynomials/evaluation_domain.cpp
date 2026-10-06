@@ -130,5 +130,7 @@ template <typename Fr> void EvaluationDomain<Fr>::compute_lookup_table()
 // explicitly instantiate both EvaluationDomain
 template class EvaluationDomain<bb::fr>;
 template class EvaluationDomain<grumpkin::fr>;
+template class EvaluationDomain<pasta::fp>;
+template class EvaluationDomain<pasta::fq>;
 
 } // namespace bb

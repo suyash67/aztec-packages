@@ -381,4 +381,20 @@ template void compute_efficient_interpolation<grumpkin::fr>(const grumpkin::fr*,
                                                             const grumpkin::fr*,
                                                             const size_t);
 
+template pasta::fp evaluate<pasta::fp>(const pasta::fp*, const pasta::fp&, const size_t);
+template void fft_inner_parallel<pasta::fp>(
+    pasta::fp*, pasta::fp*, const EvaluationDomain<pasta::fp>&, const pasta::fp&, const std::vector<pasta::fp*>&);
+template void ifft<pasta::fp>(pasta::fp*, pasta::fp*, const EvaluationDomain<pasta::fp>&);
+template pasta::fp compute_sum<pasta::fp>(const pasta::fp*, const size_t);
+template void compute_linear_polynomial_product<pasta::fp>(const pasta::fp*, pasta::fp*, const size_t);
+template void compute_efficient_interpolation<pasta::fp>(const pasta::fp*, pasta::fp*, const pasta::fp*, const size_t);
+
+template pasta::fq evaluate<pasta::fq>(const pasta::fq*, const pasta::fq&, const size_t);
+template void fft_inner_parallel<pasta::fq>(
+    pasta::fq*, pasta::fq*, const EvaluationDomain<pasta::fq>&, const pasta::fq&, const std::vector<pasta::fq*>&);
+template void ifft<pasta::fq>(pasta::fq*, pasta::fq*, const EvaluationDomain<pasta::fq>&);
+template pasta::fq compute_sum<pasta::fq>(const pasta::fq*, const size_t);
+template void compute_linear_polynomial_product<pasta::fq>(const pasta::fq*, pasta::fq*, const size_t);
+template void compute_efficient_interpolation<pasta::fq>(const pasta::fq*, pasta::fq*, const pasta::fq*, const size_t);
+
 } // namespace bb::polynomial_arithmetic

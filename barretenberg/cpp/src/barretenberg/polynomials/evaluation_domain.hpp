@@ -7,6 +7,7 @@
 #pragma once
 #include "barretenberg/ecc/curves/bn254/fr.hpp"
 #include "barretenberg/ecc/curves/grumpkin/grumpkin.hpp"
+#include "barretenberg/ecc/curves/pasta/pasta.hpp"
 #include <vector>
 
 namespace bb {
